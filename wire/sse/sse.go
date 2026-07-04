@@ -70,6 +70,7 @@ func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.S
 	}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxLineBytes)
+	scanner.Split(scanSSELines)
 
 	next := func() (inference.StreamFrame, error) {
 		var data bytes.Buffer
@@ -124,6 +125,41 @@ func makeFrame(event string, data *bytes.Buffer) inference.StreamFrame {
 	out := make([]byte, len(b))
 	copy(out, b)
 	return inference.StreamFrame{Name: event, Data: out}
+}
+
+// scanSSELines is a bufio.SplitFunc that splits a stream on any of the three SSE line
+// terminators — CR, LF, or CRLF — per the WHATWG event-stream line-splitting rules. The
+// stdlib bufio.ScanLines only recognizes LF and CRLF, silently merging bare-CR-terminated
+// lines into one; this splitter treats a lone CR as a terminator too. The terminator is
+// stripped from the returned token, and a trailing non-terminated line is returned at EOF.
+func scanSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '\n':
+			return i + 1, data[:i], nil
+		case '\r':
+			// A CR followed by LF is one CRLF terminator (consume both). A CR that is the
+			// last byte and not yet at EOF might be the first half of a CRLF straddling a
+			// read boundary, so ask for more data before deciding.
+			if i+1 < len(data) {
+				if data[i+1] == '\n' {
+					return i + 2, data[:i], nil
+				}
+				return i + 1, data[:i], nil
+			}
+			if !atEOF {
+				return 0, nil, nil
+			}
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 // splitField parses one SSE line into a field name and value. Per the spec, the value

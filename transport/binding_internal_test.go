@@ -2,6 +2,7 @@ package transport
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/inference"
@@ -51,5 +52,32 @@ func TestCheckBinding(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestModelMismatchError_APIFormatFieldsPopulated verifies an API-format-only conflict
+// (provider and BaseURL are wildcards) names the format dimension on the returned error,
+// not just fails closed. The error previously carried no APIFormat fields, so a
+// format-only mismatch reported empty provider/endpoint and hid the real cause.
+func TestModelMismatchError_APIFormatFieldsPopulated(t *testing.T) {
+	t.Parallel()
+	ep := inference.Endpoint{
+		Provider:  inference.ProviderName("openrouter"),
+		BaseURL:   "https://openrouter.ai/api/v1",
+		APIFormat: inference.APIFormatOpenAI,
+	}
+	c := New(ep, route.StaticChat("/chat/completions"), openaiapi.Codec{}, auth.None())
+
+	err := c.checkBinding(inference.Model{Name: "m", APIFormat: inference.APIFormatAnthropic})
+	var mme *inference.ModelMismatchError
+	if !errors.As(err, &mme) {
+		t.Fatalf("checkBinding() err=%T, want *inference.ModelMismatchError", err)
+	}
+	if mme.RequestAPIFormat != inference.APIFormatAnthropic || mme.BoundAPIFormat != inference.APIFormatOpenAI {
+		t.Errorf("APIFormat fields = req %q/bound %q, want %q/%q",
+			mme.RequestAPIFormat, mme.BoundAPIFormat, inference.APIFormatAnthropic, inference.APIFormatOpenAI)
+	}
+	if !strings.Contains(mme.Error(), string(inference.APIFormatAnthropic)) {
+		t.Errorf("Error()=%q, want it to name the conflicting format %q", mme.Error(), inference.APIFormatAnthropic)
 	}
 }

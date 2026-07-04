@@ -33,7 +33,15 @@ func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.
 // extensions and dialect tests that drive a body directly; the transport uses
 // DecodeStream. The caller must Close the returned reader when done.
 func NewStream(body io.ReadCloser) *inference.StreamReader[content.Chunk] {
-	frames, _ := sse.DecodeStreamFrames(body)
+	frames, err := sse.DecodeStreamFrames(body)
+	if err != nil {
+		// Do not discard the framer error (e.g. a nil body): return a reader that surfaces
+		// it on first Next rather than dereferencing a nil frames reader and panicking.
+		return inference.NewStreamReader(
+			func() (content.Chunk, error) { return nil, err },
+			func() error { return nil },
+		)
+	}
 	return inference.FramesToChunks(frames, mapFrame)
 }
 

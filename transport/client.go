@@ -218,7 +218,16 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*inference.
 		}
 		return nil, &inference.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body}
 	}
-	return c.stream.DecodeStream(httpResp)
+	reader, err := c.stream.DecodeStream(httpResp)
+	if err != nil {
+		// Backstop the StreamDecoder body-ownership contract: a compliant decoder already
+		// closed resp.Body before returning an error, but a contract-violating third-party
+		// decoder might not. A double Close on an http response body is harmless, so close
+		// here to guarantee the connection is never leaked on the highest-risk seam.
+		httpResp.Body.Close()
+		return nil, err
+	}
+	return reader, nil
 }
 
 // checkBinding fails closed when the request's Model names a provider, endpoint, or API
@@ -231,10 +240,12 @@ func (c *Client) checkBinding(m inference.Model) error {
 	formatConflict := m.APIFormat != "" && m.APIFormat != c.ep.APIFormat
 	if providerConflict || endpointConflict || formatConflict {
 		return &inference.ModelMismatchError{
-			BoundProvider:   c.ep.Provider,
-			RequestProvider: m.Provider,
-			BoundEndpoint:   c.ep.BaseURL,
-			RequestEndpoint: m.BaseURL,
+			BoundProvider:    c.ep.Provider,
+			RequestProvider:  m.Provider,
+			BoundEndpoint:    c.ep.BaseURL,
+			RequestEndpoint:  m.BaseURL,
+			BoundAPIFormat:   c.ep.APIFormat,
+			RequestAPIFormat: m.APIFormat,
 		}
 	}
 	return nil
@@ -256,6 +267,11 @@ func (c *Client) buildRequest(ctx context.Context, req inference.Request, mode i
 	if err != nil {
 		return nil, &RequestBuildError{Err: err}
 	}
+	// EncodedRequest.Body is single-shot: clear the GetBody that NewRequestWithContext
+	// auto-populates for a bytes/strings body so net/http can never rewind and replay it
+	// on a connection-reuse retry (which it would for an idempotent method a custom Router
+	// might return). The transport must never replay a body; retry policy is the caller's.
+	httpReq.GetBody = nil
 	applyHeaders(httpReq.Header, route.Header) // route headers first
 	applyHeaders(httpReq.Header, enc.Header)   // encoder headers override route
 	return httpReq, nil

@@ -56,15 +56,21 @@ func (e *MissingCredentialsError) Error() string {
 }
 
 // ModelMismatchError is returned before any network I/O when a Request's model names a
-// provider/endpoint that differs from the connection the client is bound to. Fail-closed.
+// provider, endpoint, or API format that differs from the connection the client is bound
+// to. Fail-closed. All three binding dimensions are carried so a caller doing errors.As
+// can see exactly which one conflicted; an empty request-side field is a wildcard, not a
+// claim, so it never triggers this error.
 type ModelMismatchError struct {
-	BoundProvider   ProviderName
-	RequestProvider ProviderName
-	BoundEndpoint   string
-	RequestEndpoint string
+	BoundProvider    ProviderName
+	RequestProvider  ProviderName
+	BoundEndpoint    string
+	RequestEndpoint  string
+	BoundAPIFormat   APIFormat
+	RequestAPIFormat APIFormat
 }
 
 func (e *ModelMismatchError) Error() string {
-	return fmt.Sprintf("inference: request model provider %q/endpoint %q does not match bound client %q/%q",
-		e.RequestProvider, e.RequestEndpoint, e.BoundProvider, e.BoundEndpoint)
+	return fmt.Sprintf("inference: request model provider %q/endpoint %q/format %q does not match bound client %q/%q/%q",
+		e.RequestProvider, e.RequestEndpoint, e.RequestAPIFormat,
+		e.BoundProvider, e.BoundEndpoint, e.BoundAPIFormat)
 }

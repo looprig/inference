@@ -232,3 +232,24 @@ func FuzzDecodeStreamFrames(f *testing.F) {
 		}
 	})
 }
+
+// TestDecodeStreamFrames_BareCR verifies the WHATWG line-splitting rule that a bare CR
+// (no following LF) terminates a line. bufio.ScanLines does not split on a lone CR, which
+// would merge the whole body into one unrecognized line and silently drop every frame.
+func TestDecodeStreamFrames_BareCR(t *testing.T) {
+	t.Parallel()
+	// Two CR-terminated data lines then a CR-terminated blank line: the two data fields
+	// join into one event dispatched at the blank line.
+	r, err := sse.DecodeStreamFrames(io.NopCloser(strings.NewReader("data: a\rdata: b\r\r")))
+	if err != nil {
+		t.Fatalf("DecodeStreamFrames: %v", err)
+	}
+	defer r.Close()
+	f, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if got := string(f.Data); got != "a\nb" {
+		t.Errorf("frame data = %q, want %q", got, "a\nb")
+	}
+}
