@@ -17,7 +17,41 @@ var (
 	_ error = (*inference.ValidationError)(nil)
 	_ error = (*inference.MissingCredentialsError)(nil)
 	_ error = (*inference.ModelMismatchError)(nil)
+	_ error = (*inference.ContextCountError)(nil)
+	_ error = (*inference.CapabilityValidationError)(nil)
+	_ error = (*inference.CounterCompatibilityError)(nil)
 )
+
+func TestContextCounterErrors(t *testing.T) {
+	t.Parallel()
+
+	cause := &inference.ModelKeyValidationError{Field: inference.ModelKeyFieldModel, Reason: inference.ModelKeyValidationReasonEmpty}
+	tests := []struct {
+		name         string
+		err          error
+		wantContains []string
+		wantCause    error
+	}{
+		{name: "context count error names model quality and cause", err: &inference.ContextCountError{Model: inference.ModelKey{Provider: "provider", Model: "model"}, Quality: inference.CountQualityExactLocal, Cause: cause}, wantContains: []string{"inference:", "provider", "model", "2", "must not be empty"}, wantCause: cause},
+		{name: "capability validation error names metadata", err: &inference.CapabilityValidationError{Capability: inference.CapabilityKindCounter, Field: inference.CapabilityFieldQuality, Reason: inference.CapabilityValidationReasonUnknown}, wantContains: []string{"inference:", "counter", "Quality", "unknown"}},
+		{name: "compatibility error names downgrade", err: &inference.CounterCompatibilityError{Reason: inference.CounterCompatibilityTransportDowngrade}, wantContains: []string{"inference:", "transport downgrade"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.err.Error()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("Error() = %q, want it to contain %q", got, want)
+				}
+			}
+			if tt.wantCause != nil && !errors.Is(tt.err, tt.wantCause) {
+				t.Errorf("errors.Is(%v, %v) = false, want true", tt.err, tt.wantCause)
+			}
+		})
+	}
+}
 
 func TestNetworkError(t *testing.T) {
 	t.Parallel()
