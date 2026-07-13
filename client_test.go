@@ -27,7 +27,7 @@ var _ inference.Client = (*fakeClient)(nil)
 // constructor: it yields a valid Model with an opaque ProviderName, used purely
 // as a Request.Model fixture in this file.
 func sampleModel() inference.Model {
-	return inference.CustomModel(inference.ProviderName("chutes"), inference.APIFormatOpenAI, "https://api.chutes.ai", "moonshotai/Kimi-K2.6-TEE", inference.WithMaxContext(128_000), inference.WithTools(), inference.WithThinking())
+	return inference.CustomModel(inference.ProviderName("chutes"), inference.APIFormatOpenAI, "https://api.chutes.ai", "moonshotai/Kimi-K2.6-TEE", inference.WithContextLimits(inference.ContextLimits{WindowTokens: 128_000}), inference.WithTools(), inference.WithThinking())
 }
 
 func TestClient_InterfaceCompliance(t *testing.T) {

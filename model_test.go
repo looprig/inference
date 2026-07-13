@@ -131,7 +131,7 @@ func TestModel_Validate(t *testing.T) {
 
 // TestCustomModel_Defaults confirms CustomModel sets only the four wire fields
 // and leaves everything else at its fail-safe zero value: OriginCustom, all
-// capabilities false / MaxContext 0, and an empty Sampling.
+// capabilities false, all context limits unknown, and an empty Sampling.
 func TestCustomModel_Defaults(t *testing.T) {
 	t.Parallel()
 	m := inference.CustomModel(inference.ProviderName("chutes"), inference.APIFormatOpenAI, "https://api.chutes.ai", "moonshotai/Kimi")
@@ -154,8 +154,8 @@ func TestCustomModel_Defaults(t *testing.T) {
 	if m.Caps.AcceptsImages || m.Caps.Tools || m.Caps.Thinking {
 		t.Errorf("Caps bool flags = %+v, want all false by default", m.Caps)
 	}
-	if m.Caps.MaxContext != 0 {
-		t.Errorf("Caps.MaxContext = %d, want 0 by default", m.Caps.MaxContext)
+	if m.Limits != (inference.ContextLimits{}) {
+		t.Errorf("Limits = %+v, want all limits unknown by default", m.Limits)
 	}
 	if m.Sampling.Temperature != nil || m.Sampling.TopP != nil || m.Sampling.MaxTokens != nil ||
 		m.Sampling.Stop != nil || m.Sampling.Effort != inference.EffortNone {
@@ -172,11 +172,12 @@ func TestCustomModel_Options(t *testing.T) {
 		check func(t *testing.T, m inference.Model)
 	}{
 		{
-			name: "with max context",
-			opts: []inference.ModelOption{inference.WithMaxContext(200_000)},
+			name: "with context limits",
+			opts: []inference.ModelOption{inference.WithContextLimits(inference.ContextLimits{WindowTokens: 200_000, MaxOutputTokens: 16_384})},
 			check: func(t *testing.T, m inference.Model) {
-				if m.Caps.MaxContext != 200_000 {
-					t.Errorf("MaxContext = %d, want 200000", m.Caps.MaxContext)
+				want := inference.ContextLimits{WindowTokens: 200_000, MaxOutputTokens: 16_384}
+				if m.Limits != want {
+					t.Errorf("Limits = %+v, want %+v", m.Limits, want)
 				}
 			},
 		},
@@ -224,10 +225,10 @@ func TestCustomModel_Options(t *testing.T) {
 		},
 		{
 			name: "combined options",
-			opts: []inference.ModelOption{inference.WithTools(), inference.WithImages(), inference.WithThinking(), inference.WithMaxContext(64_000)},
+			opts: []inference.ModelOption{inference.WithTools(), inference.WithImages(), inference.WithThinking(), inference.WithContextLimits(inference.ContextLimits{WindowTokens: 64_000})},
 			check: func(t *testing.T, m inference.Model) {
-				if !m.Caps.Tools || !m.Caps.AcceptsImages || !m.Caps.Thinking || m.Caps.MaxContext != 64_000 {
-					t.Errorf("combined Caps = %+v, want all set", m.Caps)
+				if !m.Caps.Tools || !m.Caps.AcceptsImages || !m.Caps.Thinking || m.Limits.WindowTokens != 64_000 {
+					t.Errorf("combined model = %+v, want all capabilities and limits set", m)
 				}
 			},
 		},
@@ -237,6 +238,78 @@ func TestCustomModel_Options(t *testing.T) {
 			t.Parallel()
 			m := inference.CustomModel(inference.ProviderName("lmstudio"), inference.APIFormatOpenAI, "http://localhost:1234", "qwen", tt.opts...)
 			tt.check(t, m)
+		})
+	}
+}
+
+func TestModel_ValidateLimits(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		limits  inference.ContextLimits
+		wantErr bool
+	}{
+		{name: "unknown limits", limits: inference.ContextLimits{}},
+		{name: "valid known limits", limits: inference.ContextLimits{WindowTokens: 100, MaxInputTokens: 90, MaxOutputTokens: 10}},
+		{name: "invalid limits", limits: inference.ContextLimits{WindowTokens: 100, MaxInputTokens: 101}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model := inference.Model{Name: "m", Limits: tt.limits}
+			err := model.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				var validationErr *inference.ContextLimitsValidationError
+				if !errors.As(err, &validationErr) {
+					t.Errorf("Validate() error = %T, want *inference.ContextLimitsValidationError", err)
+				}
+			}
+		})
+	}
+}
+
+func TestModel_Clone(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		model inference.Model
+	}{
+		{name: "zero model", model: inference.Model{}},
+		{
+			name: "pointer and slice sampling state",
+			model: inference.Model{
+				Provider: inference.ProviderName("p"),
+				Name:     "m",
+				Limits:   inference.ContextLimits{WindowTokens: 100},
+				Sampling: inference.Sampling{Temperature: f64ptr(0.5), MaxTokens: intptr(16), Stop: []string{"STOP"}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.model.Clone()
+			if tt.model.Sampling.Temperature != nil {
+				*tt.model.Sampling.Temperature = 0.9
+			}
+			if tt.model.Sampling.MaxTokens != nil {
+				*tt.model.Sampling.MaxTokens = 99
+			}
+			if len(tt.model.Sampling.Stop) != 0 {
+				tt.model.Sampling.Stop[0] = "MUTATED"
+			}
+			if got.Sampling.Temperature != nil && *got.Sampling.Temperature != 0.5 {
+				t.Errorf("Clone().Sampling.Temperature = %v, want independent 0.5", *got.Sampling.Temperature)
+			}
+			if got.Sampling.MaxTokens != nil && *got.Sampling.MaxTokens != 16 {
+				t.Errorf("Clone().Sampling.MaxTokens = %v, want independent 16", *got.Sampling.MaxTokens)
+			}
+			if len(got.Sampling.Stop) != 0 && got.Sampling.Stop[0] != "STOP" {
+				t.Errorf("Clone().Sampling.Stop = %v, want independent [STOP]", got.Sampling.Stop)
+			}
 		})
 	}
 }
