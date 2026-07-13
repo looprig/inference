@@ -85,6 +85,38 @@ func toolResultMsg(id string, isErr bool, blocks ...content.Block) *content.Tool
 
 func textBlock(s string) content.Block { return &content.TextBlock{Text: s} }
 
+func TestEncodeRequestIgnoresUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		usage *content.Usage
+	}{
+		{name: "nil", usage: nil},
+		{name: "present zero", usage: &content.Usage{}},
+		{name: "populated", usage: &content.Usage{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4, ReasoningTokens: 1}},
+	}
+
+	want, err := anthropicapi.EncodeRequest(inference.Request{Model: baseModel(), Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() baseline error = %v", err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			message := aiMsg(textBlock("answer"))
+			message.Usage = tt.usage
+			got, err := anthropicapi.EncodeRequest(inference.Request{Model: baseModel(), Messages: content.AgenticMessages{message}}, false)
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("EncodeRequest() = %s, want byte-identical %s", got, want)
+			}
+		})
+	}
+}
+
 func imageURLBlock(url string) content.Block {
 	return &content.ImageBlock{MediaType: content.MediaTypeImageJPEG, Source: content.ImageSource{URL: url}}
 }

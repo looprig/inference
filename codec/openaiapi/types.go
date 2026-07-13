@@ -77,8 +77,19 @@ type chatChoice struct {
 }
 
 type chatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	PromptTokens            int                         `json:"prompt_tokens"`
+	CompletionTokens        int                         `json:"completion_tokens"`
+	PromptTokensDetails     chatPromptTokensDetails     `json:"prompt_tokens_details"`
+	CompletionTokensDetails chatCompletionTokensDetails `json:"completion_tokens_details"`
+}
+
+type chatPromptTokensDetails struct {
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+}
+
+type chatCompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // sseChunk is one streaming delta event.

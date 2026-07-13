@@ -23,12 +23,14 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 
 	blocks := buildBlocks(wire.Candidates[0].Content.Parts)
 
-	var usage *inference.Usage
-	if wire.UsageMetadata != nil {
-		usage = &inference.Usage{
-			InputTokens:  wire.UsageMetadata.PromptTokenCount,
-			OutputTokens: wire.UsageMetadata.CandidatesTokenCount,
-		}
+	usage, err := normalizeUsage(wire.UsageMetadata)
+	if err != nil {
+		return nil, err
+	}
+	var messageUsage *content.Usage
+	if usage != nil {
+		cloned := *usage
+		messageUsage = &cloned
 	}
 
 	return &inference.Response{
@@ -37,10 +39,59 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 				Role:   content.RoleAssistant,
 				Blocks: blocks,
 			},
+			Usage: messageUsage,
 		},
 		Model: wire.ModelVersion,
 		Usage: usage,
 	}, nil
+}
+
+func normalizeUsage(wire *usageMetadata) (*inference.Usage, error) {
+	if wire == nil {
+		return nil, nil
+	}
+	input, cacheRead, err := normalizeInputUsage(*wire)
+	if err != nil {
+		return nil, err
+	}
+	output, reasoning, err := normalizeOutputUsage(*wire)
+	if err != nil {
+		return nil, err
+	}
+	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, ReasoningTokens: reasoning}
+	if err := inference.ValidateNormalizedUsage(usage); err != nil {
+		return nil, err
+	}
+	return &usage, nil
+}
+
+func normalizeInputUsage(wire usageMetadata) (content.TokenCount, content.TokenCount, error) {
+	prompt, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldInputTokens, wire.PromptTokenCount)
+	if err != nil {
+		return 0, 0, err
+	}
+	cacheRead, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheReadTokens, wire.CachedContentTokenCount)
+	if err != nil {
+		return 0, 0, err
+	}
+	input, err := inference.SubtractTokenCounts(inference.UsageNormalizationFieldInputTokens, prompt, cacheRead, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	return input, cacheRead, nil
+}
+
+func normalizeOutputUsage(wire usageMetadata) (content.TokenCount, content.TokenCount, error) {
+	candidates, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldOutputTokens, wire.CandidatesTokenCount)
+	if err != nil {
+		return 0, 0, err
+	}
+	reasoning, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldReasoningTokens, wire.ThoughtsTokenCount)
+	if err != nil {
+		return 0, 0, err
+	}
+	output, err := inference.AddTokenCounts(inference.UsageNormalizationFieldOutputTokens, candidates, reasoning)
+	return output, reasoning, err
 }
 
 // buildBlocks maps candidate parts to content blocks, preserving Gemini's part

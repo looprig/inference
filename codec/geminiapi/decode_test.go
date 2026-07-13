@@ -2,6 +2,8 @@ package geminiapi_test
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -30,6 +32,72 @@ func blockType(b content.Block) content.BlockType {
 	}
 }
 
+func TestDecodeResponseUsageNormalization(t *testing.T) {
+	t.Parallel()
+
+	maxInt := int(^uint(0) >> 1)
+	tests := []struct {
+		name       string
+		usageField string
+		want       *content.Usage
+		wantField  inference.UsageNormalizationField
+		wantReason inference.UsageNormalizationReason
+	}{
+		{name: "absent usage is unknown", want: nil},
+		{name: "present zero is known", usageField: `,"usageMetadata":{}`, want: &content.Usage{}},
+		{name: "cache read and thoughts are disjoint", usageField: `,"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":3,"candidatesTokenCount":5,"thoughtsTokenCount":2}`, want: &content.Usage{InputTokens: 7, OutputTokens: 7, CacheReadTokens: 3, ReasoningTokens: 2}},
+		{name: "negative prompt", usageField: `,"usageMetadata":{"promptTokenCount":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usageMetadata":{"cachedContentTokenCount":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":-1}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "cache exceeds prompt", usageField: `,"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
+		{name: "max int sum is representable", usageField: fmt.Sprintf(`,"usageMetadata":{"candidatesTokenCount":%d,"thoughtsTokenCount":%d}`, maxInt, maxInt), want: &content.Usage{OutputTokens: content.TokenCount(maxInt) + content.TokenCount(maxInt), ReasoningTokens: content.TokenCount(maxInt)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]` + tt.usageField + `}`)
+			response, err := geminiapi.DecodeResponse(body)
+			if tt.wantReason != "" {
+				var normalizationErr *inference.UsageNormalizationError
+				if !errors.As(err, &normalizationErr) {
+					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
+				}
+				if normalizationErr.Field != tt.wantField || normalizationErr.Reason != tt.wantReason {
+					t.Errorf("normalization error = %+v, want field=%q reason=%q", normalizationErr, tt.wantField, tt.wantReason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v", err)
+			}
+			assertIndependentUsage(t, response, tt.want)
+		})
+	}
+}
+
+func assertIndependentUsage(t *testing.T, response *inference.Response, want *content.Usage) {
+	t.Helper()
+	if response.Usage == nil || response.Message.Usage == nil {
+		if response.Usage != nil || response.Message.Usage != nil || want != nil {
+			t.Fatalf("usage pointers = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+		}
+		return
+	}
+	if want == nil || *response.Usage != *want || *response.Message.Usage != *want {
+		t.Fatalf("usage = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+	}
+	if response.Usage == response.Message.Usage {
+		t.Fatal("Response.Usage and Message.Usage alias")
+	}
+	before := *response.Message.Usage
+	response.Usage.InputTokens++
+	if *response.Message.Usage != before {
+		t.Errorf("mutating Response.Usage changed Message.Usage to %+v", response.Message.Usage)
+	}
+}
+
 func TestDecodeResponse(t *testing.T) {
 	t.Parallel()
 
@@ -45,8 +113,8 @@ func TestDecodeResponse(t *testing.T) {
 		wantToolUseName  string
 		wantToolUseInput string
 		wantUsageNil     bool
-		wantInputTokens  int
-		wantOutputTokens int
+		wantInputTokens  content.TokenCount
+		wantOutputTokens content.TokenCount
 
 		wantErr       bool
 		wantAPIErr    bool

@@ -2,6 +2,7 @@ package openaiapi_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -13,6 +14,76 @@ import (
 func TestDecodeResponse_CompileTimeCheck(t *testing.T) {
 	t.Parallel()
 	var _ func([]byte) (*inference.Response, error) = openaiapi.DecodeResponse
+}
+
+func TestDecodeResponseUsageNormalization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		usageField string
+		want       *content.Usage
+		wantField  inference.UsageNormalizationField
+		wantReason inference.UsageNormalizationReason
+	}{
+		{name: "absent usage is unknown", want: nil},
+		{name: "present zero is known", usageField: `,"usage":{}`, want: &content.Usage{}},
+		{
+			name:       "cache reads writes and reasoning are disjoint",
+			usageField: `,"usage":{"prompt_tokens":10,"completion_tokens":6,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"completion_tokens_details":{"reasoning_tokens":4}}`,
+			want:       &content.Usage{InputTokens: 5, OutputTokens: 6, CacheReadTokens: 3, CacheCreationTokens: 2, ReasoningTokens: 4},
+		},
+		{name: "negative prompt", usageField: `,"usage":{"prompt_tokens":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative completion", usageField: `,"usage":{"completion_tokens":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative cache creation", usageField: `,"usage":{"prompt_tokens_details":{"cache_write_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative reasoning", usageField: `,"usage":{"completion_tokens_details":{"reasoning_tokens":-1}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "cache totals exceed prompt", usageField: `,"usage":{"prompt_tokens":4,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
+		{name: "reasoning exceeds output", usageField: `,"usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":3}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonReasoningExceedsOutput},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"model":"gpt-test","choices":[{"message":{"role":"assistant","content":"ok"}}]` + tt.usageField + `}`)
+			response, err := openaiapi.DecodeResponse(body)
+			if tt.wantReason != "" {
+				var normalizationErr *inference.UsageNormalizationError
+				if !errors.As(err, &normalizationErr) {
+					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
+				}
+				if normalizationErr.Field != tt.wantField || normalizationErr.Reason != tt.wantReason {
+					t.Errorf("normalization error = %+v, want field=%q reason=%q", normalizationErr, tt.wantField, tt.wantReason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v", err)
+			}
+			assertIndependentUsage(t, response, tt.want)
+		})
+	}
+}
+
+func assertIndependentUsage(t *testing.T, response *inference.Response, want *content.Usage) {
+	t.Helper()
+	if response.Usage == nil || response.Message.Usage == nil {
+		if response.Usage != nil || response.Message.Usage != nil || want != nil {
+			t.Fatalf("usage pointers = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+		}
+		return
+	}
+	if want == nil || *response.Usage != *want || *response.Message.Usage != *want {
+		t.Fatalf("usage = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+	}
+	if response.Usage == response.Message.Usage {
+		t.Fatal("Response.Usage and Message.Usage alias")
+	}
+	before := *response.Message.Usage
+	response.Usage.InputTokens++
+	if *response.Message.Usage != before {
+		t.Errorf("mutating Response.Usage changed Message.Usage to %+v", response.Message.Usage)
+	}
 }
 
 // blockType maps a concrete sealed block to its wire-tag BlockType, used to
@@ -51,8 +122,8 @@ func TestDecodeResponse(t *testing.T) {
 		wantToolUseName  string
 		wantToolUseInput json.RawMessage
 		wantUsageNil     bool
-		wantInputTokens  int
-		wantOutputTokens int
+		wantInputTokens  content.TokenCount
+		wantOutputTokens content.TokenCount
 
 		// expected error fields
 		wantErr       bool

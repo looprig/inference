@@ -25,12 +25,14 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 		return nil, &inference.APIError{Status: 0, Message: msg, Body: body}
 	}
 
-	var usage *inference.Usage
-	if wire.Usage != nil {
-		usage = &inference.Usage{
-			InputTokens:  wire.Usage.InputTokens,
-			OutputTokens: wire.Usage.OutputTokens,
-		}
+	usage, err := normalizeUsage(wire.Usage)
+	if err != nil {
+		return nil, err
+	}
+	var messageUsage *content.Usage
+	if usage != nil {
+		cloned := *usage
+		messageUsage = &cloned
 	}
 
 	return &inference.Response{
@@ -39,10 +41,35 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 				Role:   content.RoleAssistant,
 				Blocks: decodeBlocks(wire.Content),
 			},
+			Usage: messageUsage,
 		},
 		Model: wire.Model,
 		Usage: usage,
 	}, nil
+}
+
+func normalizeUsage(wire *messageUsage) (*inference.Usage, error) {
+	if wire == nil {
+		return nil, nil
+	}
+	input, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldInputTokens, wire.InputTokens)
+	if err != nil {
+		return nil, err
+	}
+	output, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldOutputTokens, wire.OutputTokens)
+	if err != nil {
+		return nil, err
+	}
+	cacheRead, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheReadTokens, wire.CacheReadTokens)
+	if err != nil {
+		return nil, err
+	}
+	cacheCreation, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheCreationTokens, wire.CacheCreationTokens)
+	if err != nil {
+		return nil, err
+	}
+	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation}
+	return &usage, nil
 }
 
 // decodeBlocks maps Anthropic response content blocks to provider-neutral blocks,

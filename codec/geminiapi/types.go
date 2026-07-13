@@ -130,12 +130,11 @@ type candidate struct {
 	Index        int           `json:"index"`
 }
 
-// usageMetadata reports token consumption. promptTokenCount is the input;
-// candidatesTokenCount is the generated output (thoughtsTokenCount, when present,
-// is intentionally not folded into OutputTokens — the domain Usage has no
-// separate thinking bucket).
+// usageMetadata reports token consumption.
 type usageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
 }

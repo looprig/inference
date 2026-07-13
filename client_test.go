@@ -183,8 +183,8 @@ func TestUsage(t *testing.T) {
 
 	cases := []struct {
 		name         string
-		inputTokens  int
-		outputTokens int
+		inputTokens  content.TokenCount
+		outputTokens content.TokenCount
 	}{
 		{name: "zero", inputTokens: 0, outputTokens: 0},
 		{name: "positive", inputTokens: 100, outputTokens: 50},

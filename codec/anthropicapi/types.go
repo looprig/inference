@@ -149,8 +149,10 @@ type messageResponse struct {
 
 // messageUsage is the `usage` object of a message response.
 type messageUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens"`
 }
 
 // anthropicError is the `error` object of an error-type response.

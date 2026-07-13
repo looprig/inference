@@ -31,6 +31,69 @@ func blockType(b content.Block) content.BlockType {
 	}
 }
 
+func TestDecodeResponseUsageNormalization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		usageField string
+		want       *content.Usage
+		wantField  inference.UsageNormalizationField
+		wantReason inference.UsageNormalizationReason
+	}{
+		{name: "absent usage is unknown", want: nil},
+		{name: "present zero is known", usageField: `,"usage":{}`, want: &content.Usage{}},
+		{name: "cache categories are disjoint", usageField: `,"usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}`, want: &content.Usage{InputTokens: 5, OutputTokens: 6, CacheReadTokens: 3, CacheCreationTokens: 2}},
+		{name: "negative input", usageField: `,"usage":{"input_tokens":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative output", usageField: `,"usage":{"output_tokens":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usage":{"cache_read_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "negative cache creation", usageField: `,"usage":{"cache_creation_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"type":"message","model":"claude-test","content":[{"type":"text","text":"ok"}]` + tt.usageField + `}`)
+			response, err := anthropicapi.DecodeResponse(body)
+			if tt.wantReason != "" {
+				var normalizationErr *inference.UsageNormalizationError
+				if !errors.As(err, &normalizationErr) {
+					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
+				}
+				if normalizationErr.Field != tt.wantField || normalizationErr.Reason != tt.wantReason {
+					t.Errorf("normalization error = %+v, want field=%q reason=%q", normalizationErr, tt.wantField, tt.wantReason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v", err)
+			}
+			assertIndependentUsage(t, response, tt.want)
+		})
+	}
+}
+
+func assertIndependentUsage(t *testing.T, response *inference.Response, want *content.Usage) {
+	t.Helper()
+	if response.Usage == nil || response.Message.Usage == nil {
+		if response.Usage != nil || response.Message.Usage != nil || want != nil {
+			t.Fatalf("usage pointers = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+		}
+		return
+	}
+	if want == nil || *response.Usage != *want || *response.Message.Usage != *want {
+		t.Fatalf("usage = response:%+v message:%+v, want %+v", response.Usage, response.Message.Usage, want)
+	}
+	if response.Usage == response.Message.Usage {
+		t.Fatal("Response.Usage and Message.Usage alias")
+	}
+	before := *response.Message.Usage
+	response.Usage.InputTokens++
+	if *response.Message.Usage != before {
+		t.Errorf("mutating Response.Usage changed Message.Usage to %+v", response.Message.Usage)
+	}
+}
+
 func TestDecodeResponse(t *testing.T) {
 	t.Parallel()
 
@@ -49,8 +112,8 @@ func TestDecodeResponse(t *testing.T) {
 		wantToolName     string
 		wantToolInput    string
 		wantUsageNil     bool
-		wantInputTokens  int
-		wantOutputTokens int
+		wantInputTokens  content.TokenCount
+		wantOutputTokens content.TokenCount
 	}{
 		{
 			name: "text response with usage",

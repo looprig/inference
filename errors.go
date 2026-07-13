@@ -3,6 +3,9 @@ package inference
 import (
 	"errors"
 	"fmt"
+	"strconv"
+
+	"github.com/looprig/core/content"
 )
 
 // Leaf causes used by ContextCountError when no lower-level error exists.
@@ -12,6 +15,53 @@ var (
 	ErrContextCountModelMismatch             = errors.New("context count model does not match request model")
 	ErrContextCountCapabilityQualityMismatch = errors.New("context count quality does not match declared capability")
 )
+
+// UsageNormalizationField identifies a normalized usage field.
+type UsageNormalizationField string
+
+const (
+	UsageNormalizationFieldInputTokens         UsageNormalizationField = "InputTokens"
+	UsageNormalizationFieldOutputTokens        UsageNormalizationField = "OutputTokens"
+	UsageNormalizationFieldCacheReadTokens     UsageNormalizationField = "CacheReadTokens"
+	UsageNormalizationFieldCacheCreationTokens UsageNormalizationField = "CacheCreationTokens"
+	UsageNormalizationFieldReasoningTokens     UsageNormalizationField = "ReasoningTokens"
+)
+
+// UsageNormalizationReason identifies why provider usage cannot be normalized.
+type UsageNormalizationReason string
+
+const (
+	UsageNormalizationReasonNegative               UsageNormalizationReason = "negative"
+	UsageNormalizationReasonComponentsExceedTotal  UsageNormalizationReason = "components exceed total"
+	UsageNormalizationReasonOverflow               UsageNormalizationReason = "overflow"
+	UsageNormalizationReasonReasoningExceedsOutput UsageNormalizationReason = "reasoning exceeds output"
+)
+
+// UsageNormalizationError reports provider usage that cannot be represented by
+// the normalized usage domain.
+type UsageNormalizationError struct {
+	Field  UsageNormalizationField
+	Reason UsageNormalizationReason
+	Value  int
+	// Left and Right are inspection-only operands for arithmetic and
+	// relationship failures; callers should branch on Field and Reason.
+	Left  content.TokenCount
+	Right content.TokenCount
+	Cause error
+}
+
+func (e *UsageNormalizationError) Error() string {
+	message := "inference: cannot normalize usage field " + string(e.Field) + ": " + string(e.Reason)
+	if e.Reason == UsageNormalizationReasonNegative {
+		message += " (" + strconv.Itoa(e.Value) + ")"
+	}
+	if e.Cause != nil {
+		message += ": " + e.Cause.Error()
+	}
+	return message
+}
+
+func (e *UsageNormalizationError) Unwrap() error { return e.Cause }
 
 // ContextCountError reports a structurally invalid count result or adapter.
 type ContextCountError struct {

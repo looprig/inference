@@ -89,6 +89,38 @@ func imageDataBlock(mt content.MediaType, data []byte) content.Block {
 
 func thinkingBlock(s string) content.Block { return &content.ThinkingBlock{Thinking: s} }
 
+func TestEncodeRequestIgnoresUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		usage *content.Usage
+	}{
+		{name: "nil", usage: nil},
+		{name: "present zero", usage: &content.Usage{}},
+		{name: "populated", usage: &content.Usage{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4, ReasoningTokens: 1}},
+	}
+
+	want, err := geminiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}})
+	if err != nil {
+		t.Fatalf("EncodeRequest() baseline error = %v", err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			message := aiMsg(textBlock("answer"))
+			message.Usage = tt.usage
+			got, err := geminiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{message}})
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("EncodeRequest() = %s, want byte-identical %s", got, want)
+			}
+		})
+	}
+}
+
 func toolUseBlock(id, name string, input json.RawMessage) content.Block {
 	return &content.ToolUseBlock{ID: id, Name: name, Input: input}
 }
