@@ -1,7 +1,9 @@
 package inference
 
 import (
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/looprig/core/content"
 )
@@ -48,8 +50,8 @@ func (e *StreamReaderError) Error() string {
 
 // StreamResultError reports terminal metadata that could not be authorized.
 type StreamResultError struct {
-	// Cause remains directly inspectable but is intentionally not exposed through
-	// Unwrap: even an io.EOF cause is a metadata failure, never clean exhaustion.
+	// Cause remains directly inspectable. Unwrap exposes ordinary causes while
+	// suppressing EOF-bearing chains: metadata failure is never clean exhaustion.
 	Cause error
 }
 
@@ -58,6 +60,15 @@ func (e *StreamResultError) Error() string {
 		return "inference: stream result failed: unknown cause"
 	}
 	return "inference: stream result failed: " + e.Cause.Error()
+}
+
+// Unwrap preserves normal typed error inspection unless the cause contains
+// io.EOF, which must not escape as the stream's clean terminal sentinel.
+func (e *StreamResultError) Unwrap() error {
+	if errors.Is(e.Cause, io.EOF) {
+		return nil
+	}
+	return e.Cause
 }
 
 func cloneStreamResult(result StreamResult) StreamResult {

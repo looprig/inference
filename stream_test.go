@@ -597,10 +597,19 @@ func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		cause error
+		name        string
+		cause       error
+		wantIs      error
+		wantUsageAs bool
 	}{
 		{name: "producer EOF is metadata failure not clean stream exhaustion", cause: io.EOF},
+		{name: "producer error wrapping EOF is metadata failure not clean stream exhaustion", cause: wrappedCause{cause: io.EOF}},
+		{name: "ordinary sentinel cause remains visible to errors Is", cause: errStreamMetadata, wantIs: errStreamMetadata},
+		{
+			name:        "typed non EOF cause remains visible to errors As",
+			cause:       &content.UsageValidationError{Field: content.UsageFieldReasoningTokens, Reason: content.UsageValidationReasonReasoningExceedsOutput},
+			wantUsageAs: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -624,6 +633,13 @@ func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
 				if resultErr.Cause != tt.cause {
 					t.Errorf("Next() call %d cause = %v, want exact %v", call, resultErr.Cause, tt.cause)
 				}
+				if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+					t.Errorf("Next() call %d error = %v, want errors.Is cause %v", call, err, tt.wantIs)
+				}
+				var usageErr *content.UsageValidationError
+				if got := errors.As(err, &usageErr); got != tt.wantUsageAs {
+					t.Errorf("Next() call %d errors.As UsageValidationError = %v, want %v", call, got, tt.wantUsageAs)
+				}
 			}
 			if _, ok := reader.Result(); ok {
 				t.Error("metadata failure unexpectedly authorized a result")
@@ -631,6 +647,15 @@ func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
 		})
 	}
 }
+
+type wrappedCause struct {
+	cause error
+}
+
+func (e wrappedCause) Error() string { return "wrapped: " + e.cause.Error() }
+func (e wrappedCause) Unwrap() error { return e.cause }
+
+var errStreamMetadata = errors.New("stream metadata failed")
 
 func TestStreamReader_ResultConcurrentWithClose(t *testing.T) {
 	t.Parallel()
