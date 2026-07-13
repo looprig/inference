@@ -233,6 +233,43 @@ func TestEncodeRequest_StreamFlag(t *testing.T) {
 	}
 }
 
+func TestEncodeRequestIncludeUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		stream            bool
+		wantStreamOptions bool
+	}{
+		{name: "stream requests usage trailer", stream: true, wantStreamOptions: true},
+		{name: "oneshot omits stream options", stream: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body, err := openaiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}}, tt.stream)
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			var got struct {
+				StreamOptions *struct {
+					IncludeUsage bool `json:"include_usage"`
+				} `json:"stream_options"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if (got.StreamOptions != nil) != tt.wantStreamOptions {
+				t.Fatalf("stream_options present = %v, want %v; body = %s", got.StreamOptions != nil, tt.wantStreamOptions, body)
+			}
+			if got.StreamOptions != nil && !got.StreamOptions.IncludeUsage {
+				t.Errorf("stream_options.include_usage = false, want true")
+			}
+		})
+	}
+}
+
 // --- TestEncodeRequest_Messages ---
 
 func TestEncodeRequest_Messages(t *testing.T) {

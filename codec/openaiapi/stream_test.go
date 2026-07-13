@@ -466,3 +466,142 @@ func TestNewStream_EmptyChoices(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIStreamResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		body       string
+		wantUsage  *content.Usage
+		wantModel  string
+		wantReason inference.FinishReason
+		wantErr    bool
+		interrupt  bool
+	}{
+		{
+			name: "usage-only terminal frame is metadata not content",
+			body: "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2},\"completion_tokens_details\":{\"reasoning_tokens\":1}}}\n\n" +
+				"data: [DONE]\n\n",
+			wantUsage:  &content.Usage{InputTokens: 7, OutputTokens: 4, CacheReadTokens: 2, ReasoningTokens: 1},
+			wantModel:  "gpt-test",
+			wantReason: inference.FinishReasonStop,
+		},
+		{
+			name:       "missing usage trailer remains a clean result",
+			body:       "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
+			wantModel:  "gpt-test",
+			wantReason: inference.FinishReasonLength,
+		},
+		{name: "present empty usage remains known zero", body: "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n", wantUsage: &content.Usage{}},
+		{name: "content filter finish is provider-neutral", body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n", wantReason: inference.FinishReasonContentFilter},
+		{name: "explicit null count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":null}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "malformed count type fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"many\"}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "fractional count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1.5}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "negative count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":-1}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "out-of-range count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":18446744073709551616}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "inconsistent prompt details fail", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\ndata: [DONE]\n\n", wantErr: true},
+		{name: "transport interruption rejects collected trailer", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n", interrupt: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var body io.ReadCloser = io.NopCloser(strings.NewReader(tt.body))
+			if tt.interrupt {
+				body = &interruptedReadCloser{data: []byte(tt.body)}
+			}
+			stream := openaiapi.NewStream(body)
+			defer stream.Close()
+			chunks := 0
+			for {
+				_, err := stream.Next()
+				if err == nil {
+					chunks++
+					continue
+				}
+				if tt.wantErr {
+					if errors.Is(err, io.EOF) {
+						t.Fatalf("Next() error = EOF, want terminal decode failure")
+					}
+					var normalizationErr *inference.UsageNormalizationError
+					if !errors.As(err, &normalizationErr) {
+						t.Fatalf("Next() error = %T %v, want UsageNormalizationError", err, err)
+					}
+					if _, ok := stream.Result(); ok {
+						t.Fatal("Result() available after terminal decode failure")
+					}
+					return
+				}
+				if tt.interrupt {
+					var interrupted *streamInterruptedError
+					if !errors.As(err, &interrupted) {
+						t.Fatalf("Next() error = %T %v, want streamInterruptedError", err, err)
+					}
+					if _, ok := stream.Result(); ok {
+						t.Fatal("Result() available after transport interruption")
+					}
+					return
+				}
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("Next() error = %v, want EOF", err)
+				}
+				break
+			}
+			if chunks != 0 {
+				t.Fatalf("emitted chunks = %d, want 0", chunks)
+			}
+			got, ok := stream.Result()
+			if !ok {
+				t.Fatal("Result() unavailable after clean EOF")
+			}
+			if got.Model != tt.wantModel || got.FinishReason != tt.wantReason {
+				t.Errorf("Result metadata = model %q reason %q, want %q %q", got.Model, got.FinishReason, tt.wantModel, tt.wantReason)
+			}
+			if !usageEqual(got.Usage, tt.wantUsage) {
+				t.Errorf("Result usage = %+v, want %+v", got.Usage, tt.wantUsage)
+			}
+			assertUsageSnapshot(t, stream, got.Usage)
+		})
+	}
+}
+
+func assertUsageSnapshot(t *testing.T, stream *inference.StreamReader[content.Chunk], usage *content.Usage) {
+	t.Helper()
+	if usage == nil {
+		return
+	}
+	want := *usage
+	usage.InputTokens++
+	again, ok := stream.Result()
+	if !ok || again.Usage == nil || *again.Usage != want {
+		t.Errorf("Result() after caller mutation = %+v, want defensive snapshot %+v", again.Usage, want)
+	}
+}
+
+type streamInterruptedError struct{}
+
+func (*streamInterruptedError) Error() string { return "stream interrupted" }
+
+type interruptedReadCloser struct {
+	data []byte
+	done bool
+}
+
+func (r *interruptedReadCloser) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, &streamInterruptedError{}
+	}
+	r.done = true
+	return copy(p, r.data), nil
+}
+
+func (*interruptedReadCloser) Close() error { return nil }
+
+func usageEqual(got, want *content.Usage) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return *got == *want
+}

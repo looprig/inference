@@ -10,17 +10,22 @@ import (
 // provider packages can embed it in a typed extension struct (e.g. adding an
 // encrypted-response public key) without round-tripping through map[string]json.RawMessage.
 type ChatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Tools       []chatTool    `json:"tools,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Stop        []string      `json:"stop,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []chatMessage      `json:"messages"`
+	Tools         []chatTool         `json:"tools,omitempty"`
+	Temperature   *float64           `json:"temperature,omitempty"`
+	TopP          *float64           `json:"top_p,omitempty"`
+	MaxTokens     *int               `json:"max_tokens,omitempty"`
+	Stop          []string           `json:"stop,omitempty"`
+	Stream        bool               `json:"stream,omitempty"`
+	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
 
 	// o-series reasoning
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatMessage struct {
@@ -96,14 +101,16 @@ type chatCompletionTokensDetails struct {
 	ReasoningTokens usagenorm.Count `json:"reasoning_tokens"`
 }
 
-// sseChunk is one streaming delta event.
+// sseChunk is one streaming delta or terminal-usage event.
 type sseChunk struct {
+	Model   string      `json:"model"`
 	Choices []sseChoice `json:"choices"`
 	Usage   *chatUsage  `json:"usage"`
 }
 
 type sseChoice struct {
-	Delta sseMessageDelta `json:"delta"`
+	Delta        sseMessageDelta `json:"delta"`
+	FinishReason string          `json:"finish_reason"`
 }
 
 type sseMessageDelta struct {

@@ -28,6 +28,9 @@ func BuildChatRequest(req inference.Request, stream bool) (ChatRequest, error) {
 		Stream:          stream,
 		ReasoningEffort: reasoningEffort(sampling.Effort),
 	}
+	if stream {
+		cr.StreamOptions = &chatStreamOptions{IncludeUsage: true}
+	}
 
 	if req.System != "" {
 		cr.Messages = append(cr.Messages, chatMessage{

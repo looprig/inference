@@ -1,6 +1,7 @@
 package anthropicapi
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/looprig/core/content"
@@ -20,7 +21,8 @@ func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.
 	if err != nil {
 		return nil, err
 	}
-	return inference.FramesToChunks(frames, mapFrame), nil
+	collector := &streamResultCollector{}
+	return inference.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
 }
 
 // mapFrame decodes one raw SSE frame's Data via the shared per-event decoder. The
@@ -28,4 +30,87 @@ func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.
 // SSE event Name on the frame is not needed here.
 func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
 	return decodeEvent(f.Data)
+}
+
+type streamResultCollector struct {
+	wireUsage   messageUsage
+	usageSeen   bool
+	resultValue inference.StreamResult
+}
+
+func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
+	var event streamEvent
+	if err := json.Unmarshal(frame.Data, &event); err == nil {
+		if err := c.collect(event); err != nil {
+			return nil, err
+		}
+	}
+	return mapFrame(frame)
+}
+
+func (c *streamResultCollector) collect(event streamEvent) error {
+	if event.Type == eventMessageStart && event.Message != nil {
+		if event.Message.Model != "" {
+			c.resultValue.Model = event.Message.Model
+		}
+		if err := c.mergeUsage(event.Message.Usage); err != nil {
+			return err
+		}
+	}
+	if event.Type == eventMessageDelta {
+		if event.Delta != nil && event.Delta.StopReason != "" {
+			c.resultValue.FinishReason = mapFinishReason(event.Delta.StopReason)
+		}
+		if err := c.mergeUsage(event.Usage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *streamResultCollector) mergeUsage(update *messageUsage) error {
+	if update == nil {
+		return nil
+	}
+	c.usageSeen = true
+	if update.InputTokens.Present() {
+		c.wireUsage.InputTokens = update.InputTokens
+	}
+	if update.OutputTokens.Present() {
+		c.wireUsage.OutputTokens = update.OutputTokens
+	}
+	if update.CacheReadTokens.Present() {
+		c.wireUsage.CacheReadTokens = update.CacheReadTokens
+	}
+	if update.CacheCreationTokens.Present() {
+		c.wireUsage.CacheCreationTokens = update.CacheCreationTokens
+	}
+	usage, err := normalizeUsage(&c.wireUsage)
+	if err != nil {
+		return err
+	}
+	c.resultValue.Usage = usage
+	return nil
+}
+
+func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
+	if !c.usageSeen {
+		c.resultValue.Usage = nil
+	}
+	return c.resultValue, true, nil
+}
+
+func mapFinishReason(reason string) inference.FinishReason {
+	switch reason {
+	case "end_turn", "stop_sequence", "pause_turn":
+		return inference.FinishReasonStop
+	case "max_tokens":
+		return inference.FinishReasonLength
+	case "tool_use":
+		return inference.FinishReasonToolUse
+	case "refusal":
+		return inference.FinishReasonContentFilter
+	default:
+		return inference.FinishReasonUnknown
+	}
 }

@@ -28,6 +28,8 @@ const (
 	// SSE event `type` values.
 	eventContentBlockStart = "content_block_start"
 	eventContentBlockDelta = "content_block_delta"
+	eventMessageStart      = "message_start"
+	eventMessageDelta      = "message_delta"
 
 	// content_block_delta `delta.type` values.
 	deltaText      = "text_delta"
@@ -137,10 +139,10 @@ type imageSource struct {
 	URL       string `json:"url,omitempty"`
 }
 
-// messageResponse is the non-streaming `POST /v1/messages` response body (and the
-// shape carried inside a `message_start` stream event, of which the codec reads
-// nothing). Usage is a pointer so its absence is distinguishable from a zeroed
-// count. Error is populated only when Type == "error".
+// messageResponse is the non-streaming `POST /v1/messages` response body and the
+// shape carried inside a `message_start` stream event. Usage is a pointer so its
+// absence is distinguishable from a zeroed count. Error is populated only when
+// Type == "error".
 type messageResponse struct {
 	ID      string           `json:"id"`
 	Type    string           `json:"type"`
@@ -166,13 +168,15 @@ type anthropicError struct {
 }
 
 // streamEvent is the union view of one de-framed SSE event the codec cares about.
-// It is deliberately minimal: only the fields DecodeEvent maps to chunks are
-// modeled; everything else (usage, stop_reason, message envelope) is ignored.
+// Content fields feed DecodeEvent; message and usage fields feed the terminal
+// result collector without entering the content chunk vocabulary.
 type streamEvent struct {
-	Type         string       `json:"type"`
-	Index        int          `json:"index"`
-	ContentBlock *streamBlock `json:"content_block"`
-	Delta        *streamDelta `json:"delta"`
+	Type         string           `json:"type"`
+	Index        int              `json:"index"`
+	ContentBlock *streamBlock     `json:"content_block"`
+	Delta        *streamDelta     `json:"delta"`
+	Message      *messageResponse `json:"message"`
+	Usage        *messageUsage    `json:"usage"`
 }
 
 // streamBlock is the `content_block` object on a content_block_start event. The
@@ -183,12 +187,13 @@ type streamBlock struct {
 	Name string `json:"name"`
 }
 
-// streamDelta is the `delta` object on a content_block_delta event: exactly one
-// of Text (text_delta), PartialJSON (input_json_delta), or Thinking
-// (thinking_delta) is populated for the delta types the codec maps.
+// streamDelta is the `delta` object on content_block_delta and message_delta
+// events. Content events populate one content field; message_delta can populate
+// StopReason for terminal metadata.
 type streamDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
 	PartialJSON string `json:"partial_json"`
 	Thinking    string `json:"thinking"`
+	StopReason  string `json:"stop_reason"`
 }

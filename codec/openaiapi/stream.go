@@ -1,6 +1,7 @@
 package openaiapi
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -26,7 +27,8 @@ func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.
 	if err != nil {
 		return nil, err
 	}
-	return inference.FramesToChunks(frames, mapFrame), nil
+	collector := &streamResultCollector{}
+	return inference.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
 }
 
 // NewStream adapts a raw OpenAI SSE body into a chunk stream. Exposed for provider
@@ -42,7 +44,8 @@ func NewStream(body io.ReadCloser) *inference.StreamReader[content.Chunk] {
 			func() error { return nil },
 		)
 	}
-	return inference.FramesToChunks(frames, mapFrame)
+	collector := &streamResultCollector{}
+	return inference.FramesToChunksWithResult(frames, collector.mapFrame, collector.result)
 }
 
 // mapFrame maps one raw SSE frame to chunk(s): the [DONE] sentinel ends the stream
@@ -52,4 +55,58 @@ func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
 		return nil, io.EOF
 	}
 	return decodeEvent(f.Data)
+}
+
+type streamResultCollector struct {
+	resultValue inference.StreamResult
+}
+
+func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
+	if string(frame.Data) == doneSentinel {
+		return mapFrame(frame)
+	}
+	var event sseChunk
+	if err := json.Unmarshal(frame.Data, &event); err == nil {
+		if err := c.collect(event); err != nil {
+			return nil, err
+		}
+	}
+	return mapFrame(frame)
+}
+
+func (c *streamResultCollector) collect(event sseChunk) error {
+	if event.Model != "" {
+		c.resultValue.Model = event.Model
+	}
+	if len(event.Choices) > 0 && event.Choices[0].FinishReason != "" {
+		c.resultValue.FinishReason = mapFinishReason(event.Choices[0].FinishReason)
+	}
+	if event.Usage == nil {
+		return nil
+	}
+	usage, err := normalizeUsage(event.Usage)
+	if err != nil {
+		return err
+	}
+	c.resultValue.Usage = usage
+	return nil
+}
+
+func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
+	return c.resultValue, true, nil
+}
+
+func mapFinishReason(reason string) inference.FinishReason {
+	switch reason {
+	case "stop":
+		return inference.FinishReasonStop
+	case "length":
+		return inference.FinishReasonLength
+	case "tool_calls", "function_call":
+		return inference.FinishReasonToolUse
+	case "content_filter":
+		return inference.FinishReasonContentFilter
+	default:
+		return inference.FinishReasonUnknown
+	}
 }
