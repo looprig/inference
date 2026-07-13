@@ -1,6 +1,7 @@
 package contextcount
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,179 @@ func TestEstimatorCountsCompleteRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEstimatorCountsThreadSystem(t *testing.T) {
+	tests := []struct {
+		name   string
+		format inference.APIFormat
+	}{
+		{name: "OpenAI", format: inference.APIFormatOpenAI},
+		{name: "Anthropic", format: inference.APIFormatAnthropic},
+		{name: "Gemini", format: inference.APIFormatGemini},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertRequestChange(t, minimalRequest(tt.format), requestWithThreadSystem(tt.format), true)
+		})
+	}
+}
+
+func TestEstimatorCountsMatchingToolFlow(t *testing.T) {
+	tests := []struct {
+		name   string
+		format inference.APIFormat
+	}{
+		{name: "OpenAI", format: inference.APIFormatOpenAI},
+		{name: "Anthropic", format: inference.APIFormatAnthropic},
+		{name: "Gemini", format: inference.APIFormatGemini},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			after := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
+			assertRequestChange(t, minimalRequest(tt.format), after, true)
+		})
+	}
+}
+
+func TestEstimatorCountsToolMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		format inference.APIFormat
+	}{
+		{name: "OpenAI", format: inference.APIFormatOpenAI},
+		{name: "Anthropic", format: inference.APIFormatAnthropic},
+		{name: "Gemini", format: inference.APIFormatGemini},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, change := range toolMetadataChanges(tt.format) {
+				t.Run(change.name, func(t *testing.T) {
+					assertRequestChange(t, change.before, change.after, true)
+				})
+			}
+		})
+	}
+}
+
+func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		format      inference.APIFormat
+		wantChanged bool
+	}{
+		{name: "OpenAI intentionally omits IsError", format: inference.APIFormatOpenAI, wantChanged: false},
+		{name: "Anthropic includes IsError", format: inference.APIFormatAnthropic, wantChanged: true},
+		{name: "Gemini intentionally omits IsError", format: inference.APIFormatGemini, wantChanged: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
+			after := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, true)
+			assertRequestChange(t, before, after, tt.wantChanged)
+		})
+	}
+}
+
+func TestEstimatorCountsHistoricalThinking(t *testing.T) {
+	tests := []struct {
+		name        string
+		format      inference.APIFormat
+		wantChanged bool
+	}{
+		{name: "OpenAI intentionally omits thinking", format: inference.APIFormatOpenAI, wantChanged: false},
+		{name: "Anthropic includes thinking and signature", format: inference.APIFormatAnthropic, wantChanged: true},
+		{name: "Gemini intentionally omits thinking", format: inference.APIFormatGemini, wantChanged: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertRequestChange(t, requestWithThinking(tt.format, false), requestWithThinking(tt.format, true), tt.wantChanged)
+		})
+	}
+}
+
+func TestEstimatorCountsEffortByDialect(t *testing.T) {
+	tests := []struct {
+		name        string
+		before      inference.Request
+		after       inference.Request
+		wantChanged bool
+	}{
+		{name: "OpenAI effort ignores capability gate", before: requestWithEffort(inference.APIFormatOpenAI, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatOpenAI, inference.EffortLow, false), wantChanged: true},
+		{name: "Anthropic effort with thinking", before: requestWithEffort(inference.APIFormatAnthropic, inference.EffortNone, true), after: requestWithEffort(inference.APIFormatAnthropic, inference.EffortLow, true), wantChanged: true},
+		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(inference.APIFormatAnthropic, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatAnthropic, inference.EffortLow, false), wantChanged: false},
+		{name: "Gemini effort with thinking", before: requestWithEffort(inference.APIFormatGemini, inference.EffortNone, true), after: requestWithEffort(inference.APIFormatGemini, inference.EffortLow, true), wantChanged: true},
+		{name: "Gemini gate off restores no-effort encoding", before: requestWithEffort(inference.APIFormatGemini, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatGemini, inference.EffortLow, false), wantChanged: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertRequestChange(t, tt.before, tt.after, tt.wantChanged)
+		})
+	}
+}
+
+const (
+	toolShortID     string = "call-1"
+	toolLongID      string = "call-with-deliberately-long-provider-id-123456789"
+	toolShortName   string = "lookup"
+	toolLongName    string = "lookup_with_a_deliberately_long_function_name"
+	toolShortInput  string = `{"q":"x"}`
+	toolLongInput   string = `{"query":"a deliberately long tool input value","limit":12345}`
+	toolShortResult string = "ok"
+	toolLongResult  string = "a deliberately long tool result value returned to the model"
+)
+
+type requestChangeCase struct {
+	name   string
+	before inference.Request
+	after  inference.Request
+}
+
+func toolMetadataChanges(format inference.APIFormat) []requestChangeCase {
+	baseline := toolFlowRequest(format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
+	return []requestChangeCase{
+		{name: "tool id", before: baseline, after: toolFlowRequest(format, toolLongID, toolShortName, toolShortInput, toolShortResult, false)},
+		{name: "tool name", before: baseline, after: toolFlowRequest(format, toolShortID, toolLongName, toolShortInput, toolShortResult, false)},
+		{name: "tool input", before: baseline, after: toolFlowRequest(format, toolShortID, toolShortName, toolLongInput, toolShortResult, false)},
+		{name: "result content", before: baseline, after: toolFlowRequest(format, toolShortID, toolShortName, toolShortInput, toolLongResult, false)},
+	}
+}
+
+func assertRequestChange(t *testing.T, before, after inference.Request, wantChanged bool) {
+	t.Helper()
+	if before.Model.APIFormat != after.Model.APIFormat {
+		t.Fatalf("test request format mismatch: before=%q after=%q", before.Model.APIFormat, after.Model.APIFormat)
+	}
+	bodyChanged, countChanged := requestChanges(t, before, after)
+	if bodyChanged != wantChanged {
+		t.Errorf("encoded body changed=%v, want %v", bodyChanged, wantChanged)
+	}
+	if countChanged != wantChanged {
+		t.Errorf("estimated count changed=%v, want %v", countChanged, wantChanged)
+	}
+}
+
+func requestChanges(t *testing.T, before, after inference.Request) (bool, bool) {
+	t.Helper()
+	beforeBody, err := encodeRequest(before)
+	if err != nil {
+		t.Fatalf("encode before request: %v", err)
+	}
+	afterBody, err := encodeRequest(after)
+	if err != nil {
+		t.Fatalf("encode after request: %v", err)
+	}
+
+	beforeCount, err := NewEstimator().CountContext(context.Background(), before)
+	if err != nil {
+		t.Fatalf("before CountContext() error = %v", err)
+	}
+	afterCount, err := NewEstimator().CountContext(context.Background(), after)
+	if err != nil {
+		t.Fatalf("after CountContext() error = %v", err)
+	}
+	return !bytes.Equal(beforeBody, afterBody), beforeCount.InputTokens != afterCount.InputTokens
 }
 
 func TestEstimatorIgnoresHistoricalUsage(t *testing.T) {
@@ -320,6 +494,61 @@ func minimalRequest(format inference.APIFormat) inference.Request {
 
 func requestWithModel(provider inference.ProviderName, model string, format inference.APIFormat) inference.Request {
 	return inference.Request{Model: inference.Model{Provider: provider, Name: model, APIFormat: format}}
+}
+
+func requestWithThreadSystem(format inference.APIFormat) inference.Request {
+	req := minimalRequest(format)
+	req.Messages = content.AgenticMessages{&content.SystemMessage{Message: content.Message{
+		Role:   content.RoleSystem,
+		Blocks: []content.Block{&content.TextBlock{Text: "a deliberately long in-thread system instruction"}},
+	}}}
+	return req
+}
+
+func toolFlowRequest(format inference.APIFormat, id, name, input, result string, isError bool) inference.Request {
+	req := minimalRequest(format)
+	req.Messages = content.AgenticMessages{
+		&content.AIMessage{Message: content.Message{
+			Role: content.RoleAssistant,
+			Blocks: []content.Block{&content.ToolUseBlock{
+				ID:    id,
+				Name:  name,
+				Input: json.RawMessage(input),
+			}},
+		}},
+		&content.ToolResultMessage{
+			Message: content.Message{
+				Role:   content.RoleTool,
+				Blocks: []content.Block{&content.TextBlock{Text: result}},
+			},
+			ToolUseID: id,
+			IsError:   isError,
+		},
+	}
+	return req
+}
+
+func requestWithThinking(format inference.APIFormat, include bool) inference.Request {
+	req := minimalRequest(format)
+	blocks := []content.Block{&content.TextBlock{Text: "assistant answer"}}
+	if include {
+		blocks = append(blocks, &content.ThinkingBlock{
+			Thinking:  "a deliberately long historical reasoning trace",
+			Signature: "a-deliberately-long-provider-signature",
+		})
+	}
+	req.Messages = content.AgenticMessages{&content.AIMessage{Message: content.Message{
+		Role:   content.RoleAssistant,
+		Blocks: blocks,
+	}}}
+	return req
+}
+
+func requestWithEffort(format inference.APIFormat, effort inference.Effort, thinkingCap bool) inference.Request {
+	req := minimalRequest(format)
+	req.Model.Caps.Thinking = thinkingCap
+	req.Override = &inference.Sampling{Effort: effort}
+	return req
 }
 
 func completeRequest(format inference.APIFormat, usage *content.Usage) inference.Request {
