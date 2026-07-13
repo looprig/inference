@@ -59,10 +59,12 @@ func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
 
 type streamResultCollector struct {
 	resultValue inference.StreamResult
+	doneSeen    bool
 }
 
 func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
 	if string(frame.Data) == doneSentinel {
+		c.doneSeen = true
 		return mapFrame(frame)
 	}
 	var event sseChunk
@@ -93,6 +95,9 @@ func (c *streamResultCollector) collect(event sseChunk) error {
 }
 
 func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
+	if !c.doneSeen {
+		return inference.StreamResult{}, false, nil
+	}
 	return c.resultValue, true, nil
 }
 

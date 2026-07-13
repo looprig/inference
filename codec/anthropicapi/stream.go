@@ -13,9 +13,10 @@ import (
 var _ inference.StreamingCodec = Codec{}
 
 // DecodeStream frames a successful Anthropic Messages streaming response with wire/sse
-// and maps each frame through the codec's per-event decode logic. Anthropic has no
-// terminal payload sentinel: message_stop yields no chunk and the stream ends on the
-// body's natural EOF. It owns resp.Body: the returned reader's Close closes it.
+// and maps each frame through the codec's per-event decode logic. The message_stop
+// marker authorizes the terminal result but yields no chunk; the body's natural
+// EOF ends the transport stream. It owns resp.Body: the returned reader's Close
+// closes it.
 func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.Chunk], error) {
 	frames, err := sse.DecodeStreamFrames(resp.Body)
 	if err != nil {
@@ -33,9 +34,10 @@ func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
 }
 
 type streamResultCollector struct {
-	wireUsage   messageUsage
-	usageSeen   bool
-	resultValue inference.StreamResult
+	wireUsage       messageUsage
+	usageSeen       bool
+	messageStopSeen bool
+	resultValue     inference.StreamResult
 }
 
 func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
@@ -49,6 +51,17 @@ func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content
 }
 
 func (c *streamResultCollector) collect(event streamEvent) error {
+	if event.Type == responseTypeError {
+		streamErr := &StreamAPIError{}
+		if event.Error != nil {
+			streamErr.Type = event.Error.Type
+			streamErr.Message = event.Error.Message
+		}
+		return streamErr
+	}
+	if event.Type == eventMessageStop {
+		c.messageStopSeen = true
+	}
 	if event.Type == eventMessageStart && event.Message != nil {
 		if event.Message.Model != "" {
 			c.resultValue.Model = event.Message.Model
@@ -94,6 +107,9 @@ func (c *streamResultCollector) mergeUsage(update *messageUsage) error {
 }
 
 func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
+	if !c.messageStopSeen {
+		return inference.StreamResult{}, false, nil
+	}
 	if !c.usageSeen {
 		c.resultValue.Usage = nil
 	}

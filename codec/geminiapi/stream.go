@@ -32,7 +32,8 @@ func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
 }
 
 type streamResultCollector struct {
-	resultValue inference.StreamResult
+	resultValue      inference.StreamResult
+	functionCallSeen bool
 }
 
 func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
@@ -51,10 +52,13 @@ func (c *streamResultCollector) collect(event GenerateContentResponse) error {
 	}
 	if len(event.Candidates) > 0 {
 		candidate := event.Candidates[0]
+		if hasFunctionCall(candidate.Content.Parts) {
+			c.functionCallSeen = true
+		}
 		if candidate.FinishReason != "" {
 			c.resultValue.FinishReason = mapFinishReason(candidate.FinishReason)
 		}
-		if hasFunctionCall(candidate.Content.Parts) && (candidate.FinishReason == "" || candidate.FinishReason == "STOP") {
+		if c.functionCallSeen && (candidate.FinishReason == "" || candidate.FinishReason == "STOP") {
 			c.resultValue.FinishReason = inference.FinishReasonToolUse
 		}
 	}

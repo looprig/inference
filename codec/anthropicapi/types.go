@@ -30,6 +30,7 @@ const (
 	eventContentBlockDelta = "content_block_delta"
 	eventMessageStart      = "message_start"
 	eventMessageDelta      = "message_delta"
+	eventMessageStop       = "message_stop"
 
 	// content_block_delta `delta.type` values.
 	deltaText      = "text_delta"
@@ -168,8 +169,8 @@ type anthropicError struct {
 }
 
 // streamEvent is the union view of one de-framed SSE event the codec cares about.
-// Content fields feed DecodeEvent; message and usage fields feed the terminal
-// result collector without entering the content chunk vocabulary.
+// Content fields feed DecodeEvent; message, usage, and error fields feed the
+// stream result collector without entering the content chunk vocabulary.
 type streamEvent struct {
 	Type         string           `json:"type"`
 	Index        int              `json:"index"`
@@ -177,6 +178,7 @@ type streamEvent struct {
 	Delta        *streamDelta     `json:"delta"`
 	Message      *messageResponse `json:"message"`
 	Usage        *messageUsage    `json:"usage"`
+	Error        *anthropicError  `json:"error"`
 }
 
 // streamBlock is the `content_block` object on a content_block_start event. The

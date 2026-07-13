@@ -16,30 +16,34 @@ func TestAnthropicStreamResult(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		body       string
-		wantUsage  *content.Usage
-		wantModel  string
-		wantReason inference.FinishReason
-		wantErr    bool
-		interrupt  bool
+		name          string
+		body          string
+		wantUsage     *content.Usage
+		wantModel     string
+		wantReason    inference.FinishReason
+		wantErr       bool
+		interrupt     bool
+		wantNoResult  bool
+		wantStreamErr bool
+		wantChunks    int
 	}{
 		{
 			name: "start input and cache combine with cumulative delta output",
 			body: "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":8,\"output_tokens\":0,\"cache_read_input_tokens\":3,\"cache_creation_input_tokens\":2}}}\n\n" +
-				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n",
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
 			wantUsage:  &content.Usage{InputTokens: 8, OutputTokens: 4, CacheReadTokens: 3, CacheCreationTokens: 2},
 			wantModel:  "claude-test",
 			wantReason: inference.FinishReasonStop,
 		},
 		{
 			name:       "latest cumulative output and tool finish win",
-			body:       "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":2}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\n",
+			body:       "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":2}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
 			wantUsage:  &content.Usage{InputTokens: 1, OutputTokens: 5},
 			wantModel:  "claude-test",
 			wantReason: inference.FinishReasonToolUse,
 		},
-		{name: "max tokens finish is provider-neutral", body: "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n", wantReason: inference.FinishReasonLength},
+		{name: "max tokens finish is provider-neutral", body: "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", wantReason: inference.FinishReasonLength},
 		{name: "missing trailers remains clean", body: "data: {\"type\":\"message_stop\"}\n\n"},
 		{name: "null start count fails", body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":null}}}\n\n", wantErr: true},
 		{name: "malformed delta count type fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":\"many\"}}\n\n", wantErr: true},
@@ -47,6 +51,16 @@ func TestAnthropicStreamResult(t *testing.T) {
 		{name: "negative delta count fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":-1}}\n\n", wantErr: true},
 		{name: "out-of-range delta count fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":18446744073709551616}}\n\n", wantErr: true},
 		{name: "transport interruption rejects collected trailer", body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n", interrupt: true},
+		{name: "raw EOF without message_stop rejects collected trailer", body: "data: {\"type\":\"message_start\",\"message\":{\"model\":\"partial\",\"usage\":{\"input_tokens\":1}}}\n\n", wantNoResult: true},
+		{
+			name: "error event after partial content is terminal",
+			body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n" +
+				"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n" +
+				"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"capacity unavailable\"}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
+			wantStreamErr: true,
+			wantChunks:    1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -82,6 +96,25 @@ func TestAnthropicStreamResult(t *testing.T) {
 					}
 					return
 				}
+				if tt.wantStreamErr {
+					if chunks != tt.wantChunks {
+						t.Fatalf("emitted chunks before error = %d, want %d", chunks, tt.wantChunks)
+					}
+					var streamErr *anthropicapi.StreamAPIError
+					if !errors.As(err, &streamErr) {
+						t.Fatalf("Next() error = %T %v, want StreamAPIError", err, err)
+					}
+					if streamErr.Type != "overloaded_error" || streamErr.Message != "capacity unavailable" {
+						t.Errorf("StreamAPIError = type %q message %q", streamErr.Type, streamErr.Message)
+					}
+					if _, ok := stream.Result(); ok {
+						t.Fatal("Result() available after Anthropic error event")
+					}
+					if _, nextErr := stream.Next(); !errors.As(nextErr, &streamErr) {
+						t.Fatalf("Next() after terminal error = %T %v, want stable StreamAPIError", nextErr, nextErr)
+					}
+					return
+				}
 				if tt.interrupt {
 					var interrupted *streamInterruptedError
 					if !errors.As(err, &interrupted) {
@@ -97,10 +130,16 @@ func TestAnthropicStreamResult(t *testing.T) {
 				}
 				break
 			}
-			if chunks != 0 {
-				t.Fatalf("emitted chunks = %d, want 0", chunks)
+			if chunks != tt.wantChunks {
+				t.Fatalf("emitted chunks = %d, want %d", chunks, tt.wantChunks)
 			}
 			got, ok := stream.Result()
+			if tt.wantNoResult {
+				if ok {
+					t.Fatalf("Result() = %+v, true after raw EOF without message_stop", got)
+				}
+				return
+			}
 			if !ok {
 				t.Fatal("Result() unavailable after clean EOF")
 			}

@@ -23,3 +23,22 @@ type UnsupportedConversationError struct {
 func (e *UnsupportedConversationError) Error() string {
 	return "anthropicapi: unsupported conversation type " + e.Conversation
 }
+
+// StreamAPIError reports an Anthropic error event received after a streaming
+// request crossed the successful HTTP-status boundary. It retains only the
+// provider's structured error type and message, never the raw response frame.
+type StreamAPIError struct {
+	Type    string
+	Message string
+}
+
+func (e *StreamAPIError) Error() string {
+	message := "anthropicapi: stream error"
+	if e.Type != "" {
+		message += " (" + e.Type + ")"
+	}
+	if e.Message != "" {
+		message += ": " + e.Message
+	}
+	return message
+}

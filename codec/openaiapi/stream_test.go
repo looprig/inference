@@ -471,13 +471,14 @@ func TestOpenAIStreamResult(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		body       string
-		wantUsage  *content.Usage
-		wantModel  string
-		wantReason inference.FinishReason
-		wantErr    bool
-		interrupt  bool
+		name         string
+		body         string
+		wantUsage    *content.Usage
+		wantModel    string
+		wantReason   inference.FinishReason
+		wantErr      bool
+		interrupt    bool
+		wantNoResult bool
 	}{
 		{
 			name: "usage-only terminal frame is metadata not content",
@@ -503,6 +504,7 @@ func TestOpenAIStreamResult(t *testing.T) {
 		{name: "out-of-range count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":18446744073709551616}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "inconsistent prompt details fail", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "transport interruption rejects collected trailer", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n", interrupt: true},
+		{name: "raw EOF without DONE rejects collected trailer", body: "data: {\"model\":\"partial\",\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n", wantNoResult: true},
 	}
 
 	for _, tt := range tests {
@@ -553,6 +555,12 @@ func TestOpenAIStreamResult(t *testing.T) {
 				t.Fatalf("emitted chunks = %d, want 0", chunks)
 			}
 			got, ok := stream.Result()
+			if tt.wantNoResult {
+				if ok {
+					t.Fatalf("Result() = %+v, true after raw EOF without DONE", got)
+				}
+				return
+			}
 			if !ok {
 				t.Fatal("Result() unavailable after clean EOF")
 			}
