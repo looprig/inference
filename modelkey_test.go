@@ -9,6 +9,7 @@ import (
 
 func TestModelKey_Validate(t *testing.T) {
 	t.Parallel()
+	provider := inference.ProviderName("bedrock")
 	tests := []struct {
 		name       string
 		key        inference.ModelKey
@@ -18,11 +19,11 @@ func TestModelKey_Validate(t *testing.T) {
 	}{
 		{
 			name: "provider namespace and provider model id",
-			key:  inference.ModelKey{Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-20250514-v1:0"},
+			key:  inference.ModelKey{Provider: provider, Model: "us.anthropic.claude-sonnet-4-20250514-v1:0"},
 		},
 		{
 			name: "boundary one-character components",
-			key:  inference.ModelKey{Provider: "p", Model: "m"},
+			key:  inference.ModelKey{Provider: inference.ProviderName("p"), Model: "m"},
 		},
 		{
 			name:       "empty provider namespace",
@@ -33,7 +34,7 @@ func TestModelKey_Validate(t *testing.T) {
 		},
 		{
 			name:       "empty provider model id",
-			key:        inference.ModelKey{Provider: "gemini"},
+			key:        inference.ModelKey{Provider: inference.ProviderName("gemini")},
 			wantField:  inference.ModelKeyFieldModel,
 			wantReason: inference.ModelKeyValidationReasonEmpty,
 			wantErr:    true,
@@ -62,6 +63,7 @@ func TestModelKey_Validate(t *testing.T) {
 
 func TestModel_Key(t *testing.T) {
 	t.Parallel()
+	provider := inference.ProviderName("openrouter")
 	tests := []struct {
 		name  string
 		model inference.Model
@@ -70,14 +72,14 @@ func TestModel_Key(t *testing.T) {
 		{
 			name: "projects provider namespace and provider model id",
 			model: inference.Model{
-				Provider:  inference.ProviderName("openrouter"),
+				Provider:  provider,
 				Name:      "anthropic/claude-sonnet-4",
 				APIFormat: inference.APIFormatOpenAI,
 				BaseURL:   "https://openrouter.ai/api/v1",
 				Origin:    inference.OriginCatalog,
 				Caps:      inference.Capabilities{Tools: true},
 			},
-			want: inference.ModelKey{Provider: "openrouter", Model: "anthropic/claude-sonnet-4"},
+			want: inference.ModelKey{Provider: provider, Model: "anthropic/claude-sonnet-4"},
 		},
 		{
 			name:  "zero model projects invalid but deterministic zero key",

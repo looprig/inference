@@ -141,7 +141,7 @@ func WithSampling(s Sampling) ModelOption { return func(m *Model) { m.Sampling =
 // Key returns the model's stable provider namespace and provider model ID.
 // Call ModelKey.Validate where a fully resolved identity is required.
 func (m Model) Key() ModelKey {
-	return ModelKey{Provider: string(m.Provider), Model: m.Name}
+	return ModelKey{Provider: m.Provider, Model: m.Name}
 }
 
 // Clone returns an independent Model value, including pointer- and slice-bearing

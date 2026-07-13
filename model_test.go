@@ -2,6 +2,7 @@ package inference_test
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/looprig/inference"
@@ -274,17 +275,28 @@ func TestModel_ValidateLimits(t *testing.T) {
 func TestModel_Clone(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		model inference.Model
+		name     string
+		model    inference.Model
+		wantZero bool
 	}{
-		{name: "zero model", model: inference.Model{}},
+		{name: "zero model", model: inference.Model{}, wantZero: true},
 		{
-			name: "pointer and slice sampling state",
+			name: "all model and sampling state",
 			model: inference.Model{
-				Provider: inference.ProviderName("p"),
-				Name:     "m",
-				Limits:   inference.ContextLimits{WindowTokens: 100},
-				Sampling: inference.Sampling{Temperature: f64ptr(0.5), MaxTokens: intptr(16), Stop: []string{"STOP"}},
+				Provider:  inference.ProviderName("p"),
+				APIFormat: inference.APIFormatOpenAI,
+				BaseURL:   "https://api.example.test/v1",
+				Name:      "provider/model",
+				Origin:    inference.OriginCatalog,
+				Caps:      inference.Capabilities{AcceptsImages: true, Tools: true, Thinking: true},
+				Limits:    inference.ContextLimits{WindowTokens: 100, MaxInputTokens: 80, MaxOutputTokens: 20},
+				Sampling: inference.Sampling{
+					Temperature: f64ptr(0.5),
+					TopP:        f64ptr(0.75),
+					MaxTokens:   intptr(16),
+					Stop:        []string{"STOP", "END"},
+					Effort:      inference.EffortHigh,
+				},
 			},
 		},
 	}
@@ -292,23 +304,45 @@ func TestModel_Clone(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got := tt.model.Clone()
-			if tt.model.Sampling.Temperature != nil {
-				*tt.model.Sampling.Temperature = 0.9
+			if tt.wantZero {
+				if !reflect.DeepEqual(got, inference.Model{}) {
+					t.Fatalf("Clone() = %+v, want zero Model", got)
+				}
+				return
 			}
-			if tt.model.Sampling.MaxTokens != nil {
-				*tt.model.Sampling.MaxTokens = 99
+
+			gotValues := got
+			gotValues.Sampling = inference.Sampling{}
+			wantValues := tt.model
+			wantValues.Sampling = inference.Sampling{}
+			if !reflect.DeepEqual(gotValues, wantValues) {
+				t.Errorf("Clone() value fields = %+v, want %+v", gotValues, wantValues)
 			}
-			if len(tt.model.Sampling.Stop) != 0 {
-				tt.model.Sampling.Stop[0] = "MUTATED"
+			if got.Sampling.Temperature == nil || *got.Sampling.Temperature != 0.5 || got.Sampling.Temperature == tt.model.Sampling.Temperature {
+				t.Errorf("Clone().Sampling.Temperature = %v at %p, want independent 0.5", got.Sampling.Temperature, got.Sampling.Temperature)
 			}
-			if got.Sampling.Temperature != nil && *got.Sampling.Temperature != 0.5 {
-				t.Errorf("Clone().Sampling.Temperature = %v, want independent 0.5", *got.Sampling.Temperature)
+			if got.Sampling.TopP == nil || *got.Sampling.TopP != 0.75 || got.Sampling.TopP == tt.model.Sampling.TopP {
+				t.Errorf("Clone().Sampling.TopP = %v at %p, want independent 0.75", got.Sampling.TopP, got.Sampling.TopP)
 			}
-			if got.Sampling.MaxTokens != nil && *got.Sampling.MaxTokens != 16 {
-				t.Errorf("Clone().Sampling.MaxTokens = %v, want independent 16", *got.Sampling.MaxTokens)
+			if got.Sampling.MaxTokens == nil || *got.Sampling.MaxTokens != 16 || got.Sampling.MaxTokens == tt.model.Sampling.MaxTokens {
+				t.Errorf("Clone().Sampling.MaxTokens = %v at %p, want independent 16", got.Sampling.MaxTokens, got.Sampling.MaxTokens)
 			}
-			if len(got.Sampling.Stop) != 0 && got.Sampling.Stop[0] != "STOP" {
-				t.Errorf("Clone().Sampling.Stop = %v, want independent [STOP]", got.Sampling.Stop)
+			if !reflect.DeepEqual(got.Sampling.Stop, []string{"STOP", "END"}) {
+				t.Errorf("Clone().Sampling.Stop = %v, want [STOP END]", got.Sampling.Stop)
+			}
+			if len(got.Sampling.Stop) == 0 || &got.Sampling.Stop[0] == &tt.model.Sampling.Stop[0] {
+				t.Error("Clone().Sampling.Stop aliases source backing storage")
+			}
+			if got.Sampling.Effort != inference.EffortHigh {
+				t.Errorf("Clone().Sampling.Effort = %q, want %q", got.Sampling.Effort, inference.EffortHigh)
+			}
+
+			*tt.model.Sampling.Temperature = 0.9
+			*tt.model.Sampling.TopP = 0.1
+			*tt.model.Sampling.MaxTokens = 99
+			tt.model.Sampling.Stop[0] = "MUTATED"
+			if *got.Sampling.Temperature != 0.5 || *got.Sampling.TopP != 0.75 || *got.Sampling.MaxTokens != 16 || got.Sampling.Stop[0] != "STOP" {
+				t.Errorf("Clone().Sampling changed after source mutation: %+v", got.Sampling)
 			}
 		})
 	}

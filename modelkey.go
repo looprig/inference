@@ -4,7 +4,7 @@ package inference
 // only the provider namespace and provider model ID, so identity never depends
 // on a mutable catalog, endpoint, or wire format.
 type ModelKey struct {
-	Provider string
+	Provider ProviderName
 	Model    string
 }
 
