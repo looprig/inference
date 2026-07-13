@@ -1,6 +1,10 @@
 package openaiapi
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/looprig/inference/internal/usagenorm"
+)
 
 // ChatRequest is the OpenAI chat completions wire request. Exported so
 // provider packages can embed it in a typed extension struct (e.g. adding an
@@ -77,19 +81,19 @@ type chatChoice struct {
 }
 
 type chatUsage struct {
-	PromptTokens            int                         `json:"prompt_tokens"`
-	CompletionTokens        int                         `json:"completion_tokens"`
+	PromptTokens            usagenorm.Count             `json:"prompt_tokens"`
+	CompletionTokens        usagenorm.Count             `json:"completion_tokens"`
 	PromptTokensDetails     chatPromptTokensDetails     `json:"prompt_tokens_details"`
 	CompletionTokensDetails chatCompletionTokensDetails `json:"completion_tokens_details"`
 }
 
 type chatPromptTokensDetails struct {
-	CachedTokens     int `json:"cached_tokens"`
-	CacheWriteTokens int `json:"cache_write_tokens"`
+	CachedTokens     usagenorm.Count `json:"cached_tokens"`
+	CacheWriteTokens usagenorm.Count `json:"cache_write_tokens"`
 }
 
 type chatCompletionTokensDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens"`
+	ReasoningTokens usagenorm.Count `json:"reasoning_tokens"`
 }
 
 // sseChunk is one streaming delta event.

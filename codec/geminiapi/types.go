@@ -1,6 +1,10 @@
 package geminiapi
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/looprig/inference/internal/usagenorm"
+)
 
 // Wire roles for a Gemini `contents` entry. Gemini names the assistant turn
 // "model" (not "assistant"), has no "system" role in `contents` (the system
@@ -132,9 +136,9 @@ type candidate struct {
 
 // usageMetadata reports token consumption.
 type usageMetadata struct {
-	PromptTokenCount        int `json:"promptTokenCount"`
-	CandidatesTokenCount    int `json:"candidatesTokenCount"`
-	CachedContentTokenCount int `json:"cachedContentTokenCount"`
-	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
-	TotalTokenCount         int `json:"totalTokenCount"`
+	PromptTokenCount        usagenorm.Count `json:"promptTokenCount"`
+	CandidatesTokenCount    usagenorm.Count `json:"candidatesTokenCount"`
+	CachedContentTokenCount usagenorm.Count `json:"cachedContentTokenCount"`
+	ThoughtsTokenCount      usagenorm.Count `json:"thoughtsTokenCount"`
+	TotalTokenCount         usagenorm.Count `json:"totalTokenCount"`
 }

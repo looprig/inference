@@ -48,6 +48,9 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "negative output", usageField: `,"usage":{"output_tokens":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative cache read", usageField: `,"usage":{"cache_read_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative cache creation", usageField: `,"usage":{"cache_creation_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "null cache creation", usageField: `,"usage":{"cache_creation_input_tokens":null}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNull},
+		{name: "fractional input", usageField: `,"usage":{"input_tokens":1.5}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonFractional},
+		{name: "out of range output", usageField: `,"usage":{"output_tokens":9223372036854775808}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
 	}
 
 	for _, tt := range tests {

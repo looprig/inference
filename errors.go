@@ -25,6 +25,8 @@ const (
 	UsageNormalizationFieldCacheReadTokens     UsageNormalizationField = "CacheReadTokens"
 	UsageNormalizationFieldCacheCreationTokens UsageNormalizationField = "CacheCreationTokens"
 	UsageNormalizationFieldReasoningTokens     UsageNormalizationField = "ReasoningTokens"
+	UsageNormalizationFieldContextTokens       UsageNormalizationField = "ContextTokens"
+	UsageNormalizationFieldTotalTokens         UsageNormalizationField = "TotalTokens"
 )
 
 // UsageNormalizationReason identifies why provider usage cannot be normalized.
@@ -35,6 +37,13 @@ const (
 	UsageNormalizationReasonComponentsExceedTotal  UsageNormalizationReason = "components exceed total"
 	UsageNormalizationReasonOverflow               UsageNormalizationReason = "overflow"
 	UsageNormalizationReasonReasoningExceedsOutput UsageNormalizationReason = "reasoning exceeds output"
+	UsageNormalizationReasonNull                   UsageNormalizationReason = "null"
+	UsageNormalizationReasonFractional             UsageNormalizationReason = "fractional"
+	UsageNormalizationReasonOutOfRange             UsageNormalizationReason = "out of range"
+	UsageNormalizationReasonInvalidType            UsageNormalizationReason = "invalid type"
+	UsageNormalizationReasonInvalidField           UsageNormalizationReason = "invalid field"
+	UsageNormalizationReasonTotalMismatch          UsageNormalizationReason = "total mismatch"
+	UsageNormalizationReasonDomainValidation       UsageNormalizationReason = "domain validation"
 )
 
 // UsageNormalizationError reports provider usage that cannot be represented by
@@ -42,7 +51,7 @@ const (
 type UsageNormalizationError struct {
 	Field  UsageNormalizationField
 	Reason UsageNormalizationReason
-	Value  int
+	Value  int64
 	// Left and Right are inspection-only operands for arithmetic and
 	// relationship failures; callers should branch on Field and Reason.
 	Left  content.TokenCount
@@ -52,8 +61,18 @@ type UsageNormalizationError struct {
 
 func (e *UsageNormalizationError) Error() string {
 	message := "inference: cannot normalize usage field " + string(e.Field) + ": " + string(e.Reason)
-	if e.Reason == UsageNormalizationReasonNegative {
-		message += " (" + strconv.Itoa(e.Value) + ")"
+	switch e.Reason {
+	case UsageNormalizationReasonNegative:
+		message += " (" + strconv.FormatInt(e.Value, 10) + ")"
+	case UsageNormalizationReasonComponentsExceedTotal, UsageNormalizationReasonOverflow,
+		UsageNormalizationReasonTotalMismatch:
+		message += " (left=" + strconv.FormatUint(uint64(e.Left), 10) +
+			", right=" + strconv.FormatUint(uint64(e.Right), 10) + ")"
+	case UsageNormalizationReasonReasoningExceedsOutput:
+		if e.Left != 0 || e.Right != 0 {
+			message += " (left=" + strconv.FormatUint(uint64(e.Left), 10) +
+				", right=" + strconv.FormatUint(uint64(e.Right), 10) + ")"
+		}
 	}
 	if e.Cause != nil {
 		message += ": " + e.Cause.Error()

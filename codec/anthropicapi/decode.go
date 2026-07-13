@@ -5,6 +5,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	"github.com/looprig/inference/internal/usagenorm"
 )
 
 // DecodeResponse parses a non-streaming Anthropic Messages API response body into
@@ -52,23 +53,26 @@ func normalizeUsage(wire *messageUsage) (*inference.Usage, error) {
 	if wire == nil {
 		return nil, nil
 	}
-	input, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldInputTokens, wire.InputTokens)
+	input, err := wire.InputTokens.TokenCount(usagenorm.FieldInputTokens)
 	if err != nil {
 		return nil, err
 	}
-	output, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldOutputTokens, wire.OutputTokens)
+	output, err := wire.OutputTokens.TokenCount(usagenorm.FieldOutputTokens)
 	if err != nil {
 		return nil, err
 	}
-	cacheRead, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheReadTokens, wire.CacheReadTokens)
+	cacheRead, err := wire.CacheReadTokens.TokenCount(usagenorm.FieldCacheReadTokens)
 	if err != nil {
 		return nil, err
 	}
-	cacheCreation, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheCreationTokens, wire.CacheCreationTokens)
+	cacheCreation, err := wire.CacheCreationTokens.TokenCount(usagenorm.FieldCacheCreationTokens)
 	if err != nil {
 		return nil, err
 	}
 	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation}
+	if err := usagenorm.ValidateUsage(usage); err != nil {
+		return nil, err
+	}
 	return &usage, nil
 }
 

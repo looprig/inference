@@ -1,6 +1,10 @@
 package anthropicapi
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/looprig/inference/internal/usagenorm"
+)
 
 // Wire-value constants for the Anthropic Messages API. Centralized so the encode,
 // decode, and stream-event paths cannot drift on a string literal.
@@ -149,10 +153,10 @@ type messageResponse struct {
 
 // messageUsage is the `usage` object of a message response.
 type messageUsage struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	CacheReadTokens     int `json:"cache_read_input_tokens"`
-	CacheCreationTokens int `json:"cache_creation_input_tokens"`
+	InputTokens         usagenorm.Count `json:"input_tokens"`
+	OutputTokens        usagenorm.Count `json:"output_tokens"`
+	CacheReadTokens     usagenorm.Count `json:"cache_read_input_tokens"`
+	CacheCreationTokens usagenorm.Count `json:"cache_creation_input_tokens"`
 }
 
 // anthropicError is the `error` object of an error-type response.

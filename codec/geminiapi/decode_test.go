@@ -50,8 +50,21 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "negative candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative cache read", usageField: `,"usageMetadata":{"cachedContentTokenCount":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":-1}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "null prompt", usageField: `,"usageMetadata":{"promptTokenCount":null}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNull},
+		{name: "fractional candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":1.5}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonFractional},
+		{name: "out of range thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":9223372036854775808}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
 		{name: "cache exceeds prompt", usageField: `,"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
 		{name: "max int sum is representable", usageField: fmt.Sprintf(`,"usageMetadata":{"candidatesTokenCount":%d,"thoughtsTokenCount":%d}`, maxInt, maxInt), want: &content.Usage{OutputTokens: content.TokenCount(maxInt) + content.TokenCount(maxInt), ReasoningTokens: content.TokenCount(maxInt)}},
+		{name: "total absent", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
+		{name: "explicit zero total exact", usageField: `,"usageMetadata":{"totalTokenCount":0}`, want: &content.Usage{}},
+		{name: "explicit zero total mismatch", usageField: `,"usageMetadata":{"promptTokenCount":1,"totalTokenCount":0}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonTotalMismatch},
+		{name: "negative total", usageField: `,"usageMetadata":{"totalTokenCount":-1}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "null total", usageField: `,"usageMetadata":{"totalTokenCount":null}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonNull},
+		{name: "fractional total", usageField: `,"usageMetadata":{"totalTokenCount":1.5}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonFractional},
+		{name: "out of range total", usageField: `,"usageMetadata":{"totalTokenCount":9223372036854775808}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
+		{name: "exact nonzero total", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4,"totalTokenCount":9}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
+		{name: "component total overflows", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":2,"totalTokenCount":0}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonOverflow},
+		{name: "maximum total boundary", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"totalTokenCount":9223372036854775807}`, want: &content.Usage{InputTokens: 9223372036854775807}},
 	}
 
 	for _, tt := range tests {

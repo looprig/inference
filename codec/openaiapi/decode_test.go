@@ -38,6 +38,9 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "negative cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative cache creation", usageField: `,"usage":{"prompt_tokens_details":{"cache_write_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
 		{name: "negative reasoning", usageField: `,"usage":{"completion_tokens_details":{"reasoning_tokens":-1}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
+		{name: "null prompt", usageField: `,"usage":{"prompt_tokens":null}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNull},
+		{name: "fractional completion", usageField: `,"usage":{"completion_tokens":1.5}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonFractional},
+		{name: "out of range cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":9223372036854775808}}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
 		{name: "cache totals exceed prompt", usageField: `,"usage":{"prompt_tokens":4,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
 		{name: "reasoning exceeds output", usageField: `,"usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":3}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonReasoningExceedsOutput},
 	}

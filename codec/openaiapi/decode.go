@@ -5,6 +5,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	"github.com/looprig/inference/internal/usagenorm"
 )
 
 // DecodeResponse parses an OpenAI chat completions JSON response body into
@@ -58,26 +59,26 @@ func normalizeUsage(wire *chatUsage) (*inference.Usage, error) {
 		return nil, err
 	}
 	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation, ReasoningTokens: reasoning}
-	if err := inference.ValidateNormalizedUsage(usage); err != nil {
+	if err := usagenorm.ValidateUsage(usage); err != nil {
 		return nil, err
 	}
 	return &usage, nil
 }
 
 func normalizePromptUsage(wire chatUsage) (content.TokenCount, content.TokenCount, content.TokenCount, error) {
-	prompt, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldInputTokens, wire.PromptTokens)
+	prompt, err := wire.PromptTokens.TokenCount(usagenorm.FieldInputTokens)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	cacheRead, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheReadTokens, wire.PromptTokensDetails.CachedTokens)
+	cacheRead, err := wire.PromptTokensDetails.CachedTokens.TokenCount(usagenorm.FieldCacheReadTokens)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	cacheCreation, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheCreationTokens, wire.PromptTokensDetails.CacheWriteTokens)
+	cacheCreation, err := wire.PromptTokensDetails.CacheWriteTokens.TokenCount(usagenorm.FieldCacheCreationTokens)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	input, err := inference.SubtractTokenCounts(inference.UsageNormalizationFieldInputTokens, prompt, cacheRead, cacheCreation)
+	input, err := usagenorm.SubtractTokenCounts(usagenorm.FieldInputTokens, prompt, cacheRead, cacheCreation)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -85,11 +86,11 @@ func normalizePromptUsage(wire chatUsage) (content.TokenCount, content.TokenCoun
 }
 
 func normalizeCompletionUsage(wire chatUsage) (content.TokenCount, content.TokenCount, error) {
-	output, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldOutputTokens, wire.CompletionTokens)
+	output, err := wire.CompletionTokens.TokenCount(usagenorm.FieldOutputTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	reasoning, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldReasoningTokens, wire.CompletionTokensDetails.ReasoningTokens)
+	reasoning, err := wire.CompletionTokensDetails.ReasoningTokens.TokenCount(usagenorm.FieldReasoningTokens)
 	return output, reasoning, err
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	"github.com/looprig/inference/internal/usagenorm"
 )
 
 // DecodeResponse parses a Gemini generateContent JSON response body into a
@@ -58,23 +59,26 @@ func normalizeUsage(wire *usageMetadata) (*inference.Usage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateTotalUsage(*wire); err != nil {
+		return nil, err
+	}
 	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, ReasoningTokens: reasoning}
-	if err := inference.ValidateNormalizedUsage(usage); err != nil {
+	if err := usagenorm.ValidateUsage(usage); err != nil {
 		return nil, err
 	}
 	return &usage, nil
 }
 
 func normalizeInputUsage(wire usageMetadata) (content.TokenCount, content.TokenCount, error) {
-	prompt, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldInputTokens, wire.PromptTokenCount)
+	prompt, err := wire.PromptTokenCount.TokenCount(usagenorm.FieldInputTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	cacheRead, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldCacheReadTokens, wire.CachedContentTokenCount)
+	cacheRead, err := wire.CachedContentTokenCount.TokenCount(usagenorm.FieldCacheReadTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	input, err := inference.SubtractTokenCounts(inference.UsageNormalizationFieldInputTokens, prompt, cacheRead, 0)
+	input, err := usagenorm.SubtractTokenCounts(usagenorm.FieldInputTokens, prompt, cacheRead, 0)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -82,16 +86,52 @@ func normalizeInputUsage(wire usageMetadata) (content.TokenCount, content.TokenC
 }
 
 func normalizeOutputUsage(wire usageMetadata) (content.TokenCount, content.TokenCount, error) {
-	candidates, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldOutputTokens, wire.CandidatesTokenCount)
+	candidates, err := wire.CandidatesTokenCount.TokenCount(usagenorm.FieldOutputTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	reasoning, err := inference.NormalizeTokenCount(inference.UsageNormalizationFieldReasoningTokens, wire.ThoughtsTokenCount)
+	reasoning, err := wire.ThoughtsTokenCount.TokenCount(usagenorm.FieldReasoningTokens)
 	if err != nil {
 		return 0, 0, err
 	}
-	output, err := inference.AddTokenCounts(inference.UsageNormalizationFieldOutputTokens, candidates, reasoning)
+	output, err := usagenorm.AddTokenCounts(usagenorm.FieldOutputTokens, candidates, reasoning)
 	return output, reasoning, err
+}
+
+func validateTotalUsage(wire usageMetadata) error {
+	if !wire.TotalTokenCount.Present() {
+		return nil
+	}
+	reported, err := wire.TotalTokenCount.TokenCount(usagenorm.FieldTotalTokens)
+	if err != nil {
+		return err
+	}
+	calculated, err := totalComponents(wire)
+	if err != nil {
+		return err
+	}
+	return usagenorm.RequireEqual(usagenorm.FieldTotalTokens, reported, calculated)
+}
+
+func totalComponents(wire usageMetadata) (content.TokenCount, error) {
+	prompt, err := wire.PromptTokenCount.TokenCount(usagenorm.FieldInputTokens)
+	if err != nil {
+		return 0, err
+	}
+	candidates, err := wire.CandidatesTokenCount.TokenCount(usagenorm.FieldOutputTokens)
+	if err != nil {
+		return 0, err
+	}
+	thoughts, err := wire.ThoughtsTokenCount.TokenCount(usagenorm.FieldReasoningTokens)
+	if err != nil {
+		return 0, err
+	}
+	calculated, err := usagenorm.AddTokenCounts(usagenorm.FieldTotalTokens, prompt, candidates)
+	if err != nil {
+		return 0, err
+	}
+	calculated, err = usagenorm.AddTokenCounts(usagenorm.FieldTotalTokens, calculated, thoughts)
+	return calculated, err
 }
 
 // buildBlocks maps candidate parts to content blocks, preserving Gemini's part
