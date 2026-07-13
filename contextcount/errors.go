@@ -10,7 +10,10 @@ import (
 // EstimatorStateReason identifies why an estimator cannot produce a count.
 type EstimatorStateReason string
 
-const EstimatorStateNilReceiver EstimatorStateReason = "nil receiver"
+const (
+	EstimatorStateNilReceiver EstimatorStateReason = "nil receiver"
+	EstimatorStateNilContext  EstimatorStateReason = "nil context"
+)
 
 // EstimatorStateError reports invalid estimator state.
 type EstimatorStateError struct {

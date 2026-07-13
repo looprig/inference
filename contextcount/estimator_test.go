@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
@@ -19,9 +20,9 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 		format inference.APIFormat
 		want   content.TokenCount
 	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI, want: 124},
-		{name: "Anthropic", format: inference.APIFormatAnthropic, want: 133},
-		{name: "Gemini", format: inference.APIFormatGemini, want: 139},
+		{name: "OpenAI", format: inference.APIFormatOpenAI, want: 199},
+		{name: "Anthropic", format: inference.APIFormatAnthropic, want: 231},
+		{name: "Gemini", format: inference.APIFormatGemini, want: 213},
 	}
 
 	for _, tt := range tests {
@@ -38,6 +39,44 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 			}
 			if got.Quality != inference.CountQualityHeuristicEstimate {
 				t.Errorf("Quality = %v, want heuristic estimate", got.Quality)
+			}
+		})
+	}
+}
+
+func TestEstimatorRejectsUnavailableContext(t *testing.T) {
+	canceled, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer cancelExpired()
+
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		wantState EstimatorStateReason
+		wantCause error
+	}{
+		{name: "nil context", ctx: nil, wantState: EstimatorStateNilContext},
+		{name: "already canceled", ctx: canceled, wantCause: context.Canceled},
+		{name: "expired deadline", ctx: expired, wantCause: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := requestWithModel("provider", "model", inference.APIFormat("unsupported-before-encode"))
+			_, err := NewEstimator().CountContext(tt.ctx, req)
+			if tt.wantState != "" {
+				var stateErr *EstimatorStateError
+				if !errors.As(err, &stateErr) || stateErr.Reason != tt.wantState {
+					t.Fatalf("error = %#v, want EstimatorStateError reason %q", err, tt.wantState)
+				}
+				return
+			}
+			var countErr *inference.ContextCountError
+			if !errors.As(err, &countErr) || !errors.Is(err, tt.wantCause) {
+				t.Fatalf("error = %#v, want ContextCountError wrapping %v", err, tt.wantCause)
+			}
+			if countErr.Model != req.Model.Key() || countErr.Quality != inference.CountQualityHeuristicEstimate {
+				t.Errorf("ContextCountError = %#v, want model %#v and heuristic quality", countErr, req.Model.Key())
 			}
 		})
 	}
@@ -87,59 +126,6 @@ func TestEstimatorCountsCompleteRequest(t *testing.T) {
 	}
 }
 
-func TestEstimatorCountsThreadSystem(t *testing.T) {
-	tests := []struct {
-		name   string
-		format inference.APIFormat
-	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI},
-		{name: "Anthropic", format: inference.APIFormatAnthropic},
-		{name: "Gemini", format: inference.APIFormatGemini},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertRequestChange(t, minimalRequest(tt.format), requestWithThreadSystem(tt.format), true)
-		})
-	}
-}
-
-func TestEstimatorCountsMatchingToolFlow(t *testing.T) {
-	tests := []struct {
-		name   string
-		format inference.APIFormat
-	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI},
-		{name: "Anthropic", format: inference.APIFormatAnthropic},
-		{name: "Gemini", format: inference.APIFormatGemini},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			after := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
-			assertRequestChange(t, minimalRequest(tt.format), after, true)
-		})
-	}
-}
-
-func TestEstimatorCountsToolMetadata(t *testing.T) {
-	tests := []struct {
-		name   string
-		format inference.APIFormat
-	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI},
-		{name: "Anthropic", format: inference.APIFormatAnthropic},
-		{name: "Gemini", format: inference.APIFormatGemini},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			for _, change := range toolMetadataChanges(tt.format) {
-				t.Run(change.name, func(t *testing.T) {
-					assertRequestChange(t, change.before, change.after, true)
-				})
-			}
-		})
-	}
-}
-
 func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -152,8 +138,8 @@ func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			before := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
-			after := toolFlowRequest(tt.format, toolShortID, toolShortName, toolShortInput, toolShortResult, true)
+			before := toolFlowRequest(tt.format, testToolID, testToolName, testToolInput, testToolResult, false)
+			after := toolFlowRequest(tt.format, testToolID, testToolName, testToolInput, testToolResult, true)
 			assertRequestChange(t, before, after, tt.wantChanged)
 		})
 	}
@@ -198,31 +184,11 @@ func TestEstimatorCountsEffortByDialect(t *testing.T) {
 }
 
 const (
-	toolShortID     string = "call-1"
-	toolLongID      string = "call-with-deliberately-long-provider-id-123456789"
-	toolShortName   string = "lookup"
-	toolLongName    string = "lookup_with_a_deliberately_long_function_name"
-	toolShortInput  string = `{"q":"x"}`
-	toolLongInput   string = `{"query":"a deliberately long tool input value","limit":12345}`
-	toolShortResult string = "ok"
-	toolLongResult  string = "a deliberately long tool result value returned to the model"
+	testToolID     string = "call-rich-123"
+	testToolName   string = "lookup_rich_value"
+	testToolInput  string = `{"query":"rich tool input","limit":7}`
+	testToolResult string = "rich tool result content"
 )
-
-type requestChangeCase struct {
-	name   string
-	before inference.Request
-	after  inference.Request
-}
-
-func toolMetadataChanges(format inference.APIFormat) []requestChangeCase {
-	baseline := toolFlowRequest(format, toolShortID, toolShortName, toolShortInput, toolShortResult, false)
-	return []requestChangeCase{
-		{name: "tool id", before: baseline, after: toolFlowRequest(format, toolLongID, toolShortName, toolShortInput, toolShortResult, false)},
-		{name: "tool name", before: baseline, after: toolFlowRequest(format, toolShortID, toolLongName, toolShortInput, toolShortResult, false)},
-		{name: "tool input", before: baseline, after: toolFlowRequest(format, toolShortID, toolShortName, toolLongInput, toolShortResult, false)},
-		{name: "result content", before: baseline, after: toolFlowRequest(format, toolShortID, toolShortName, toolShortInput, toolLongResult, false)},
-	}
-}
 
 func assertRequestChange(t *testing.T, before, after inference.Request, wantChanged bool) {
 	t.Helper()
@@ -407,7 +373,7 @@ func TestEstimatorCapability(t *testing.T) {
 	want := inference.CounterCapability{
 		Transport:    inference.CounterTransportLocal,
 		Retention:    inference.RetentionNone,
-		TokenizerRev: EstimatorRevision,
+		TokenizerRev: inference.TokenizerRevision("bundled-openai-anthropic-gemini-request-bytes-div4-v1"),
 		Quality:      inference.CountQualityHeuristicEstimate,
 	}
 	tests := []struct {
@@ -496,15 +462,6 @@ func requestWithModel(provider inference.ProviderName, model string, format infe
 	return inference.Request{Model: inference.Model{Provider: provider, Name: model, APIFormat: format}}
 }
 
-func requestWithThreadSystem(format inference.APIFormat) inference.Request {
-	req := minimalRequest(format)
-	req.Messages = content.AgenticMessages{&content.SystemMessage{Message: content.Message{
-		Role:   content.RoleSystem,
-		Blocks: []content.Block{&content.TextBlock{Text: "a deliberately long in-thread system instruction"}},
-	}}}
-	return req
-}
-
 func toolFlowRequest(format inference.APIFormat, id, name, input, result string, isError bool) inference.Request {
 	req := minimalRequest(format)
 	req.Messages = content.AgenticMessages{
@@ -571,12 +528,22 @@ func completeRequest(format inference.APIFormat, usage *content.Usage) inference
 		},
 		System: "system prompt",
 		Messages: content.AgenticMessages{
+			&content.SystemMessage{Message: content.Message{Role: content.RoleSystem, Blocks: []content.Block{
+				&content.TextBlock{Text: "in-thread system instruction"},
+			}}},
 			&content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: []content.Block{
 				&content.TextBlock{Text: "hello"},
 			}}},
 			&content.AIMessage{Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
 				&content.TextBlock{Text: "world"},
+				&content.ThinkingBlock{Thinking: "historical reasoning", Signature: "provider-signature"},
+				&content.ToolUseBlock{ID: testToolID, Name: testToolName, Input: json.RawMessage(testToolInput)},
 			}}, Usage: usage},
+			&content.ToolResultMessage{
+				Message:   content.Message{Role: content.RoleTool, Blocks: []content.Block{&content.TextBlock{Text: testToolResult}}},
+				ToolUseID: testToolID,
+				IsError:   true,
+			},
 			&content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: []content.Block{
 				&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte{1, 2, 3}}},
 			}}},
