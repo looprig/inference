@@ -288,15 +288,16 @@ func TestStreamReader_Result(t *testing.T) {
 	errProducer := errors.New("producer failed")
 	invalidUsage := &content.Usage{OutputTokens: 1, ReasoningTokens: 2}
 	tests := []struct {
-		name       string
-		simple     bool
-		nextErrors []error
-		producer   inference.StreamResultProducer
-		beforeOK   bool
-		wantErr    error
-		wantOK     bool
-		wantResult inference.StreamResult
-		wantCalls  int
+		name            string
+		simple          bool
+		nextErrors      []error
+		producer        inference.StreamResultProducer
+		beforeOK        bool
+		wantErr         error
+		wantResultError bool
+		wantOK          bool
+		wantResult      inference.StreamResult
+		wantCalls       int
 	}{
 		{
 			name:       "simple reader has no result after clean EOF",
@@ -340,8 +341,9 @@ func TestStreamReader_Result(t *testing.T) {
 			producer: func() (inference.StreamResult, bool, error) {
 				return inference.StreamResult{}, false, errProducer
 			},
-			wantErr:   errProducer,
-			wantCalls: 1,
+			wantErr:         errProducer,
+			wantResultError: true,
+			wantCalls:       1,
 		},
 		{
 			name:       "invalid producer usage makes EOF non authoritative",
@@ -349,8 +351,9 @@ func TestStreamReader_Result(t *testing.T) {
 			producer: func() (inference.StreamResult, bool, error) {
 				return inference.StreamResult{Usage: invalidUsage}, true, nil
 			},
-			wantErr:   &content.UsageValidationError{},
-			wantCalls: 1,
+			wantErr:         &content.UsageValidationError{},
+			wantResultError: true,
+			wantCalls:       1,
 		},
 	}
 
@@ -389,11 +392,8 @@ func TestStreamReader_Result(t *testing.T) {
 				if !errors.Is(err, io.EOF) {
 					t.Fatalf("Next() error = %v, want io.EOF", err)
 				}
-			} else if !errors.Is(err, tt.wantErr) {
-				var usageErr *content.UsageValidationError
-				if _, ok := tt.wantErr.(*content.UsageValidationError); !ok || !errors.As(err, &usageErr) {
-					t.Fatalf("Next() error = %v, want cause %T/%v", err, tt.wantErr, tt.wantErr)
-				}
+			} else if !streamErrorHasCause(err, tt.wantErr, tt.wantResultError) {
+				t.Fatalf("Next() error = %v, want cause %T/%v", err, tt.wantErr, tt.wantErr)
 			}
 
 			got, ok := reader.Result()
@@ -408,17 +408,29 @@ func TestStreamReader_Result(t *testing.T) {
 				if !errors.Is(secondErr, io.EOF) {
 					t.Errorf("repeated Next() error = %v, want stable io.EOF", secondErr)
 				}
-			} else if !errors.Is(secondErr, tt.wantErr) {
-				var usageErr *content.UsageValidationError
-				if _, expectedUsage := tt.wantErr.(*content.UsageValidationError); !expectedUsage || !errors.As(secondErr, &usageErr) {
-					t.Errorf("repeated Next() error = %v, want stable cause %T/%v", secondErr, tt.wantErr, tt.wantErr)
-				}
+			} else if !streamErrorHasCause(secondErr, tt.wantErr, tt.wantResultError) {
+				t.Errorf("repeated Next() error = %v, want stable cause %T/%v", secondErr, tt.wantErr, tt.wantErr)
 			}
 			if producerCalls != tt.wantCalls {
 				t.Errorf("producer calls = %d, want %d", producerCalls, tt.wantCalls)
 			}
 		})
 	}
+}
+
+func streamErrorHasCause(got error, want error, resultError bool) bool {
+	if !resultError {
+		return errors.Is(got, want)
+	}
+	var streamResultErr *inference.StreamResultError
+	if !errors.As(got, &streamResultErr) {
+		return false
+	}
+	if _, wantUsage := want.(*content.UsageValidationError); wantUsage {
+		var usageErr *content.UsageValidationError
+		return errors.As(streamResultErr.Cause, &usageErr)
+	}
+	return streamResultErr.Cause == want
 }
 
 func TestStreamReader_ResultDefensiveCopy(t *testing.T) {
@@ -531,13 +543,32 @@ func TestStreamReader_InvalidBoundary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		reader *inference.StreamReader[string]
-		next   bool
+		name          string
+		reader        *inference.StreamReader[string]
+		next          bool
+		wantOperation inference.StreamOperation
+		wantFailure   inference.StreamReaderFailure
 	}{
-		{name: "nil receiver Next", reader: nil, next: true},
-		{name: "nil receiver Close", reader: nil},
-		{name: "missing next callback", reader: inference.NewStreamReader[string](nil, nil), next: true},
+		{
+			name:          "nil receiver Next",
+			reader:        nil,
+			next:          true,
+			wantOperation: inference.StreamOperationNext,
+			wantFailure:   inference.StreamReaderFailureNilReceiver,
+		},
+		{
+			name:          "nil receiver Close",
+			reader:        nil,
+			wantOperation: inference.StreamOperationClose,
+			wantFailure:   inference.StreamReaderFailureNilReceiver,
+		},
+		{
+			name:          "missing next callback",
+			reader:        inference.NewStreamReader[string](nil, nil),
+			next:          true,
+			wantOperation: inference.StreamOperationNext,
+			wantFailure:   inference.StreamReaderFailureMissingNext,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -552,8 +583,50 @@ func TestStreamReader_InvalidBoundary(t *testing.T) {
 			if !errors.As(err, &streamErr) {
 				t.Fatalf("error = %T %v, want *inference.StreamReaderError", err, err)
 			}
+			if streamErr.Operation != tt.wantOperation || streamErr.Failure != tt.wantFailure {
+				t.Errorf("error = operation %q failure %q, want %q/%q", streamErr.Operation, streamErr.Failure, tt.wantOperation, tt.wantFailure)
+			}
 			if _, ok := tt.reader.Result(); ok {
 				t.Error("invalid reader unexpectedly has a result")
+			}
+		})
+	}
+}
+
+func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		cause error
+	}{
+		{name: "producer EOF is metadata failure not clean stream exhaustion", cause: io.EOF},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			reader := inference.NewStreamReaderWithResult(
+				func() (string, error) { return "", io.EOF },
+				nil,
+				func() (inference.StreamResult, bool, error) {
+					return inference.StreamResult{}, false, tt.cause
+				},
+			)
+			for call := 0; call < 2; call++ {
+				_, err := reader.Next()
+				if errors.Is(err, io.EOF) {
+					t.Fatalf("Next() call %d error = %v matches io.EOF; metadata failure must be non-EOF", call, err)
+				}
+				var resultErr *inference.StreamResultError
+				if !errors.As(err, &resultErr) {
+					t.Fatalf("Next() call %d error = %T %v, want *StreamResultError", call, err, err)
+				}
+				if resultErr.Cause != tt.cause {
+					t.Errorf("Next() call %d cause = %v, want exact %v", call, resultErr.Cause, tt.cause)
+				}
+			}
+			if _, ok := reader.Result(); ok {
+				t.Error("metadata failure unexpectedly authorized a result")
 			}
 		})
 	}

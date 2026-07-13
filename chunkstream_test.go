@@ -297,38 +297,170 @@ func TestFramesToChunks_InvalidBoundary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		frames      *inference.StreamReader[inference.StreamFrame]
-		mapFrame    func(inference.StreamFrame) ([]content.Chunk, error)
-		wantFailure inference.StreamReaderFailure
+		name          string
+		frames        func(reads *int, producerCalls *int) *inference.StreamReader[inference.StreamFrame]
+		mapFrame      func(inference.StreamFrame) ([]content.Chunk, error)
+		wantOperation inference.StreamOperation
+		wantFailure   inference.StreamReaderFailure
+		wantReads     int
+		wantProducers int
 	}{
 		{
-			name:        "nil frame reader fails safely",
-			frames:      nil,
-			mapFrame:    func(inference.StreamFrame) ([]content.Chunk, error) { return nil, nil },
-			wantFailure: inference.StreamReaderFailureNilReceiver,
+			name:          "nil frame reader fails safely",
+			frames:        func(*int, *int) *inference.StreamReader[inference.StreamFrame] { return nil },
+			mapFrame:      func(inference.StreamFrame) ([]content.Chunk, error) { return nil, nil },
+			wantOperation: inference.StreamOperationNext,
+			wantFailure:   inference.StreamReaderFailureNilReceiver,
 		},
 		{
-			name:        "nil mapper fails safely",
-			frames:      inference.NewStreamReader(func() (inference.StreamFrame, error) { return inference.StreamFrame{}, nil }, nil),
-			mapFrame:    nil,
-			wantFailure: inference.StreamReaderFailureMissingFrameMapper,
+			name: "nil mapper fails before reading a nonempty upstream",
+			frames: func(reads *int, _ *int) *inference.StreamReader[inference.StreamFrame] {
+				return inference.NewStreamReader(func() (inference.StreamFrame, error) {
+					(*reads)++
+					return inference.StreamFrame{}, nil
+				}, nil)
+			},
+			wantOperation: inference.StreamOperationNext,
+			wantFailure:   inference.StreamReaderFailureMissingFrameMapper,
+		},
+		{
+			name: "nil mapper cannot authorize metadata from an empty upstream",
+			frames: func(reads *int, producerCalls *int) *inference.StreamReader[inference.StreamFrame] {
+				return inference.NewStreamReaderWithResult(
+					func() (inference.StreamFrame, error) { (*reads)++; return inference.StreamFrame{}, io.EOF },
+					nil,
+					func() (inference.StreamResult, bool, error) {
+						(*producerCalls)++
+						return inference.StreamResult{Model: "must-not-authorize"}, true, nil
+					},
+				)
+			},
+			wantOperation: inference.StreamOperationNext,
+			wantFailure:   inference.StreamReaderFailureMissingFrameMapper,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			reader := inference.FramesToChunks(tt.frames, tt.mapFrame)
+			reads := 0
+			producerCalls := 0
+			reader := inference.FramesToChunks(tt.frames(&reads, &producerCalls), tt.mapFrame)
 			_, err := reader.Next()
 			var streamErr *inference.StreamReaderError
 			if !errors.As(err, &streamErr) {
 				t.Fatalf("Next() error = %T %v, want *inference.StreamReaderError", err, err)
 			}
-			if streamErr.Failure != tt.wantFailure {
-				t.Errorf("failure = %q, want %q", streamErr.Failure, tt.wantFailure)
+			if streamErr.Operation != tt.wantOperation || streamErr.Failure != tt.wantFailure {
+				t.Errorf("error = operation %q failure %q, want %q/%q", streamErr.Operation, streamErr.Failure, tt.wantOperation, tt.wantFailure)
+			}
+			if reads != tt.wantReads || producerCalls != tt.wantProducers {
+				t.Errorf("upstream reads/producers = %d/%d, want %d/%d", reads, producerCalls, tt.wantReads, tt.wantProducers)
 			}
 			if _, ok := reader.Result(); ok {
 				t.Error("invalid adapter unexpectedly authorized a result")
+			}
+		})
+	}
+}
+
+func TestFramesToChunks_ResultPrecedence(t *testing.T) {
+	t.Parallel()
+
+	errSource := errors.New("source trailer failed")
+	errSemantic := errors.New("semantic trailer failed")
+	tests := []struct {
+		name             string
+		sourceError      error
+		semanticProducer inference.StreamResultProducer
+		wantResult       inference.StreamResult
+		wantOK           bool
+		wantCause        error
+	}{
+		{
+			name:        "valid semantic result overrides failing source trailer",
+			sourceError: errSource,
+			semanticProducer: func() (inference.StreamResult, bool, error) {
+				return inference.StreamResult{Model: "semantic", FinishReason: inference.FinishReasonStop}, true, nil
+			},
+			wantResult: inference.StreamResult{Model: "semantic", FinishReason: inference.FinishReasonStop},
+			wantOK:     true,
+		},
+		{
+			name:        "semantic error remains authoritative over source trailer error",
+			sourceError: errSource,
+			semanticProducer: func() (inference.StreamResult, bool, error) {
+				return inference.StreamResult{}, false, errSemantic
+			},
+			wantCause: errSemantic,
+		},
+		{
+			name:        "absent semantic result preserves source trailer error",
+			sourceError: errSource,
+			semanticProducer: func() (inference.StreamResult, bool, error) {
+				return inference.StreamResult{}, false, nil
+			},
+			wantCause: errSource,
+		},
+		{
+			name: "semantic error fails after source clean EOF",
+			semanticProducer: func() (inference.StreamResult, bool, error) {
+				return inference.StreamResult{}, false, errSemantic
+			},
+			wantCause: errSemantic,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sourceCalls := 0
+			semanticCalls := 0
+			frames := inference.NewStreamReaderWithResult(
+				func() (inference.StreamFrame, error) { return inference.StreamFrame{}, io.EOF },
+				nil,
+				func() (inference.StreamResult, bool, error) {
+					sourceCalls++
+					return inference.StreamResult{}, false, tt.sourceError
+				},
+			)
+			semantic := func() (inference.StreamResult, bool, error) {
+				semanticCalls++
+				return tt.semanticProducer()
+			}
+			reader := inference.FramesToChunksWithResult(
+				frames,
+				func(inference.StreamFrame) ([]content.Chunk, error) {
+					t.Fatal("mapper called after empty upstream")
+					return nil, nil
+				},
+				semantic,
+			)
+
+			_, err := reader.Next()
+			if tt.wantOK {
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("Next() error = %v, want clean io.EOF", err)
+				}
+				got, ok := reader.Result()
+				if !ok || got != tt.wantResult {
+					t.Fatalf("Result() = %+v, %v; want %+v, true", got, ok, tt.wantResult)
+				}
+			} else {
+				if errors.Is(err, io.EOF) {
+					t.Fatalf("Next() error = %v matches io.EOF; want terminal metadata failure", err)
+				}
+				var resultErr *inference.StreamResultError
+				if !errors.As(err, &resultErr) {
+					t.Fatalf("Next() error = %T %v, want *StreamResultError", err, err)
+				}
+				if resultErr.Cause != tt.wantCause {
+					t.Errorf("result cause = %v, want exact %v", resultErr.Cause, tt.wantCause)
+				}
+				if _, ok := reader.Result(); ok {
+					t.Error("terminal metadata failure unexpectedly authorized a result")
+				}
+			}
+			if sourceCalls != 1 || semanticCalls != 1 {
+				t.Errorf("source/semantic producer calls = %d/%d, want 1/1", sourceCalls, semanticCalls)
 			}
 		})
 	}

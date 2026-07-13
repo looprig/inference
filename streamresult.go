@@ -48,6 +48,8 @@ func (e *StreamReaderError) Error() string {
 
 // StreamResultError reports terminal metadata that could not be authorized.
 type StreamResultError struct {
+	// Cause remains directly inspectable but is intentionally not exposed through
+	// Unwrap: even an io.EOF cause is a metadata failure, never clean exhaustion.
 	Cause error
 }
 
@@ -57,8 +59,6 @@ func (e *StreamResultError) Error() string {
 	}
 	return "inference: stream result failed: " + e.Cause.Error()
 }
-
-func (e *StreamResultError) Unwrap() error { return e.Cause }
 
 func cloneStreamResult(result StreamResult) StreamResult {
 	if result.Usage == nil {
