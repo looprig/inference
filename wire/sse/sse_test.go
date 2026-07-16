@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
+	stream "github.com/looprig/inference/stream"
 	"github.com/looprig/inference/wire/sse"
 )
 
@@ -39,8 +40,8 @@ func (e *errorReader) Read(p []byte) (int, error) {
 func (e *errorReader) Close() error { return nil }
 
 // collect drains a frame reader into a slice plus the terminal error.
-func collect(r *inference.StreamReader[inference.StreamFrame]) ([]inference.StreamFrame, error) {
-	var frames []inference.StreamFrame
+func collect(r *stream.StreamReader[stream.StreamFrame]) ([]stream.StreamFrame, error) {
+	var frames []stream.StreamFrame
 	for {
 		f, err := r.Next()
 		if err != nil {
@@ -195,10 +196,10 @@ func TestDecodeStreamFrames_NilBody(t *testing.T) {
 	}
 }
 
-// TestFramer confirms the package satisfies inference.StreamFramer as an injectable value.
+// TestFramer confirms the package satisfies codec.StreamFramer as an injectable value.
 func TestFramer(t *testing.T) {
 	t.Parallel()
-	var f inference.StreamFramer = sse.Framer()
+	var f codec.StreamFramer = sse.Framer()
 	r, err := f.DecodeStreamFrames(io.NopCloser(strings.NewReader("data: ok\n\n")))
 	if err != nil {
 		t.Fatalf("DecodeStreamFrames() error = %v", err)

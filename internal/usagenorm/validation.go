@@ -4,19 +4,19 @@ import (
 	"errors"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
+	usage "github.com/looprig/inference/usage"
 )
 
 // ValidateUsage applies the canonical core usage invariants and preserves typed
 // core validation failures through normalization.
-func ValidateUsage(usage content.Usage) error {
-	if err := usage.Validate(); err != nil {
+func ValidateUsage(value content.Usage) error {
+	if err := value.Validate(); err != nil {
 		normalized := NormalizeValidationError(err)
-		var normalizationErr *inference.UsageNormalizationError
+		var normalizationErr *usage.UsageNormalizationError
 		if errors.As(normalized, &normalizationErr) &&
-			normalizationErr.Reason == inference.UsageNormalizationReasonReasoningExceedsOutput {
-			normalizationErr.Left = usage.OutputTokens
-			normalizationErr.Right = usage.ReasoningTokens
+			normalizationErr.Reason == usage.UsageNormalizationReasonReasoningExceedsOutput {
+			normalizationErr.Left = value.OutputTokens
+			normalizationErr.Right = value.ReasoningTokens
 		}
 		return normalized
 	}
@@ -28,37 +28,37 @@ func ValidateUsage(usage content.Usage) error {
 func NormalizeValidationError(err error) error {
 	var validationErr *content.UsageValidationError
 	if !errors.As(err, &validationErr) {
-		return &inference.UsageNormalizationError{
-			Reason: inference.UsageNormalizationReasonDomainValidation,
+		return &usage.UsageNormalizationError{
+			Reason: usage.UsageNormalizationReasonDomainValidation,
 			Cause:  err,
 		}
 	}
 	field := coreValidationField(validationErr.Field)
-	reason := inference.UsageNormalizationReasonDomainValidation
+	reason := usage.UsageNormalizationReasonDomainValidation
 	if validationErr.Field == content.UsageFieldReasoningTokens &&
 		validationErr.Reason == content.UsageValidationReasonReasoningExceedsOutput {
-		reason = inference.UsageNormalizationReasonReasoningExceedsOutput
+		reason = usage.UsageNormalizationReasonReasoningExceedsOutput
 	}
-	return &inference.UsageNormalizationError{Field: field, Reason: reason, Cause: validationErr}
+	return &usage.UsageNormalizationError{Field: field, Reason: reason, Cause: validationErr}
 }
 
-func coreValidationField(field content.UsageField) inference.UsageNormalizationField {
+func coreValidationField(field content.UsageField) usage.UsageNormalizationField {
 	switch field {
 	case content.UsageFieldInputTokens:
-		return inference.UsageNormalizationFieldInputTokens
+		return usage.UsageNormalizationFieldInputTokens
 	case content.UsageFieldOutputTokens:
-		return inference.UsageNormalizationFieldOutputTokens
+		return usage.UsageNormalizationFieldOutputTokens
 	case content.UsageFieldCacheReadTokens:
-		return inference.UsageNormalizationFieldCacheReadTokens
+		return usage.UsageNormalizationFieldCacheReadTokens
 	case content.UsageFieldCacheCreationTokens:
-		return inference.UsageNormalizationFieldCacheCreationTokens
+		return usage.UsageNormalizationFieldCacheCreationTokens
 	case content.UsageFieldReasoningTokens:
-		return inference.UsageNormalizationFieldReasoningTokens
+		return usage.UsageNormalizationFieldReasoningTokens
 	case content.UsageFieldContextTokens:
-		return inference.UsageNormalizationFieldContextTokens
+		return usage.UsageNormalizationFieldContextTokens
 	case content.UsageFieldTotalTokens:
-		return inference.UsageNormalizationFieldTotalTokens
+		return usage.UsageNormalizationFieldTotalTokens
 	default:
-		return inference.UsageNormalizationField(field)
+		return usage.UsageNormalizationField(field)
 	}
 }

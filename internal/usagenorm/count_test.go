@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 func TestCountTokenCount(t *testing.T) {
@@ -18,21 +18,21 @@ func TestCountTokenCount(t *testing.T) {
 		name       string
 		json       string
 		want       content.TokenCount
-		wantField  inference.UsageNormalizationField
-		wantReason inference.UsageNormalizationReason
+		wantField  usage.UsageNormalizationField
+		wantReason usage.UsageNormalizationReason
 		wantValue  int64
 	}{
 		{name: "absent defaults to zero", json: `{}`, want: 0},
 		{name: "explicit zero", json: `{"count":0}`, want: 0},
 		{name: "maximum int64", json: `{"count":9223372036854775807}`, want: 9223372036854775807},
-		{name: "negative", json: `{"count":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative, wantValue: -1},
-		{name: "null", json: `{"count":null}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNull},
-		{name: "fraction", json: `{"count":1.5}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "exponent", json: `{"count":1e3}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "out of range positive", json: `{"count":9223372036854775808}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
-		{name: "out of range negative", json: `{"count":-9223372036854775809}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
-		{name: "string", json: `{"count":"1"}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonInvalidType},
-		{name: "boolean", json: `{"count":true}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonInvalidType},
+		{name: "negative", json: `{"count":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative, wantValue: -1},
+		{name: "null", json: `{"count":null}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "fraction", json: `{"count":1.5}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "exponent", json: `{"count":1e3}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "out of range positive", json: `{"count":9223372036854775808}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
+		{name: "out of range negative", json: `{"count":-9223372036854775809}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
+		{name: "string", json: `{"count":"1"}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonInvalidType},
+		{name: "boolean", json: `{"count":true}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonInvalidType},
 	}
 
 	for _, tt := range tests {
@@ -139,14 +139,14 @@ func TestCountRejectsUnknownField(t *testing.T) {
 			t.Parallel()
 			var count usagenorm.Count
 			_, err := count.TokenCount(tt.field)
-			assertNormalizationError(t, err, "", inference.UsageNormalizationReasonInvalidField, 0, 0, 0, false)
+			assertNormalizationError(t, err, "", usage.UsageNormalizationReasonInvalidField, 0, 0, 0, false)
 		})
 	}
 }
 
-func assertNormalizationError(t *testing.T, err error, field inference.UsageNormalizationField, reason inference.UsageNormalizationReason, value int64, left, right content.TokenCount, wantCause bool) {
+func assertNormalizationError(t *testing.T, err error, field usage.UsageNormalizationField, reason usage.UsageNormalizationReason, value int64, left, right content.TokenCount, wantCause bool) {
 	t.Helper()
-	var normalizationErr *inference.UsageNormalizationError
+	var normalizationErr *usage.UsageNormalizationError
 	if !errors.As(err, &normalizationErr) {
 		t.Fatalf("error = %T %v, want *UsageNormalizationError", err, err)
 	}

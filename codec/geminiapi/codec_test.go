@@ -10,17 +10,19 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/geminiapi"
+	model "github.com/looprig/inference/model"
 )
 
-// Codec must satisfy the inference.Codec and StreamingCodec contracts.
+// Codec must satisfy the codec.Codec and StreamingCodec contracts.
 var (
-	_ inference.Codec          = geminiapi.Codec{}
-	_ inference.StreamingCodec = geminiapi.Codec{}
+	_ codec.Codec          = geminiapi.Codec{}
+	_ codec.StreamingCodec = geminiapi.Codec{}
 )
 
 // readBody drains an EncodedRequest.Body to bytes, asserting the JSON content type.
-func readBody(t *testing.T, enc inference.EncodedRequest) []byte {
+func readBody(t *testing.T, enc codec.EncodedRequest) []byte {
 	t.Helper()
 	if ct := enc.Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("EncodedRequest Content-Type = %q, want application/json", ct)
@@ -40,16 +42,16 @@ func TestCodec_EncodeRequest(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model:    inference.Model{Name: "gemini-2.5-flash"},
+		Model:    model.Model{Name: "gemini-2.5-flash"},
 		System:   "be brief",
 		Messages: content.AgenticMessages{&content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: []content.Block{&content.TextBlock{Text: "hi"}}}}},
 	}
 
-	encInvoke, err := geminiapi.Codec{}.EncodeRequest(req, inference.RequestModeInvoke)
+	encInvoke, err := geminiapi.Codec{}.EncodeRequest(req, codec.RequestModeInvoke)
 	if err != nil {
 		t.Fatalf("invoke encode error: %v", err)
 	}
-	encStream, err := geminiapi.Codec{}.EncodeRequest(req, inference.RequestModeStream)
+	encStream, err := geminiapi.Codec{}.EncodeRequest(req, codec.RequestModeStream)
 	if err != nil {
 		t.Fatalf("stream encode error: %v", err)
 	}

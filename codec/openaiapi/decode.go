@@ -5,7 +5,9 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	failure "github.com/looprig/inference/failure"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 // DecodeResponse parses an OpenAI chat completions JSON response body into
@@ -17,7 +19,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}
 
 	if len(wire.Choices) == 0 {
-		return nil, &inference.APIError{Status: 0, Message: "response contains no choices", Body: body}
+		return nil, &failure.APIError{Status: 0, Message: "response contains no choices", Body: body}
 	}
 
 	msg := wire.Choices[0].Message
@@ -46,7 +48,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}, nil
 }
 
-func normalizeUsage(wire *chatUsage) (*inference.Usage, error) {
+func normalizeUsage(wire *chatUsage) (*usage.Usage, error) {
 	if wire == nil {
 		return nil, nil
 	}
@@ -58,7 +60,7 @@ func normalizeUsage(wire *chatUsage) (*inference.Usage, error) {
 	if err != nil {
 		return nil, err
 	}
-	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation, ReasoningTokens: reasoning}
+	usage := usage.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation, ReasoningTokens: reasoning}
 	if err := usagenorm.ValidateUsage(usage); err != nil {
 		return nil, err
 	}

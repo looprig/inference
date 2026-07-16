@@ -14,11 +14,18 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/auth"
+	failure "github.com/looprig/inference/failure"
+
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/anthropicapi"
 	"github.com/looprig/inference/codec/geminiapi"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 	"github.com/looprig/inference/route"
+
+	stream "github.com/looprig/inference/stream"
 	"github.com/looprig/inference/transport"
+
 	"github.com/looprig/inference/wire/ndjson"
 )
 
@@ -50,7 +57,7 @@ func (r *recorder) snapshot() (method, path, query string, header http.Header) {
 }
 
 func req(name string) inference.Request {
-	return inference.Request{Model: inference.Model{Name: name}}
+	return inference.Request{Model: model.Model{Name: name}}
 }
 
 func firstText(t *testing.T, resp *inference.Response) string {
@@ -75,8 +82,8 @@ type staticRouter struct {
 	header http.Header
 }
 
-func (r staticRouter) BuildRoute(base string, _ inference.Request, _ inference.RequestMode) (inference.Route, error) {
-	return inference.Route{Method: r.method, URL: strings.TrimRight(base, "/") + r.path, Header: r.header}, nil
+func (r staticRouter) BuildRoute(base string, _ inference.Request, _ codec.RequestMode) (route.Route, error) {
+	return route.Route{Method: r.method, URL: strings.TrimRight(base, "/") + r.path, Header: r.header}, nil
 }
 
 // customCodec is a caller-supplied Codec (RequestEncoder + ResponseDecoder) that does
@@ -88,7 +95,7 @@ type customCodec struct {
 	decode    func([]byte) (*inference.Response, error)
 }
 
-func (c customCodec) EncodeRequest(_ inference.Request, _ inference.RequestMode) (inference.EncodedRequest, error) {
+func (c customCodec) EncodeRequest(_ inference.Request, _ codec.RequestMode) (codec.EncodedRequest, error) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	for k, vals := range c.encHeader {
@@ -97,7 +104,7 @@ func (c customCodec) EncodeRequest(_ inference.Request, _ inference.RequestMode)
 			h.Add(k, v)
 		}
 	}
-	return inference.EncodedRequest{Header: h, Body: strings.NewReader(c.body)}, nil
+	return codec.EncodedRequest{Header: h, Body: strings.NewReader(c.body)}, nil
 }
 
 func (c customCodec) DecodeResponse(body []byte) (*inference.Response, error) {
@@ -126,12 +133,12 @@ func (a setHeaderAuth) Authorize(_ context.Context, r *http.Request) error {
 // maps each {"text":...} line to a TextChunk — proves the transport does not assume SSE.
 type ndjsonTextDecoder struct{}
 
-func (ndjsonTextDecoder) DecodeStream(resp *http.Response) (*inference.StreamReader[content.Chunk], error) {
+func (ndjsonTextDecoder) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chunk], error) {
 	frames, err := ndjson.DecodeStreamFrames(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return inference.FramesToChunks(frames, func(f inference.StreamFrame) ([]content.Chunk, error) {
+	return stream.FramesToChunks(frames, func(f stream.StreamFrame) ([]content.Chunk, error) {
 		var m struct {
 			Text string `json:"text"`
 		}
@@ -152,8 +159,8 @@ func TestRouting_InjectedRouter(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		router    inference.Router
-		codec     inference.Codec
+		router    route.Router
+		codec     codec.Codec
 		modelName string
 		respBody  string
 		wantPath  string
@@ -190,7 +197,7 @@ func TestRouting_InjectedRouter(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := transport.New(inference.Endpoint{BaseURL: srv.URL}, tc.router, tc.codec, auth.None())
+			c := transport.New(transport.Endpoint{BaseURL: srv.URL}, tc.router, tc.codec, auth.None())
 			if _, err := c.Invoke(context.Background(), req(tc.modelName)); err != nil {
 				t.Fatalf("Invoke error: %v", err)
 			}
@@ -219,7 +226,7 @@ func TestRouting_GeminiStreamQuery(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, route.GeminiGenerateContent(), geminiapi.Codec{}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, route.GeminiGenerateContent(), geminiapi.Codec{}, auth.None())
 	stream, err := c.Stream(context.Background(), req("gemini-1.5"))
 	if err != nil {
 		t.Fatalf("Stream error: %v", err)
@@ -262,7 +269,7 @@ func TestHeaderPrecedence(t *testing.T) {
 	codec := customCodec{body: "{}", encHeader: encHdr}
 	router := staticRouter{method: http.MethodPost, path: "/x", header: routeHdr}
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, router, codec, setHeaderAuth{name: "X-Prec", value: "auth"})
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, router, codec, setHeaderAuth{name: "X-Prec", value: "auth"})
 	if _, err := c.Invoke(context.Background(), req("m")); err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -281,7 +288,7 @@ func TestHeaderPrecedence(t *testing.T) {
 
 // ---- 3. Non-2xx mapped before decode -----------------------------------------
 
-// TestNon2xxBeforeDecode proves a 500 JSON error body maps to *inference.APIError BEFORE
+// TestNon2xxBeforeDecode proves a 500 JSON error body maps to *failure.APIError BEFORE
 // the response/stream decoder is invoked, for both Invoke and Stream, and the error body
 // is drained (available on APIError.Body).
 func TestNon2xxBeforeDecode(t *testing.T) {
@@ -304,11 +311,11 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 			decodeCalled = true
 			return &inference.Response{Model: "x"}, nil
 		}}
-		c := transport.New(inference.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, codec, auth.None())
+		c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, codec, auth.None())
 		_, err := c.Invoke(context.Background(), req("m"))
-		var apiErr *inference.APIError
+		var apiErr *failure.APIError
 		if !errors.As(err, &apiErr) {
-			t.Fatalf("err = %T (%v), want *inference.APIError", err, err)
+			t.Fatalf("err = %T (%v), want *failure.APIError", err, err)
 		}
 		if apiErr.Status != http.StatusInternalServerError {
 			t.Errorf("APIError.Status = %d, want 500", apiErr.Status)
@@ -327,11 +334,11 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 		defer srv.Close()
 		streamCalled := false
 		spy := spyStreamDecoder{called: &streamCalled}
-		c := transport.New(inference.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, customCodec{body: "{}"}, auth.None(), transport.WithStreamDecoder(spy))
+		c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, customCodec{body: "{}"}, auth.None(), transport.WithStreamDecoder(spy))
 		_, err := c.Stream(context.Background(), req("m"))
-		var apiErr *inference.APIError
+		var apiErr *failure.APIError
 		if !errors.As(err, &apiErr) {
-			t.Fatalf("err = %T (%v), want *inference.APIError", err, err)
+			t.Fatalf("err = %T (%v), want *failure.APIError", err, err)
 		}
 		if apiErr.Status != http.StatusInternalServerError {
 			t.Errorf("APIError.Status = %d, want 500", apiErr.Status)
@@ -348,10 +355,10 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 // spyStreamDecoder records whether DecodeStream was invoked.
 type spyStreamDecoder struct{ called *bool }
 
-func (s spyStreamDecoder) DecodeStream(resp *http.Response) (*inference.StreamReader[content.Chunk], error) {
+func (s spyStreamDecoder) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chunk], error) {
 	*s.called = true
 	resp.Body.Close()
-	return inference.NewStreamReader(func() (content.Chunk, error) { return nil, io.EOF }, nil), nil
+	return stream.NewStreamReader(func() (content.Chunk, error) { return nil, io.EOF }, nil), nil
 }
 
 // ---- 4. Optional streaming ---------------------------------------------------
@@ -367,13 +374,13 @@ func TestOptionalStreaming_NoDecoder(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL, APIFormat: inference.APIFormat("custom")}, staticRouter{method: http.MethodPost, path: "/x"}, customCodec{body: "{}"}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL, APIFormat: model.APIFormat("custom")}, staticRouter{method: http.MethodPost, path: "/x"}, customCodec{body: "{}"}, auth.None())
 	_, err := c.Stream(context.Background(), req("m"))
 	var use *transport.UnsupportedStreamingError
 	if !errors.As(err, &use) {
 		t.Fatalf("err = %T (%v), want *transport.UnsupportedStreamingError", err, err)
 	}
-	if use.APIFormat != inference.APIFormat("custom") {
+	if use.APIFormat != model.APIFormat("custom") {
 		t.Errorf("UnsupportedStreamingError.APIFormat = %q, want custom", use.APIFormat)
 	}
 }
@@ -398,10 +405,10 @@ func (e eofCountReader) Read(p []byte) (int, error) {
 // replayCodec returns an opaque (non-replayable) body wrapped to count consumption.
 type replayCodec struct{ eofs *int }
 
-func (c replayCodec) EncodeRequest(_ inference.Request, _ inference.RequestMode) (inference.EncodedRequest, error) {
+func (c replayCodec) EncodeRequest(_ inference.Request, _ codec.RequestMode) (codec.EncodedRequest, error) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	return inference.EncodedRequest{Header: h, Body: eofCountReader{r: strings.NewReader(`{"x":1}`), eofs: c.eofs}}, nil
+	return codec.EncodedRequest{Header: h, Body: eofCountReader{r: strings.NewReader(`{"x":1}`), eofs: c.eofs}}, nil
 }
 
 func (replayCodec) DecodeResponse([]byte) (*inference.Response, error) {
@@ -417,7 +424,7 @@ func TestNoReplay_BodyConsumedOnce(t *testing.T) {
 	defer srv.Close()
 
 	eofs := 0
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, replayCodec{eofs: &eofs}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, replayCodec{eofs: &eofs}, auth.None())
 	if _, err := c.Invoke(context.Background(), req("m")); err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -443,11 +450,11 @@ func TestNoReplay_RedirectNotFollowed(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None())
 	_, err := c.Invoke(context.Background(), req("m"))
-	var apiErr *inference.APIError
+	var apiErr *failure.APIError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("err = %T (%v), want *inference.APIError (redirect not followed)", err, err)
+		t.Fatalf("err = %T (%v), want *failure.APIError (redirect not followed)", err, err)
 	}
 	if apiErr.Status != http.StatusTemporaryRedirect {
 		t.Errorf("APIError.Status = %d, want 307", apiErr.Status)
@@ -467,26 +474,26 @@ func TestBindingMismatch_Invoke(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ep := inference.Endpoint{Provider: "openrouter", BaseURL: srv.URL, APIFormat: inference.APIFormatOpenAI}
+	ep := transport.Endpoint{Provider: "openrouter", BaseURL: srv.URL, APIFormat: model.APIFormatOpenAI}
 	c := transport.New(ep, route.StaticChat("/chat/completions"), openaiapi.Codec{}, auth.None())
 
 	cases := []struct {
 		name     string
-		model    inference.Model
+		model    model.Model
 		wantMism bool
 	}{
-		{name: "all wildcards ok", model: inference.Model{Name: "m"}, wantMism: false},
-		{name: "matching identity ok", model: inference.Model{Name: "m", Provider: "openrouter", BaseURL: srv.URL, APIFormat: inference.APIFormatOpenAI}, wantMism: false},
-		{name: "conflicting provider", model: inference.Model{Name: "m", Provider: "chutes"}, wantMism: true},
-		{name: "conflicting base url", model: inference.Model{Name: "m", BaseURL: "https://evil.example"}, wantMism: true},
-		{name: "conflicting api format", model: inference.Model{Name: "m", APIFormat: inference.APIFormatAnthropic}, wantMism: true},
+		{name: "all wildcards ok", model: model.Model{Name: "m"}, wantMism: false},
+		{name: "matching identity ok", model: model.Model{Name: "m", Provider: "openrouter", BaseURL: srv.URL, APIFormat: model.APIFormatOpenAI}, wantMism: false},
+		{name: "conflicting provider", model: model.Model{Name: "m", Provider: "chutes"}, wantMism: true},
+		{name: "conflicting base url", model: model.Model{Name: "m", BaseURL: "https://evil.example"}, wantMism: true},
+		{name: "conflicting api format", model: model.Model{Name: "m", APIFormat: model.APIFormatAnthropic}, wantMism: true},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := c.Invoke(context.Background(), inference.Request{Model: tc.model})
-			var mism *inference.ModelMismatchError
+			var mism *failure.ModelMismatchError
 			gotMism := errors.As(err, &mism)
 			if gotMism != tc.wantMism {
 				t.Fatalf("mismatch=%v (err=%v), want mismatch=%v", gotMism, err, tc.wantMism)
@@ -527,7 +534,7 @@ func TestCustomAPI_EndToEnd(t *testing.T) {
 			}, nil
 		},
 	}
-	ep := inference.Endpoint{BaseURL: srv.URL, APIFormat: inference.APIFormat("my-custom-dialect")}
+	ep := transport.Endpoint{BaseURL: srv.URL, APIFormat: model.APIFormat("my-custom-dialect")}
 	c := transport.New(ep, staticRouter{method: http.MethodPost, path: "/v9/answer"}, codec, auth.None())
 
 	resp, err := c.Invoke(context.Background(), req("custom-model"))
@@ -555,7 +562,7 @@ func TestNonSSEStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/stream"}, customCodec{body: "{}"}, auth.None(), transport.WithStreamDecoder(ndjsonTextDecoder{}))
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/stream"}, customCodec{body: "{}"}, auth.None(), transport.WithStreamDecoder(ndjsonTextDecoder{}))
 	stream, err := c.Stream(context.Background(), req("m"))
 	if err != nil {
 		t.Fatalf("Stream error: %v", err)
@@ -595,8 +602,8 @@ func TestBundledCodecs_Invoke(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		router   inference.Router
-		codec    inference.Codec
+		router   route.Router
+		codec    codec.Codec
 		respBody string
 		wantText string
 	}{
@@ -632,7 +639,7 @@ func TestBundledCodecs_Invoke(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := transport.New(inference.Endpoint{BaseURL: srv.URL}, tc.router, tc.codec, auth.None())
+			c := transport.New(transport.Endpoint{BaseURL: srv.URL}, tc.router, tc.codec, auth.None())
 			resp, err := c.Invoke(context.Background(), req("model-"+tc.name))
 			if err != nil {
 				t.Fatalf("Invoke error: %v", err)
@@ -658,7 +665,7 @@ func TestBundledCodecs_OpenAIStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := transport.New(inference.Endpoint{BaseURL: srv.URL}, route.StaticChat("/chat/completions"), openaiapi.Codec{}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, route.StaticChat("/chat/completions"), openaiapi.Codec{}, auth.None())
 	stream, err := c.Stream(context.Background(), req("gpt"))
 	if err != nil {
 		t.Fatalf("Stream error: %v", err)

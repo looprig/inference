@@ -10,13 +10,14 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/anthropicapi"
 )
 
-// Codec must satisfy the inference.Codec and StreamingCodec contracts.
+// Codec must satisfy the codec.Codec and StreamingCodec contracts.
 var (
-	_ inference.Codec          = anthropicapi.Codec{}
-	_ inference.StreamingCodec = anthropicapi.Codec{}
+	_ codec.Codec          = anthropicapi.Codec{}
+	_ codec.StreamingCodec = anthropicapi.Codec{}
 )
 
 // TestCodec_EncodeRequest confirms the typed RequestMode maps to the stream bool
@@ -31,11 +32,11 @@ func TestCodec_EncodeRequest(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		mode       inference.RequestMode
+		mode       codec.RequestMode
 		wantStream bool
 	}{
-		{name: "invoke mode omits stream", mode: inference.RequestModeInvoke, wantStream: false},
-		{name: "stream mode sets stream", mode: inference.RequestModeStream, wantStream: true},
+		{name: "invoke mode omits stream", mode: codec.RequestModeInvoke, wantStream: false},
+		{name: "stream mode sets stream", mode: codec.RequestModeStream, wantStream: true},
 	}
 
 	for _, tc := range cases {

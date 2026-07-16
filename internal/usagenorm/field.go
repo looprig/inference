@@ -1,7 +1,7 @@
 // Package usagenorm validates and normalizes provider token-usage wire values.
 package usagenorm
 
-import "github.com/looprig/inference"
+import usage "github.com/looprig/inference/usage"
 
 // Field is the closed set of usage fields normalization may report.
 type Field uint8
@@ -16,23 +16,23 @@ const (
 	FieldTotalTokens
 )
 
-func normalizationField(field Field) (inference.UsageNormalizationField, error) {
+func normalizationField(field Field) (usage.UsageNormalizationField, error) {
 	switch field {
 	case FieldInputTokens:
-		return inference.UsageNormalizationFieldInputTokens, nil
+		return usage.UsageNormalizationFieldInputTokens, nil
 	case FieldOutputTokens:
-		return inference.UsageNormalizationFieldOutputTokens, nil
+		return usage.UsageNormalizationFieldOutputTokens, nil
 	case FieldCacheReadTokens:
-		return inference.UsageNormalizationFieldCacheReadTokens, nil
+		return usage.UsageNormalizationFieldCacheReadTokens, nil
 	case FieldCacheCreationTokens:
-		return inference.UsageNormalizationFieldCacheCreationTokens, nil
+		return usage.UsageNormalizationFieldCacheCreationTokens, nil
 	case FieldReasoningTokens:
-		return inference.UsageNormalizationFieldReasoningTokens, nil
+		return usage.UsageNormalizationFieldReasoningTokens, nil
 	case FieldContextTokens:
-		return inference.UsageNormalizationFieldContextTokens, nil
+		return usage.UsageNormalizationFieldContextTokens, nil
 	case FieldTotalTokens:
-		return inference.UsageNormalizationFieldTotalTokens, nil
+		return usage.UsageNormalizationFieldTotalTokens, nil
 	default:
-		return "", &inference.UsageNormalizationError{Reason: inference.UsageNormalizationReasonInvalidField}
+		return "", &usage.UsageNormalizationError{Reason: usage.UsageNormalizationReasonInvalidField}
 	}
 }

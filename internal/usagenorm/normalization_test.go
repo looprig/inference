@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 func TestAddTokenCounts(t *testing.T) {
@@ -19,11 +19,11 @@ func TestAddTokenCounts(t *testing.T) {
 		left       content.TokenCount
 		right      content.TokenCount
 		want       content.TokenCount
-		wantReason inference.UsageNormalizationReason
+		wantReason usage.UsageNormalizationReason
 	}{
 		{name: "zero", want: 0},
 		{name: "boundary", left: max - 1, right: 1, want: max},
-		{name: "overflow", left: max, right: 1, wantReason: inference.UsageNormalizationReasonOverflow},
+		{name: "overflow", left: max, right: 1, wantReason: usage.UsageNormalizationReasonOverflow},
 	}
 
 	for _, tt := range tests {
@@ -39,7 +39,7 @@ func TestAddTokenCounts(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, inference.UsageNormalizationFieldOutputTokens, tt.wantReason, 0, tt.left, tt.right, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldOutputTokens, tt.wantReason, 0, tt.left, tt.right, false)
 			if !strings.Contains(err.Error(), "left=18446744073709551615") || !strings.Contains(err.Error(), "right=1") {
 				t.Errorf("Error() = %q, want arithmetic operands", err)
 			}
@@ -56,12 +56,12 @@ func TestSubtractTokenCounts(t *testing.T) {
 		first      content.TokenCount
 		second     content.TokenCount
 		want       content.TokenCount
-		wantReason inference.UsageNormalizationReason
+		wantReason usage.UsageNormalizationReason
 		wantRight  content.TokenCount
 	}{
 		{name: "zero", want: 0},
 		{name: "components equal total", total: 5, first: 3, second: 2, want: 0},
-		{name: "components exceed total", total: 4, first: 3, second: 2, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal, wantRight: 5},
+		{name: "components exceed total", total: 4, first: 3, second: 2, wantReason: usage.UsageNormalizationReasonComponentsExceedTotal, wantRight: 5},
 	}
 
 	for _, tt := range tests {
@@ -77,7 +77,7 @@ func TestSubtractTokenCounts(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, inference.UsageNormalizationFieldInputTokens, tt.wantReason, 0, tt.total, tt.wantRight, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldInputTokens, tt.wantReason, 0, tt.total, tt.wantRight, false)
 			if !strings.Contains(err.Error(), "left=4") || !strings.Contains(err.Error(), "right=5") {
 				t.Errorf("Error() = %q, want arithmetic operands", err)
 			}
@@ -109,7 +109,7 @@ func TestRequireEqual(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, inference.UsageNormalizationFieldTotalTokens, inference.UsageNormalizationReasonTotalMismatch, 0, tt.reported, tt.calculated, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldTotalTokens, usage.UsageNormalizationReasonTotalMismatch, 0, tt.reported, tt.calculated, false)
 			if !strings.Contains(err.Error(), "left=3") || !strings.Contains(err.Error(), "right=4") {
 				t.Errorf("Error() = %q, want mismatch operands", err)
 			}
@@ -126,12 +126,12 @@ func TestNormalizeValidationError(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      error
-		wantField  inference.UsageNormalizationField
-		wantReason inference.UsageNormalizationReason
+		wantField  usage.UsageNormalizationField
+		wantReason usage.UsageNormalizationReason
 	}{
-		{name: "known reasoning invariant", input: known, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonReasoningExceedsOutput},
-		{name: "future invariant", input: unknown, wantField: inference.UsageNormalizationField("FutureTokens"), wantReason: inference.UsageNormalizationReasonDomainValidation},
-		{name: "future invariant on known field", input: unknownKnownField, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonDomainValidation},
+		{name: "known reasoning invariant", input: known, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput},
+		{name: "future invariant", input: unknown, wantField: usage.UsageNormalizationField("FutureTokens"), wantReason: usage.UsageNormalizationReasonDomainValidation},
+		{name: "future invariant on known field", input: unknownKnownField, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonDomainValidation},
 	}
 
 	for _, tt := range tests {
@@ -155,13 +155,13 @@ func TestValidateUsage(t *testing.T) {
 	tests := []struct {
 		name       string
 		usage      content.Usage
-		wantReason inference.UsageNormalizationReason
+		wantReason usage.UsageNormalizationReason
 		wantLeft   content.TokenCount
 		wantRight  content.TokenCount
 	}{
 		{name: "zero", usage: content.Usage{}},
 		{name: "reasoning subset", usage: content.Usage{OutputTokens: 3, ReasoningTokens: 3}},
-		{name: "reasoning exceeds output", usage: content.Usage{OutputTokens: 2, ReasoningTokens: 3}, wantReason: inference.UsageNormalizationReasonReasoningExceedsOutput, wantLeft: 2, wantRight: 3},
+		{name: "reasoning exceeds output", usage: content.Usage{OutputTokens: 2, ReasoningTokens: 3}, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput, wantLeft: 2, wantRight: 3},
 	}
 
 	for _, tt := range tests {
@@ -174,7 +174,7 @@ func TestValidateUsage(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, inference.UsageNormalizationFieldReasoningTokens, tt.wantReason, 0, tt.wantLeft, tt.wantRight, true)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldReasoningTokens, tt.wantReason, 0, tt.wantLeft, tt.wantRight, true)
 			if !strings.Contains(err.Error(), "left=2") || !strings.Contains(err.Error(), "right=3") {
 				t.Errorf("Error() = %q, want usage operands", err)
 			}

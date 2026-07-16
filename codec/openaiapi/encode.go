@@ -7,6 +7,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 )
 
 // BuildChatRequest converts a provider-neutral inference.Request into a ChatRequest
@@ -72,18 +73,18 @@ func EncodeRequest(req inference.Request, stream bool) ([]byte, error) {
 	return json.Marshal(cr)
 }
 
-// reasoningEffort maps the dialect-neutral inference.Effort to the OpenAI Chat
+// reasoningEffort maps the dialect-neutral model.Effort to the OpenAI Chat
 // Completions reasoning_effort wire value. OpenAI's o-series accepts only
-// "low" | "medium" | "high" (there is no "max"), so inference.EffortMax clamps to
+// "low" | "medium" | "high" (there is no "max"), so model.EffortMax clamps to
 // "high" — the strongest value the wire accepts. EffortNone (and any unknown
 // value, fail-safe) yields "", which the omitempty tag drops from the body.
-func reasoningEffort(e inference.Effort) string {
+func reasoningEffort(e model.Effort) string {
 	switch e {
-	case inference.EffortLow:
+	case model.EffortLow:
 		return "low"
-	case inference.EffortMedium:
+	case model.EffortMedium:
 		return "medium"
-	case inference.EffortHigh, inference.EffortMax:
+	case model.EffortHigh, model.EffortMax:
 		return "high"
 	default: // EffortNone or unknown → omit
 		return ""

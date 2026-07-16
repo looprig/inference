@@ -7,15 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/auth"
 )
 
-// Compile-time proof the constructors yield inference.Authenticator values.
+// Compile-time proof the constructors yield auth.Authenticator values.
 var (
-	_ inference.Authenticator = auth.Key("k")
-	_ inference.Authenticator = auth.Header("k", "x-api-key")
-	_ inference.Authenticator = auth.None()
+	_ auth.Authenticator = auth.Key("k")
+	_ auth.Authenticator = auth.Header("k", "x-api-key")
+	_ auth.Authenticator = auth.None()
 )
 
 func TestKeySetsBearer(t *testing.T) {
@@ -59,7 +58,7 @@ func TestAuthenticatorRedactsSecret(t *testing.T) {
 	const secret = "supersecret-token"
 	auths := []struct {
 		name string
-		a    inference.Authenticator
+		a    auth.Authenticator
 	}{
 		{name: "Key", a: auth.Key(secret)},
 		{name: "Header", a: auth.Header(secret, "x-api-key")},

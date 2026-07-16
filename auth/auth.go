@@ -1,7 +1,6 @@
-// Package auth provides generic inference.Authenticator implementations: static
-// header and API-key bearer auth, plus an explicit no-auth value. It imports inference
-// for the interface; inference never imports auth. Provider-specific authenticators
-// (e.g. cloud request-signing schemes) live in the llm module, not here.
+// Package auth provides generic Authenticator implementations: static header
+// and API-key bearer auth, plus an explicit no-auth value. Provider-specific
+// authenticators (e.g. cloud request-signing schemes) live in the llm module.
 package auth
 
 import (
@@ -9,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-
-	"github.com/looprig/inference"
 )
 
 // APIKey is a bearer/API-key secret. A named type so a base URL cannot be passed where
@@ -43,13 +40,13 @@ var (
 )
 
 // Key returns an Authenticator that sets "Authorization: Bearer <k>".
-func Key(k APIKey) inference.Authenticator {
+func Key(k APIKey) Authenticator {
 	return headerAuth{name: "Authorization", value: "Bearer " + string(k)}
 }
 
 // Header returns an Authenticator that sets an arbitrary header (e.g. "x-api-key") to
 // the key value.
-func Header(k APIKey, name string) inference.Authenticator {
+func Header(k APIKey, name string) Authenticator {
 	return headerAuth{name: name, value: string(k)}
 }
 
@@ -59,4 +56,4 @@ func (noneAuth) Authorize(context.Context, *http.Request) error { return nil }
 
 // None returns an Authenticator that adds no credentials — the explicit, visible "no
 // auth" value (never a zero-value default).
-func None() inference.Authenticator { return noneAuth{} }
+func None() Authenticator { return noneAuth{} }

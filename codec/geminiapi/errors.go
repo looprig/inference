@@ -34,7 +34,7 @@ func (e *UnsupportedBlockError) Error() string {
 
 // DecodeError is a failure while parsing a Gemini response body into a
 // provider-neutral Response (a JSON unmarshal failure). The distinct
-// "no candidates" case returns *inference.APIError instead, matching the sibling
+// "no candidates" case returns *failure.APIError instead, matching the sibling
 // OpenAI codec so the transport and callers treat every dialect uniformly.
 type DecodeError struct {
 	Reason string

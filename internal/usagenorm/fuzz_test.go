@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 func FuzzCountJSON(f *testing.F) {
@@ -29,7 +29,7 @@ func FuzzCountJSON(f *testing.F) {
 		if err == nil {
 			return
 		}
-		var normalizationErr *inference.UsageNormalizationError
+		var normalizationErr *usage.UsageNormalizationError
 		if !errors.As(err, &normalizationErr) {
 			t.Fatalf("TokenCount() error = %T %v, want *UsageNormalizationError", err, err)
 		}

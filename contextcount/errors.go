@@ -4,7 +4,7 @@ package contextcount
 import (
 	"fmt"
 
-	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 )
 
 // EstimatorStateReason identifies why an estimator cannot produce a count.
@@ -26,7 +26,7 @@ func (e *EstimatorStateError) Error() string {
 
 // ModelIdentityError reports an unresolved request model identity.
 type ModelIdentityError struct {
-	Model inference.ModelKey
+	Model model.ModelKey
 	Err   error
 }
 
@@ -38,7 +38,7 @@ func (e *ModelIdentityError) Unwrap() error { return e.Err }
 
 // UnsupportedAPIFormatError reports a request dialect without a bundled encoder.
 type UnsupportedAPIFormatError struct {
-	APIFormat inference.APIFormat
+	APIFormat model.APIFormat
 }
 
 func (e *UnsupportedAPIFormatError) Error() string {
@@ -47,7 +47,7 @@ func (e *UnsupportedAPIFormatError) Error() string {
 
 // RequestEncodingError reports a dialect encoder failure and preserves its cause.
 type RequestEncodingError struct {
-	APIFormat inference.APIFormat
+	APIFormat model.APIFormat
 	Err       error
 }
 

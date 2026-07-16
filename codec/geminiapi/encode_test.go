@@ -9,6 +9,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
+	model "github.com/looprig/inference/model"
 )
 
 // --- shared helpers (used across the package's test files) ---
@@ -101,7 +102,7 @@ func TestEncodeRequestIgnoresUsage(t *testing.T) {
 		{name: "populated", usage: &content.Usage{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4, ReasoningTokens: 1}},
 	}
 
-	want, err := geminiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}})
+	want, err := geminiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}})
 	if err != nil {
 		t.Fatalf("EncodeRequest() baseline error = %v", err)
 	}
@@ -110,7 +111,7 @@ func TestEncodeRequestIgnoresUsage(t *testing.T) {
 			t.Parallel()
 			message := aiMsg(textBlock("answer"))
 			message.Usage = tt.usage
-			got, err := geminiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{message}})
+			got, err := geminiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{message}})
 			if err != nil {
 				t.Fatalf("EncodeRequest() error = %v", err)
 			}
@@ -164,7 +165,7 @@ func TestEncodeRequest_SystemInstruction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := inference.Request{Model: inference.Model{Name: "m"}, System: tc.system, Messages: tc.messages}
+			req := inference.Request{Model: model.Model{Name: "m"}, System: tc.system, Messages: tc.messages}
 			got, err := geminiapi.EncodeRequest(req)
 			if err != nil {
 				t.Fatalf("EncodeRequest error: %v", err)
@@ -220,7 +221,7 @@ func TestEncodeRequest_Roles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := inference.Request{Model: inference.Model{Name: "m"}, Messages: tc.msgs}
+			req := inference.Request{Model: model.Model{Name: "m"}, Messages: tc.msgs}
 			got, err := geminiapi.EncodeRequest(req)
 			if err != nil {
 				t.Fatalf("EncodeRequest error: %v", err)
@@ -242,7 +243,7 @@ func TestEncodeRequest_FunctionCall(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model: inference.Model{Name: "m"},
+		Model: model.Model{Name: "m"},
 		Messages: content.AgenticMessages{
 			aiMsg(toolUseBlock("call-1", "get_weather", json.RawMessage(`{"location":"Boston"}`))),
 		},
@@ -333,7 +334,7 @@ func TestEncodeRequest_FunctionResponse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := inference.Request{Model: inference.Model{Name: "m"}, Messages: tc.msgs}
+			req := inference.Request{Model: model.Model{Name: "m"}, Messages: tc.msgs}
 			got, err := geminiapi.EncodeRequest(req)
 			if err != nil {
 				t.Fatalf("EncodeRequest error: %v", err)
@@ -393,7 +394,7 @@ func TestEncodeRequest_ImageInlineData(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("look"), imageDataBlock(tc.mediaType, tc.data))},
 			}
 			got, err := geminiapi.EncodeRequest(req)
@@ -434,7 +435,7 @@ func TestEncodeRequest_ImageURLFileData(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model:    inference.Model{Name: "m"},
+		Model:    model.Model{Name: "m"},
 		Messages: content.AgenticMessages{userMsg(imageURLBlock("https://example.com/x.jpg"))},
 	}
 	got, err := geminiapi.EncodeRequest(req)
@@ -485,7 +486,7 @@ func TestEncodeRequest_Tools(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
 				Tools:    tc.tools,
 			}
@@ -537,8 +538,8 @@ func TestEncodeRequest_GenerationConfig(t *testing.T) {
 
 	cases := []struct {
 		name          string
-		model         inference.Model
-		override      *inference.Sampling
+		model         model.Model
+		override      *model.Sampling
 		wantCfgKey    bool
 		wantTemp      *float64
 		wantTopP      *float64
@@ -547,12 +548,12 @@ func TestEncodeRequest_GenerationConfig(t *testing.T) {
 	}{
 		{
 			name:       "empty sampling: generationConfig omitted",
-			model:      inference.Model{Name: "m"},
+			model:      model.Model{Name: "m"},
 			wantCfgKey: false,
 		},
 		{
 			name:          "temperature/topP/maxOutputTokens/stopSequences on wire",
-			model:         inference.Model{Name: "m", Sampling: inference.Sampling{Temperature: &temp, TopP: &topP, MaxTokens: &maxTok, Stop: []string{"STOP", "END"}}},
+			model:         model.Model{Name: "m", Sampling: model.Sampling{Temperature: &temp, TopP: &topP, MaxTokens: &maxTok, Stop: []string{"STOP", "END"}}},
 			wantCfgKey:    true,
 			wantTemp:      &temp,
 			wantTopP:      &topP,
@@ -561,8 +562,8 @@ func TestEncodeRequest_GenerationConfig(t *testing.T) {
 		},
 		{
 			name:       "override wins over model sampling",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Temperature: &temp}},
-			override:   &inference.Sampling{Temperature: &overrideTemp},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Temperature: &temp}},
+			override:   &model.Sampling{Temperature: &overrideTemp},
 			wantCfgKey: true,
 			wantTemp:   &overrideTemp,
 		},
@@ -643,22 +644,22 @@ func TestEncodeRequest_GenerationConfig(t *testing.T) {
 func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 	t.Parallel()
 
-	thinkingCaps := inference.Capabilities{Thinking: true}
+	thinkingCaps := model.Capabilities{Thinking: true}
 
 	cases := []struct {
 		name       string
-		caps       inference.Capabilities
-		effort     inference.Effort
+		caps       model.Capabilities
+		effort     model.Effort
 		wantKey    bool
 		wantBudget int
 	}{
-		{name: "no thinking capability: config omitted even with effort", caps: inference.Capabilities{}, effort: inference.EffortHigh, wantKey: false},
-		{name: "thinking-capable, effort none: config omitted", caps: thinkingCaps, effort: inference.EffortNone, wantKey: false},
-		{name: "thinking-capable, effort low", caps: thinkingCaps, effort: inference.EffortLow, wantKey: true, wantBudget: 4096},
-		{name: "thinking-capable, effort medium", caps: thinkingCaps, effort: inference.EffortMedium, wantKey: true, wantBudget: 8192},
-		{name: "thinking-capable, effort high", caps: thinkingCaps, effort: inference.EffortHigh, wantKey: true, wantBudget: 16384},
-		{name: "thinking-capable, effort max -> dynamic -1", caps: thinkingCaps, effort: inference.EffortMax, wantKey: true, wantBudget: -1},
-		{name: "thinking-capable, unknown effort: config omitted", caps: thinkingCaps, effort: inference.Effort("garbage"), wantKey: false},
+		{name: "no thinking capability: config omitted even with effort", caps: model.Capabilities{}, effort: model.EffortHigh, wantKey: false},
+		{name: "thinking-capable, effort none: config omitted", caps: thinkingCaps, effort: model.EffortNone, wantKey: false},
+		{name: "thinking-capable, effort low", caps: thinkingCaps, effort: model.EffortLow, wantKey: true, wantBudget: 4096},
+		{name: "thinking-capable, effort medium", caps: thinkingCaps, effort: model.EffortMedium, wantKey: true, wantBudget: 8192},
+		{name: "thinking-capable, effort high", caps: thinkingCaps, effort: model.EffortHigh, wantKey: true, wantBudget: 16384},
+		{name: "thinking-capable, effort max -> dynamic -1", caps: thinkingCaps, effort: model.EffortMax, wantKey: true, wantBudget: -1},
+		{name: "thinking-capable, unknown effort: config omitted", caps: thinkingCaps, effort: model.Effort("garbage"), wantKey: false},
 	}
 
 	for _, tc := range cases {
@@ -667,7 +668,7 @@ func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m", Caps: tc.caps, Sampling: inference.Sampling{Effort: tc.effort}},
+				Model:    model.Model{Name: "m", Caps: tc.caps, Sampling: model.Sampling{Effort: tc.effort}},
 				Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
 			}
 			got, err := geminiapi.EncodeRequest(req)
@@ -743,7 +744,7 @@ func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := geminiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: tc.msgs})
+			_, err := geminiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: tc.msgs})
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -762,7 +763,7 @@ func TestEncodeRequest_ThinkingIgnored(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model:    inference.Model{Name: "m"},
+		Model:    model.Model{Name: "m"},
 		Messages: content.AgenticMessages{aiMsg(thinkingBlock("secret"), textBlock("visible"))},
 	}
 	got, err := geminiapi.EncodeRequest(req)
@@ -792,15 +793,15 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 	}{
 		{
 			name: "minimal",
-			req:  inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}},
+			req:  inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}},
 		},
 		{
 			name: "full with tools, system, thinking",
 			req: inference.Request{
-				Model: inference.Model{
+				Model: model.Model{
 					Name:     "gemini-2.5-flash",
-					Caps:     inference.Capabilities{Thinking: true},
-					Sampling: inference.Sampling{Temperature: &temp, MaxTokens: &maxTok, Stop: []string{"STOP"}, Effort: inference.EffortHigh},
+					Caps:     model.Capabilities{Thinking: true},
+					Sampling: model.Sampling{Temperature: &temp, MaxTokens: &maxTok, Stop: []string{"STOP"}, Effort: model.EffortHigh},
 				},
 				System: "Be helpful.",
 				Messages: content.AgenticMessages{

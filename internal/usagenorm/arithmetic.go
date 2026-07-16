@@ -2,7 +2,7 @@ package usagenorm
 
 import (
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
+	usage "github.com/looprig/inference/usage"
 )
 
 const maximumTokenCount content.TokenCount = ^content.TokenCount(0)
@@ -14,8 +14,8 @@ func AddTokenCounts(field Field, left, right content.TokenCount) (content.TokenC
 		return 0, err
 	}
 	if right > maximumTokenCount-left {
-		return 0, &inference.UsageNormalizationError{
-			Field: normalizedField, Reason: inference.UsageNormalizationReasonOverflow,
+		return 0, &usage.UsageNormalizationError{
+			Field: normalizedField, Reason: usage.UsageNormalizationReasonOverflow,
 			Left: left, Right: right,
 		}
 	}
@@ -33,8 +33,8 @@ func SubtractTokenCounts(field Field, total, first, second content.TokenCount) (
 		return 0, err
 	}
 	if components > total {
-		return 0, &inference.UsageNormalizationError{
-			Field: normalizedField, Reason: inference.UsageNormalizationReasonComponentsExceedTotal,
+		return 0, &usage.UsageNormalizationError{
+			Field: normalizedField, Reason: usage.UsageNormalizationReasonComponentsExceedTotal,
 			Left: total, Right: components,
 		}
 	}
@@ -50,8 +50,8 @@ func RequireEqual(field Field, reported, calculated content.TokenCount) error {
 	if reported == calculated {
 		return nil
 	}
-	return &inference.UsageNormalizationError{
-		Field: normalizedField, Reason: inference.UsageNormalizationReasonTotalMismatch,
+	return &usage.UsageNormalizationError{
+		Field: normalizedField, Reason: usage.UsageNormalizationReasonTotalMismatch,
 		Left: reported, Right: calculated,
 	}
 }

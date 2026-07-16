@@ -8,6 +8,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 )
 
 // EncodeRequest converts a provider-neutral inference.Request into an Anthropic
@@ -193,18 +194,18 @@ func effectiveMaxTokens(p *int) int {
 	return defaultMaxTokens
 }
 
-// effortValue maps the dialect-neutral inference.Effort to Anthropic's
+// effortValue maps the dialect-neutral model.Effort to Anthropic's
 // output_config.effort wire value. EffortNone (and any unknown value, fail-safe)
 // yields "", which suppresses both the thinking and output_config fields.
-func effortValue(e inference.Effort) string {
+func effortValue(e model.Effort) string {
 	switch e {
-	case inference.EffortLow:
+	case model.EffortLow:
 		return "low"
-	case inference.EffortMedium:
+	case model.EffortMedium:
 		return "medium"
-	case inference.EffortHigh:
+	case model.EffortHigh:
 		return "high"
-	case inference.EffortMax:
+	case model.EffortMax:
 		return "max"
 	default: // EffortNone or unknown → omit
 		return ""

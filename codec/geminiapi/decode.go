@@ -5,12 +5,14 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	failure "github.com/looprig/inference/failure"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 // DecodeResponse parses a Gemini generateContent JSON response body into a
 // provider-neutral *inference.Response. It reads candidates[0]; a body with no
-// candidates is an *inference.APIError (matching the sibling OpenAI codec), and
+// candidates is a *failure.APIError (matching the sibling OpenAI codec), and
 // malformed JSON is a *DecodeError.
 func DecodeResponse(body []byte) (*inference.Response, error) {
 	var wire GenerateContentResponse
@@ -19,7 +21,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}
 
 	if len(wire.Candidates) == 0 {
-		return nil, &inference.APIError{Status: 0, Message: "response contains no candidates", Body: body}
+		return nil, &failure.APIError{Status: 0, Message: "response contains no candidates", Body: body}
 	}
 
 	blocks := buildBlocks(wire.Candidates[0].Content.Parts)
@@ -47,7 +49,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}, nil
 }
 
-func normalizeUsage(wire *usageMetadata) (*inference.Usage, error) {
+func normalizeUsage(wire *usageMetadata) (*usage.Usage, error) {
 	if wire == nil {
 		return nil, nil
 	}
@@ -62,7 +64,7 @@ func normalizeUsage(wire *usageMetadata) (*inference.Usage, error) {
 	if err := validateTotalUsage(*wire); err != nil {
 		return nil, err
 	}
-	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, ReasoningTokens: reasoning}
+	usage := usage.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, ReasoningTokens: reasoning}
 	if err := usagenorm.ValidateUsage(usage); err != nil {
 		return nil, err
 	}

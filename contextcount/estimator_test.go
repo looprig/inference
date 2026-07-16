@@ -12,17 +12,18 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 )
 
 func TestEstimatorGoldenCounts(t *testing.T) {
 	tests := []struct {
 		name   string
-		format inference.APIFormat
+		format model.APIFormat
 		want   content.TokenCount
 	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI, want: 199},
-		{name: "Anthropic", format: inference.APIFormatAnthropic, want: 231},
-		{name: "Gemini", format: inference.APIFormatGemini, want: 213},
+		{name: "OpenAI", format: model.APIFormatOpenAI, want: 199},
+		{name: "Anthropic", format: model.APIFormatAnthropic, want: 231},
+		{name: "Gemini", format: model.APIFormatGemini, want: 213},
 	}
 
 	for _, tt := range tests {
@@ -34,10 +35,10 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 			if got.InputTokens != tt.want {
 				t.Errorf("InputTokens = %d, want %d", got.InputTokens, tt.want)
 			}
-			if got.Model != (inference.ModelKey{Provider: "test-provider", Model: "test-model"}) {
+			if got.Model != (model.ModelKey{Provider: "test-provider", Model: "test-model"}) {
 				t.Errorf("Model = %#v, want test-provider/test-model", got.Model)
 			}
-			if got.Quality != inference.CountQualityHeuristicEstimate {
+			if got.Quality != CountQualityHeuristicEstimate {
 				t.Errorf("Quality = %v, want heuristic estimate", got.Quality)
 			}
 		})
@@ -62,7 +63,7 @@ func TestEstimatorRejectsUnavailableContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := requestWithModel("provider", "model", inference.APIFormat("unsupported-before-encode"))
+			req := requestWithModel("provider", "model", model.APIFormat("unsupported-before-encode"))
 			_, err := NewEstimator().CountContext(tt.ctx, req)
 			if tt.wantState != "" {
 				var stateErr *EstimatorStateError
@@ -71,11 +72,11 @@ func TestEstimatorRejectsUnavailableContext(t *testing.T) {
 				}
 				return
 			}
-			var countErr *inference.ContextCountError
+			var countErr *ContextCountError
 			if !errors.As(err, &countErr) || !errors.Is(err, tt.wantCause) {
 				t.Fatalf("error = %#v, want ContextCountError wrapping %v", err, tt.wantCause)
 			}
-			if countErr.Model != req.Model.Key() || countErr.Quality != inference.CountQualityHeuristicEstimate {
+			if countErr.Model != req.Model.Key() || countErr.Quality != CountQualityHeuristicEstimate {
 				t.Errorf("ContextCountError = %#v, want model %#v and heuristic quality", countErr, req.Model.Key())
 			}
 		})
@@ -85,26 +86,26 @@ func TestEstimatorRejectsUnavailableContext(t *testing.T) {
 func TestEstimatorCountsCompleteRequest(t *testing.T) {
 	tests := []struct {
 		name   string
-		format inference.APIFormat
+		format model.APIFormat
 		mutate func(*inference.Request)
 	}{
-		{name: "OpenAI system", format: inference.APIFormatOpenAI, mutate: addSystem},
-		{name: "OpenAI model", format: inference.APIFormatOpenAI, mutate: addModelName},
-		{name: "OpenAI message", format: inference.APIFormatOpenAI, mutate: addMessage},
-		{name: "OpenAI tool and schema", format: inference.APIFormatOpenAI, mutate: addTool},
-		{name: "OpenAI image", format: inference.APIFormatOpenAI, mutate: addImage},
-		{name: "OpenAI sampling", format: inference.APIFormatOpenAI, mutate: addSampling},
-		{name: "Anthropic system", format: inference.APIFormatAnthropic, mutate: addSystem},
-		{name: "Anthropic model", format: inference.APIFormatAnthropic, mutate: addModelName},
-		{name: "Anthropic message", format: inference.APIFormatAnthropic, mutate: addMessage},
-		{name: "Anthropic tool and schema", format: inference.APIFormatAnthropic, mutate: addTool},
-		{name: "Anthropic image", format: inference.APIFormatAnthropic, mutate: addImage},
-		{name: "Anthropic sampling", format: inference.APIFormatAnthropic, mutate: addSampling},
-		{name: "Gemini system", format: inference.APIFormatGemini, mutate: addSystem},
-		{name: "Gemini message", format: inference.APIFormatGemini, mutate: addMessage},
-		{name: "Gemini tool and schema", format: inference.APIFormatGemini, mutate: addTool},
-		{name: "Gemini image", format: inference.APIFormatGemini, mutate: addImage},
-		{name: "Gemini sampling", format: inference.APIFormatGemini, mutate: addSampling},
+		{name: "OpenAI system", format: model.APIFormatOpenAI, mutate: addSystem},
+		{name: "OpenAI model", format: model.APIFormatOpenAI, mutate: addModelName},
+		{name: "OpenAI message", format: model.APIFormatOpenAI, mutate: addMessage},
+		{name: "OpenAI tool and schema", format: model.APIFormatOpenAI, mutate: addTool},
+		{name: "OpenAI image", format: model.APIFormatOpenAI, mutate: addImage},
+		{name: "OpenAI sampling", format: model.APIFormatOpenAI, mutate: addSampling},
+		{name: "Anthropic system", format: model.APIFormatAnthropic, mutate: addSystem},
+		{name: "Anthropic model", format: model.APIFormatAnthropic, mutate: addModelName},
+		{name: "Anthropic message", format: model.APIFormatAnthropic, mutate: addMessage},
+		{name: "Anthropic tool and schema", format: model.APIFormatAnthropic, mutate: addTool},
+		{name: "Anthropic image", format: model.APIFormatAnthropic, mutate: addImage},
+		{name: "Anthropic sampling", format: model.APIFormatAnthropic, mutate: addSampling},
+		{name: "Gemini system", format: model.APIFormatGemini, mutate: addSystem},
+		{name: "Gemini message", format: model.APIFormatGemini, mutate: addMessage},
+		{name: "Gemini tool and schema", format: model.APIFormatGemini, mutate: addTool},
+		{name: "Gemini image", format: model.APIFormatGemini, mutate: addImage},
+		{name: "Gemini sampling", format: model.APIFormatGemini, mutate: addSampling},
 	}
 
 	for _, tt := range tests {
@@ -129,12 +130,12 @@ func TestEstimatorCountsCompleteRequest(t *testing.T) {
 func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 	tests := []struct {
 		name        string
-		format      inference.APIFormat
+		format      model.APIFormat
 		wantChanged bool
 	}{
-		{name: "OpenAI intentionally omits IsError", format: inference.APIFormatOpenAI, wantChanged: false},
-		{name: "Anthropic includes IsError", format: inference.APIFormatAnthropic, wantChanged: true},
-		{name: "Gemini intentionally omits IsError", format: inference.APIFormatGemini, wantChanged: false},
+		{name: "OpenAI intentionally omits IsError", format: model.APIFormatOpenAI, wantChanged: false},
+		{name: "Anthropic includes IsError", format: model.APIFormatAnthropic, wantChanged: true},
+		{name: "Gemini intentionally omits IsError", format: model.APIFormatGemini, wantChanged: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,12 +149,12 @@ func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 func TestEstimatorCountsHistoricalThinking(t *testing.T) {
 	tests := []struct {
 		name        string
-		format      inference.APIFormat
+		format      model.APIFormat
 		wantChanged bool
 	}{
-		{name: "OpenAI intentionally omits thinking", format: inference.APIFormatOpenAI, wantChanged: false},
-		{name: "Anthropic includes thinking and signature", format: inference.APIFormatAnthropic, wantChanged: true},
-		{name: "Gemini intentionally omits thinking", format: inference.APIFormatGemini, wantChanged: false},
+		{name: "OpenAI intentionally omits thinking", format: model.APIFormatOpenAI, wantChanged: false},
+		{name: "Anthropic includes thinking and signature", format: model.APIFormatAnthropic, wantChanged: true},
+		{name: "Gemini intentionally omits thinking", format: model.APIFormatGemini, wantChanged: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -169,11 +170,11 @@ func TestEstimatorCountsEffortByDialect(t *testing.T) {
 		after       inference.Request
 		wantChanged bool
 	}{
-		{name: "OpenAI effort ignores capability gate", before: requestWithEffort(inference.APIFormatOpenAI, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatOpenAI, inference.EffortLow, false), wantChanged: true},
-		{name: "Anthropic effort with thinking", before: requestWithEffort(inference.APIFormatAnthropic, inference.EffortNone, true), after: requestWithEffort(inference.APIFormatAnthropic, inference.EffortLow, true), wantChanged: true},
-		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(inference.APIFormatAnthropic, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatAnthropic, inference.EffortLow, false), wantChanged: false},
-		{name: "Gemini effort with thinking", before: requestWithEffort(inference.APIFormatGemini, inference.EffortNone, true), after: requestWithEffort(inference.APIFormatGemini, inference.EffortLow, true), wantChanged: true},
-		{name: "Gemini gate off restores no-effort encoding", before: requestWithEffort(inference.APIFormatGemini, inference.EffortNone, false), after: requestWithEffort(inference.APIFormatGemini, inference.EffortLow, false), wantChanged: false},
+		{name: "OpenAI effort ignores capability gate", before: requestWithEffort(model.APIFormatOpenAI, model.EffortNone, false), after: requestWithEffort(model.APIFormatOpenAI, model.EffortLow, false), wantChanged: true},
+		{name: "Anthropic effort with thinking", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, true), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, true), wantChanged: true},
+		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, false), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, false), wantChanged: false},
+		{name: "Gemini effort with thinking", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, true), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, true), wantChanged: true},
+		{name: "Gemini gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, false), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, false), wantChanged: false},
 	}
 
 	for _, tt := range tests {
@@ -229,11 +230,11 @@ func requestChanges(t *testing.T, before, after inference.Request) (bool, bool) 
 func TestEstimatorIgnoresHistoricalUsage(t *testing.T) {
 	tests := []struct {
 		name   string
-		format inference.APIFormat
+		format model.APIFormat
 	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI},
-		{name: "Anthropic", format: inference.APIFormatAnthropic},
-		{name: "Gemini", format: inference.APIFormatGemini},
+		{name: "OpenAI", format: model.APIFormatOpenAI},
+		{name: "Anthropic", format: model.APIFormatAnthropic},
+		{name: "Gemini", format: model.APIFormatGemini},
 	}
 
 	for _, tt := range tests {
@@ -268,27 +269,27 @@ func TestEstimatorTypedFailures(t *testing.T) {
 		estimator       *Estimator
 		req             inference.Request
 		wantState       EstimatorStateReason
-		wantModelField  inference.ModelKeyField
-		wantUnsupported inference.APIFormat
-		wantEncoding    inference.APIFormat
+		wantModelField  model.ModelKeyField
+		wantUnsupported model.APIFormat
+		wantEncoding    model.APIFormat
 	}{
 		{
 			name:      "nil receiver",
 			estimator: nil,
-			req:       minimalRequest(inference.APIFormatOpenAI),
+			req:       minimalRequest(model.APIFormatOpenAI),
 			wantState: EstimatorStateNilReceiver,
 		},
 		{
 			name:           "missing provider identity",
 			estimator:      NewEstimator(),
-			req:            requestWithModel("", "model", inference.APIFormatOpenAI),
-			wantModelField: inference.ModelKeyFieldProvider,
+			req:            requestWithModel("", "model", model.APIFormatOpenAI),
+			wantModelField: model.ModelKeyFieldProvider,
 		},
 		{
 			name:           "missing model identity",
 			estimator:      NewEstimator(),
-			req:            requestWithModel("provider", "", inference.APIFormatOpenAI),
-			wantModelField: inference.ModelKeyFieldModel,
+			req:            requestWithModel("provider", "", model.APIFormatOpenAI),
+			wantModelField: model.ModelKeyFieldModel,
 		},
 		{
 			name:      "unsupported empty format",
@@ -298,26 +299,26 @@ func TestEstimatorTypedFailures(t *testing.T) {
 		{
 			name:            "unsupported custom format",
 			estimator:       NewEstimator(),
-			req:             requestWithModel("provider", "model", inference.APIFormat("custom")),
-			wantUnsupported: inference.APIFormat("custom"),
+			req:             requestWithModel("provider", "model", model.APIFormat("custom")),
+			wantUnsupported: model.APIFormat("custom"),
 		},
 		{
 			name:         "OpenAI encoding failure",
 			estimator:    NewEstimator(),
-			req:          requestWithInvalidToolSchema(inference.APIFormatOpenAI),
-			wantEncoding: inference.APIFormatOpenAI,
+			req:          requestWithInvalidToolSchema(model.APIFormatOpenAI),
+			wantEncoding: model.APIFormatOpenAI,
 		},
 		{
 			name:         "Anthropic unsupported document",
 			estimator:    NewEstimator(),
-			req:          requestWithDocument(inference.APIFormatAnthropic),
-			wantEncoding: inference.APIFormatAnthropic,
+			req:          requestWithDocument(model.APIFormatAnthropic),
+			wantEncoding: model.APIFormatAnthropic,
 		},
 		{
 			name:         "Gemini unsupported document",
 			estimator:    NewEstimator(),
-			req:          requestWithDocument(inference.APIFormatGemini),
-			wantEncoding: inference.APIFormatGemini,
+			req:          requestWithDocument(model.APIFormatGemini),
+			wantEncoding: model.APIFormatGemini,
 		},
 	}
 
@@ -339,7 +340,7 @@ func TestEstimatorTypedFailures(t *testing.T) {
 				if !errors.As(err, &got) {
 					t.Fatalf("error = %T, want *ModelIdentityError", err)
 				}
-				var cause *inference.ModelKeyValidationError
+				var cause *model.ModelKeyValidationError
 				if !errors.As(err, &cause) || cause.Field != tt.wantModelField {
 					t.Errorf("cause = %#v, want ModelKeyValidationError field %q", cause, tt.wantModelField)
 				}
@@ -370,21 +371,21 @@ func TestEstimatorTypedFailures(t *testing.T) {
 }
 
 func TestEstimatorCapability(t *testing.T) {
-	want := inference.CounterCapability{
-		Transport:    inference.CounterTransportLocal,
-		Retention:    inference.RetentionNone,
-		TokenizerRev: inference.TokenizerRevision("bundled-openai-anthropic-gemini-request-bytes-div4-v1"),
-		Quality:      inference.CountQualityHeuristicEstimate,
+	want := CounterCapability{
+		Transport:    CounterTransportLocal,
+		Retention:    RetentionNone,
+		TokenizerRev: TokenizerRevision("bundled-openai-anthropic-gemini-request-bytes-div4-v1"),
+		Quality:      CountQualityHeuristicEstimate,
 	}
 	tests := []struct {
 		name      string
 		estimator *Estimator
-		want      inference.CounterCapability
+		want      CounterCapability
 		wantValid bool
 	}{
 		{name: "constructed", estimator: NewEstimator(), want: want, wantValid: true},
 		{name: "zero value", estimator: &Estimator{}, want: want, wantValid: true},
-		{name: "nil receiver is invalid", estimator: nil, want: inference.CounterCapability{}, wantValid: false},
+		{name: "nil receiver is invalid", estimator: nil, want: CounterCapability{}, wantValid: false},
 	}
 
 	for _, tt := range tests {
@@ -403,11 +404,11 @@ func TestEstimatorCapability(t *testing.T) {
 func TestEstimatorDeterminismAndInputIntegrity(t *testing.T) {
 	tests := []struct {
 		name   string
-		format inference.APIFormat
+		format model.APIFormat
 	}{
-		{name: "OpenAI", format: inference.APIFormatOpenAI},
-		{name: "Anthropic", format: inference.APIFormatAnthropic},
-		{name: "Gemini", format: inference.APIFormatGemini},
+		{name: "OpenAI", format: model.APIFormatOpenAI},
+		{name: "Anthropic", format: model.APIFormatAnthropic},
+		{name: "Gemini", format: model.APIFormatGemini},
 	}
 
 	for _, tt := range tests {
@@ -454,15 +455,15 @@ func TestEstimatedTokensForBytes(t *testing.T) {
 	}
 }
 
-func minimalRequest(format inference.APIFormat) inference.Request {
+func minimalRequest(format model.APIFormat) inference.Request {
 	return requestWithModel("test-provider", "test-model", format)
 }
 
-func requestWithModel(provider inference.ProviderName, model string, format inference.APIFormat) inference.Request {
-	return inference.Request{Model: inference.Model{Provider: provider, Name: model, APIFormat: format}}
+func requestWithModel(provider model.ProviderName, name string, format model.APIFormat) inference.Request {
+	return inference.Request{Model: model.Model{Provider: provider, Name: name, APIFormat: format}}
 }
 
-func toolFlowRequest(format inference.APIFormat, id, name, input, result string, isError bool) inference.Request {
+func toolFlowRequest(format model.APIFormat, id, name, input, result string, isError bool) inference.Request {
 	req := minimalRequest(format)
 	req.Messages = content.AgenticMessages{
 		&content.AIMessage{Message: content.Message{
@@ -485,7 +486,7 @@ func toolFlowRequest(format inference.APIFormat, id, name, input, result string,
 	return req
 }
 
-func requestWithThinking(format inference.APIFormat, include bool) inference.Request {
+func requestWithThinking(format model.APIFormat, include bool) inference.Request {
 	req := minimalRequest(format)
 	blocks := []content.Block{&content.TextBlock{Text: "assistant answer"}}
 	if include {
@@ -501,29 +502,29 @@ func requestWithThinking(format inference.APIFormat, include bool) inference.Req
 	return req
 }
 
-func requestWithEffort(format inference.APIFormat, effort inference.Effort, thinkingCap bool) inference.Request {
+func requestWithEffort(format model.APIFormat, effort model.Effort, thinkingCap bool) inference.Request {
 	req := minimalRequest(format)
 	req.Model.Caps.Thinking = thinkingCap
-	req.Override = &inference.Sampling{Effort: effort}
+	req.Override = &model.Sampling{Effort: effort}
 	return req
 }
 
-func completeRequest(format inference.APIFormat, usage *content.Usage) inference.Request {
+func completeRequest(format model.APIFormat, usage *content.Usage) inference.Request {
 	temperature := 0.25
 	topP := 0.9
 	maxTokens := 64
 	return inference.Request{
-		Model: inference.Model{
+		Model: model.Model{
 			Provider:  "test-provider",
 			APIFormat: format,
 			Name:      "test-model",
-			Caps:      inference.Capabilities{Tools: true, AcceptsImages: true, Thinking: true},
-			Sampling: inference.Sampling{
+			Caps:      model.Capabilities{Tools: true, AcceptsImages: true, Thinking: true},
+			Sampling: model.Sampling{
 				Temperature: &temperature,
 				TopP:        &topP,
 				MaxTokens:   &maxTokens,
 				Stop:        []string{"END"},
-				Effort:      inference.EffortLow,
+				Effort:      model.EffortLow,
 			},
 		},
 		System: "system prompt",
@@ -589,7 +590,7 @@ func addSampling(req *inference.Request) {
 	temperature := 0.125
 	topP := 0.875
 	maxTokens := 321
-	req.Override = &inference.Sampling{
+	req.Override = &model.Sampling{
 		Temperature: &temperature,
 		TopP:        &topP,
 		MaxTokens:   &maxTokens,
@@ -597,13 +598,13 @@ func addSampling(req *inference.Request) {
 	}
 }
 
-func requestWithInvalidToolSchema(format inference.APIFormat) inference.Request {
+func requestWithInvalidToolSchema(format model.APIFormat) inference.Request {
 	req := minimalRequest(format)
 	req.Tools = []inference.Tool{{Name: "lookup", Schema: json.RawMessage(`{"broken":`)}}
 	return req
 }
 
-func requestWithDocument(format inference.APIFormat) inference.Request {
+func requestWithDocument(format model.APIFormat) inference.Request {
 	req := minimalRequest(format)
 	req.Messages = content.AgenticMessages{&content.UserMessage{Message: content.Message{
 		Role: content.RoleUser,

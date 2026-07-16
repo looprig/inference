@@ -7,33 +7,34 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/wire/jsonbody"
 )
 
 // Codec is the Google Gemini generateContent wire dialect expressed as an
-// inference.Codec (and, via DecodeStream, an inference.StreamingCodec). It is stateless
+// codec.Codec (and, via DecodeStream, an codec.StreamingCodec). It is stateless
 // (an empty struct with value-receiver methods), so one value is safely shared across
 // goroutines: the transport owns HTTP mechanics, the Codec owns the JSON body,
 // per-event semantics, and SSE stream decoding. Methods delegate to package-level free
 // functions so the two surfaces cannot diverge.
 type Codec struct{}
 
-// Compile-time proof that Codec honors the inference.Codec contract.
-var _ inference.Codec = Codec{}
+// Compile-time proof that Codec honors the codec.Codec contract.
+var _ codec.Codec = Codec{}
 
 // EncodeRequest builds the Gemini generateContent request: a JSON body reader plus the
 // application/json content type as an EncodedRequest. The RequestMode is intentionally
 // ignored: Gemini's generateContent and streamGenerateContent bodies are identical —
 // streaming is chosen by the transport via the route (`:streamGenerateContent?alt=sse`),
 // not a body field — so Invoke and Stream produce the same bytes.
-func (Codec) EncodeRequest(req inference.Request, _ inference.RequestMode) (inference.EncodedRequest, error) {
+func (Codec) EncodeRequest(req inference.Request, _ codec.RequestMode) (codec.EncodedRequest, error) {
 	body, err := EncodeRequest(req)
 	if err != nil {
-		return inference.EncodedRequest{}, err
+		return codec.EncodedRequest{}, err
 	}
 	h := http.Header{}
 	h.Set("Content-Type", jsonbody.ContentType)
-	return inference.EncodedRequest{Header: h, Body: bytes.NewReader(body)}, nil
+	return codec.EncodedRequest{Header: h, Body: bytes.NewReader(body)}, nil
 }
 
 // DecodeResponse parses a non-streaming Gemini generateContent body, delegating

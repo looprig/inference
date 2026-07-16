@@ -8,8 +8,9 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
+	stream "github.com/looprig/inference/stream"
+	usage "github.com/looprig/inference/usage"
 )
 
 func TestAnthropicStreamResult(t *testing.T) {
@@ -20,7 +21,7 @@ func TestAnthropicStreamResult(t *testing.T) {
 		body          string
 		wantUsage     *content.Usage
 		wantModel     string
-		wantReason    inference.FinishReason
+		wantReason    stream.FinishReason
 		wantErr       bool
 		interrupt     bool
 		wantNoResult  bool
@@ -34,16 +35,16 @@ func TestAnthropicStreamResult(t *testing.T) {
 				"data: {\"type\":\"message_stop\"}\n\n",
 			wantUsage:  &content.Usage{InputTokens: 8, OutputTokens: 4, CacheReadTokens: 3, CacheCreationTokens: 2},
 			wantModel:  "claude-test",
-			wantReason: inference.FinishReasonStop,
+			wantReason: stream.FinishReasonStop,
 		},
 		{
 			name:       "latest cumulative output and tool finish win",
 			body:       "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":2}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
 			wantUsage:  &content.Usage{InputTokens: 1, OutputTokens: 5},
 			wantModel:  "claude-test",
-			wantReason: inference.FinishReasonToolUse,
+			wantReason: stream.FinishReasonToolUse,
 		},
-		{name: "max tokens finish is provider-neutral", body: "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", wantReason: inference.FinishReasonLength},
+		{name: "max tokens finish is provider-neutral", body: "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", wantReason: stream.FinishReasonLength},
 		{name: "missing trailers remains clean", body: "data: {\"type\":\"message_stop\"}\n\n"},
 		{name: "null start count fails", body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":null}}}\n\n", wantErr: true},
 		{name: "malformed delta count type fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":\"many\"}}\n\n", wantErr: true},
@@ -87,7 +88,7 @@ func TestAnthropicStreamResult(t *testing.T) {
 					if errors.Is(err, io.EOF) {
 						t.Fatalf("Next() error = EOF, want terminal decode failure")
 					}
-					var normalizationErr *inference.UsageNormalizationError
+					var normalizationErr *usage.UsageNormalizationError
 					if !errors.As(err, &normalizationErr) {
 						t.Fatalf("Next() error = %T %v, want UsageNormalizationError", err, err)
 					}
@@ -154,7 +155,7 @@ func TestAnthropicStreamResult(t *testing.T) {
 	}
 }
 
-func assertAnthropicUsageSnapshot(t *testing.T, stream *inference.StreamReader[content.Chunk], usage *content.Usage) {
+func assertAnthropicUsageSnapshot(t *testing.T, stream *stream.StreamReader[content.Chunk], usage *content.Usage) {
 	t.Helper()
 	if usage == nil {
 		return

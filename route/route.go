@@ -1,7 +1,7 @@
-// Package route holds concrete inference.Router builders for the bundled wire APIs: a
+// Package route holds concrete route.Router builders for the bundled wire APIs: a
 // static chat route (OpenAI/Anthropic style) and Gemini's mode-aware model-in-path
 // route. These are wire-API facts only — no provider default endpoints, auth policy,
-// or model catalogue lives here. Callers may supply any inference.Router; these are
+// or model catalogue lives here. Callers may supply any route.Router; these are
 // conveniences for the shapes the bundled codecs speak.
 package route
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 )
 
 // staticChat builds POST {base}{path} for both invoke and stream modes with no query.
@@ -22,10 +23,10 @@ type staticChat struct {
 // StaticChat returns a Router that targets POST {trimRight(base,"/")}{path} for every
 // mode. Use "/chat/completions" for OpenAI-compatible APIs and "/messages" for
 // Anthropic-compatible APIs.
-func StaticChat(path string) inference.Router { return staticChat{path: path} }
+func StaticChat(path string) Router { return staticChat{path: path} }
 
-func (s staticChat) BuildRoute(baseURL string, _ inference.Request, _ inference.RequestMode) (inference.Route, error) {
-	return inference.Route{
+func (s staticChat) BuildRoute(baseURL string, _ inference.Request, _ codec.RequestMode) (Route, error) {
+	return Route{
 		Method: http.MethodPost,
 		URL:    strings.TrimRight(baseURL, "/") + s.path,
 	}, nil
@@ -42,7 +43,7 @@ type geminiGenerateContent struct{}
 //	stream: POST {base}/models/{model}:streamGenerateContent?alt=sse
 //
 // The model name is read from req.Model.Name.
-func GeminiGenerateContent() inference.Router { return geminiGenerateContent{} }
+func GeminiGenerateContent() Router { return geminiGenerateContent{} }
 
 // MissingModelError is returned when a Gemini route is built for a request whose Model
 // carries no Name — the name is required for the model-in-path URL. Typed per the repo
@@ -53,18 +54,18 @@ func (e *MissingModelError) Error() string {
 	return "route: gemini generateContent requires a non-empty Model.Name"
 }
 
-func (geminiGenerateContent) BuildRoute(baseURL string, req inference.Request, mode inference.RequestMode) (inference.Route, error) {
+func (geminiGenerateContent) BuildRoute(baseURL string, req inference.Request, mode codec.RequestMode) (Route, error) {
 	if req.Model.Name == "" {
-		return inference.Route{}, &MissingModelError{}
+		return Route{}, &MissingModelError{}
 	}
 	base := strings.TrimRight(baseURL, "/")
-	if mode == inference.RequestModeStream {
-		return inference.Route{
+	if mode == codec.RequestModeStream {
+		return Route{
 			Method: http.MethodPost,
 			URL:    base + "/models/" + req.Model.Name + ":streamGenerateContent?alt=sse",
 		}, nil
 	}
-	return inference.Route{
+	return Route{
 		Method: http.MethodPost,
 		URL:    base + "/models/" + req.Model.Name + ":generateContent",
 	}, nil

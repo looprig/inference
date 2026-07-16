@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/openaiapi"
+	stream "github.com/looprig/inference/stream"
+	usage "github.com/looprig/inference/usage"
 )
 
 // Compile-time proof the OpenAI codec is a full StreamingCodec.
-var _ inference.StreamingCodec = openaiapi.Codec{}
+var _ codec.StreamingCodec = openaiapi.Codec{}
 
 // closerSpy wraps an io.Reader and records whether Close was called.
 type closerSpy struct {
@@ -475,7 +477,7 @@ func TestOpenAIStreamResult(t *testing.T) {
 		body         string
 		wantUsage    *content.Usage
 		wantModel    string
-		wantReason   inference.FinishReason
+		wantReason   stream.FinishReason
 		wantErr      bool
 		interrupt    bool
 		wantNoResult bool
@@ -487,16 +489,16 @@ func TestOpenAIStreamResult(t *testing.T) {
 				"data: [DONE]\n\n",
 			wantUsage:  &content.Usage{InputTokens: 7, OutputTokens: 4, CacheReadTokens: 2, ReasoningTokens: 1},
 			wantModel:  "gpt-test",
-			wantReason: inference.FinishReasonStop,
+			wantReason: stream.FinishReasonStop,
 		},
 		{
 			name:       "missing usage trailer remains a clean result",
 			body:       "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
 			wantModel:  "gpt-test",
-			wantReason: inference.FinishReasonLength,
+			wantReason: stream.FinishReasonLength,
 		},
 		{name: "present empty usage remains known zero", body: "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n", wantUsage: &content.Usage{}},
-		{name: "content filter finish is provider-neutral", body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n", wantReason: inference.FinishReasonContentFilter},
+		{name: "content filter finish is provider-neutral", body: "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n", wantReason: stream.FinishReasonContentFilter},
 		{name: "explicit null count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":null}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "malformed count type fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"many\"}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "fractional count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1.5}}\n\ndata: [DONE]\n\n", wantErr: true},
@@ -527,7 +529,7 @@ func TestOpenAIStreamResult(t *testing.T) {
 					if errors.Is(err, io.EOF) {
 						t.Fatalf("Next() error = EOF, want terminal decode failure")
 					}
-					var normalizationErr *inference.UsageNormalizationError
+					var normalizationErr *usage.UsageNormalizationError
 					if !errors.As(err, &normalizationErr) {
 						t.Fatalf("Next() error = %T %v, want UsageNormalizationError", err, err)
 					}
@@ -575,7 +577,7 @@ func TestOpenAIStreamResult(t *testing.T) {
 	}
 }
 
-func assertUsageSnapshot(t *testing.T, stream *inference.StreamReader[content.Chunk], usage *content.Usage) {
+func assertUsageSnapshot(t *testing.T, stream *stream.StreamReader[content.Chunk], usage *content.Usage) {
 	t.Helper()
 	if usage == nil {
 		return

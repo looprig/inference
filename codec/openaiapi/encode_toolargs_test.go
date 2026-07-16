@@ -7,6 +7,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 )
 
 // TestEncodeToolCallArgumentsAreJSONString locks in the OpenAI wire contract:
@@ -32,7 +33,7 @@ func TestEncodeToolCallArgumentsAreJSONString(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model: inference.Model{Name: "test-model"},
+				Model: model.Model{Name: "test-model"},
 				Messages: content.AgenticMessages{
 					&content.AIMessage{Message: content.Message{
 						Role: content.RoleAssistant,

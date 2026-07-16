@@ -7,6 +7,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 )
 
 // BuildGenerateContentRequest converts a provider-neutral inference.Request into a
@@ -221,7 +222,7 @@ func buildTools(tools []inference.Tool) []geminiTool {
 // buildGenerationConfig maps effective sampling to Gemini's generationConfig,
 // returning nil when nothing is set so the whole key is omitted. Sampling
 // pointers/slices are referenced (read-only) directly, not cloned.
-func buildGenerationConfig(s inference.Sampling, caps inference.Capabilities) *generationConfig {
+func buildGenerationConfig(s model.Sampling, caps model.Capabilities) *generationConfig {
 	gc := &generationConfig{
 		Temperature:     s.Temperature,
 		TopP:            s.TopP,
@@ -240,7 +241,7 @@ func buildGenerationConfig(s inference.Sampling, caps inference.Capabilities) *g
 // fail-safe gated on Caps.Thinking: a thinkingConfig sent to a non-thinking model
 // is a 400, so a model that does not advertise thinking never receives one.
 // EffortNone (and any unknown value) yields nil — thinking untouched.
-func thinkingFor(e inference.Effort, caps inference.Capabilities) *thinkingConfig {
+func thinkingFor(e model.Effort, caps model.Capabilities) *thinkingConfig {
 	if !caps.Thinking {
 		return nil
 	}
@@ -256,15 +257,15 @@ func thinkingFor(e inference.Effort, caps inference.Capabilities) *thinkingConfi
 // always valid); low/medium/high use fixed budgets within the valid range of
 // Gemini 2.5 Flash and Pro. These fixed values are a conservative default and may
 // warrant per-model tuning.
-func thinkingBudget(e inference.Effort) (int, bool) {
+func thinkingBudget(e model.Effort) (int, bool) {
 	switch e {
-	case inference.EffortLow:
+	case model.EffortLow:
 		return 4096, true
-	case inference.EffortMedium:
+	case model.EffortMedium:
 		return 8192, true
-	case inference.EffortHigh:
+	case model.EffortHigh:
 		return 16384, true
-	case inference.EffortMax:
+	case model.EffortMax:
 		return -1, true // dynamic thinking
 	default: // EffortNone or unknown → omit
 		return 0, false

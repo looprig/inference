@@ -9,6 +9,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
+	model "github.com/looprig/inference/model"
 )
 
 // --- shared helpers -------------------------------------------------------
@@ -126,10 +127,10 @@ func imageDataBlock(mt content.MediaType, data []byte) content.Block {
 }
 
 // baseModel is a minimal valid Model for encode tests. Caps default off.
-func baseModel() inference.Model {
-	return inference.Model{
-		Provider:  inference.ProviderName("phala"),
-		APIFormat: inference.APIFormatAnthropic,
+func baseModel() model.Model {
+	return model.Model{
+		Provider:  model.ProviderName("phala"),
+		APIFormat: model.APIFormatAnthropic,
 		BaseURL:   "https://example.test",
 		Name:      "claude-opus-4-8",
 	}
@@ -351,15 +352,15 @@ func TestEncodeRequest_EffortThinking(t *testing.T) {
 	cases := []struct {
 		name         string
 		thinkingCap  bool
-		effort       inference.Effort
+		effort       model.Effort
 		wantThinking bool
 		wantEffort   string // "" when output_config must be absent
 	}{
-		{name: "thinking-capable + high effort emits adaptive + effort", thinkingCap: true, effort: inference.EffortHigh, wantThinking: true, wantEffort: "high"},
-		{name: "thinking-capable + max effort maps to max", thinkingCap: true, effort: inference.EffortMax, wantThinking: true, wantEffort: "max"},
-		{name: "thinking-capable + low effort maps to low", thinkingCap: true, effort: inference.EffortLow, wantThinking: true, wantEffort: "low"},
-		{name: "thinking-capable + no effort emits neither", thinkingCap: true, effort: inference.EffortNone, wantThinking: false},
-		{name: "not thinking-capable ignores effort", thinkingCap: false, effort: inference.EffortHigh, wantThinking: false},
+		{name: "thinking-capable + high effort emits adaptive + effort", thinkingCap: true, effort: model.EffortHigh, wantThinking: true, wantEffort: "high"},
+		{name: "thinking-capable + max effort maps to max", thinkingCap: true, effort: model.EffortMax, wantThinking: true, wantEffort: "max"},
+		{name: "thinking-capable + low effort maps to low", thinkingCap: true, effort: model.EffortLow, wantThinking: true, wantEffort: "low"},
+		{name: "thinking-capable + no effort emits neither", thinkingCap: true, effort: model.EffortNone, wantThinking: false},
+		{name: "not thinking-capable ignores effort", thinkingCap: false, effort: model.EffortHigh, wantThinking: false},
 	}
 
 	for _, tc := range cases {
@@ -368,7 +369,7 @@ func TestEncodeRequest_EffortThinking(t *testing.T) {
 			t.Parallel()
 			m := baseModel()
 			m.Caps.Thinking = tc.thinkingCap
-			m.Sampling = inference.Sampling{Effort: tc.effort}
+			m.Sampling = model.Sampling{Effort: tc.effort}
 			req := inference.Request{Model: m, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}}
 			data, err := anthropicapi.EncodeRequest(req, false)
 			if err != nil {
@@ -415,28 +416,28 @@ func TestEncodeRequest_ThinkingOmitsSampling(t *testing.T) {
 	cases := []struct {
 		name         string
 		thinkingCap  bool
-		effort       inference.Effort
+		effort       model.Effort
 		wantThinking bool // thinking + output_config present
 		wantSampling bool // temperature + top_p present
 	}{
 		{
 			name:         "thinking enabled omits temperature and top_p",
 			thinkingCap:  true,
-			effort:       inference.EffortHigh,
+			effort:       model.EffortHigh,
 			wantThinking: true,
 			wantSampling: false,
 		},
 		{
 			name:         "thinking-capable but effort none keeps temperature and top_p",
 			thinkingCap:  true,
-			effort:       inference.EffortNone,
+			effort:       model.EffortNone,
 			wantThinking: false,
 			wantSampling: true,
 		},
 		{
 			name:         "not thinking-capable keeps temperature and top_p even with effort",
 			thinkingCap:  false,
-			effort:       inference.EffortHigh,
+			effort:       model.EffortHigh,
 			wantThinking: false,
 			wantSampling: true,
 		},
@@ -450,7 +451,7 @@ func TestEncodeRequest_ThinkingOmitsSampling(t *testing.T) {
 			m.Caps.Thinking = tc.thinkingCap
 			// Both temperature and top_p are set on every case so absence is the
 			// codec's reconciliation, not a missing input.
-			m.Sampling = inference.Sampling{Temperature: f64ptr(0.7), TopP: f64ptr(0.9), Effort: tc.effort}
+			m.Sampling = model.Sampling{Temperature: f64ptr(0.7), TopP: f64ptr(0.9), Effort: tc.effort}
 			req := inference.Request{Model: m, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}}
 			data, err := anthropicapi.EncodeRequest(req, false)
 			if err != nil {
@@ -481,8 +482,8 @@ func TestEncodeRequest_MaxTokensAndSampling(t *testing.T) {
 
 	cases := []struct {
 		name          string
-		sampling      inference.Sampling
-		override      *inference.Sampling
+		sampling      model.Sampling
+		override      *model.Sampling
 		wantMaxTokens int
 		wantTempKey   bool
 		wantTemp      float64
@@ -492,17 +493,17 @@ func TestEncodeRequest_MaxTokensAndSampling(t *testing.T) {
 	}{
 		{
 			name:          "unset max_tokens uses the codec default",
-			sampling:      inference.Sampling{},
+			sampling:      model.Sampling{},
 			wantMaxTokens: 4096,
 		},
 		{
 			name:          "explicit max_tokens is honored",
-			sampling:      inference.Sampling{MaxTokens: intptr(2000)},
+			sampling:      model.Sampling{MaxTokens: intptr(2000)},
 			wantMaxTokens: 2000,
 		},
 		{
 			name:          "temperature/top_p/stop_sequences map through",
-			sampling:      inference.Sampling{Temperature: f64ptr(0.7), TopP: f64ptr(0.9), Stop: []string{"STOP"}},
+			sampling:      model.Sampling{Temperature: f64ptr(0.7), TopP: f64ptr(0.9), Stop: []string{"STOP"}},
 			wantMaxTokens: 4096,
 			wantTempKey:   true,
 			wantTemp:      0.7,
@@ -512,8 +513,8 @@ func TestEncodeRequest_MaxTokensAndSampling(t *testing.T) {
 		},
 		{
 			name:          "override wins over model sampling",
-			sampling:      inference.Sampling{MaxTokens: intptr(10)},
-			override:      &inference.Sampling{MaxTokens: intptr(999)},
+			sampling:      model.Sampling{MaxTokens: intptr(10)},
+			override:      &model.Sampling{MaxTokens: intptr(999)},
 			wantMaxTokens: 999,
 		},
 	}

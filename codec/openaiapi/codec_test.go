@@ -7,11 +7,13 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 )
 
-// Codec must satisfy the inference.Codec contract.
-var _ inference.Codec = openaiapi.Codec{}
+// Codec must satisfy the codec.Codec contract.
+var _ codec.Codec = openaiapi.Codec{}
 
 // TestCodec_EncodeRequest confirms the typed RequestMode maps to the stream bool
 // the same way the free EncodeRequest does: Invoke omits "stream", Stream sets it.
@@ -19,9 +21,9 @@ func TestCodec_EncodeRequest(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model: inference.Model{
-			Provider:  inference.ProviderName("lmstudio"),
-			APIFormat: inference.APIFormatOpenAI,
+		Model: model.Model{
+			Provider:  model.ProviderName("lmstudio"),
+			APIFormat: model.APIFormatOpenAI,
 			BaseURL:   "http://localhost:1234",
 			Name:      "m",
 		},
@@ -35,11 +37,11 @@ func TestCodec_EncodeRequest(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		mode       inference.RequestMode
+		mode       codec.RequestMode
 		wantStream bool
 	}{
-		{name: "invoke mode omits stream", mode: inference.RequestModeInvoke, wantStream: false},
-		{name: "stream mode sets stream", mode: inference.RequestModeStream, wantStream: true},
+		{name: "invoke mode omits stream", mode: codec.RequestModeInvoke, wantStream: false},
+		{name: "stream mode sets stream", mode: codec.RequestModeStream, wantStream: true},
 	}
 
 	for _, tc := range cases {

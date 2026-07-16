@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/looprig/inference"
+	stream "github.com/looprig/inference/stream"
 	"github.com/looprig/inference/wire/ndjson"
 )
 
@@ -20,7 +20,7 @@ func (c *closerSpy) Close() error {
 	return nil
 }
 
-func collect(r *inference.StreamReader[inference.StreamFrame]) ([]string, error) {
+func collect(r *stream.StreamReader[stream.StreamFrame]) ([]string, error) {
 	var out []string
 	for {
 		f, err := r.Next()

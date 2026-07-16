@@ -7,16 +7,23 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
+	stream "github.com/looprig/inference/stream"
+	"github.com/looprig/inference/transport"
+
+	usage "github.com/looprig/inference/usage"
 )
 
 // fakeClient satisfies inference.Client for interface compliance testing.
 type fakeClient struct{}
 
+func f64ptr(v float64) *float64 { return &v }
+
 func (f *fakeClient) Invoke(_ context.Context, _ inference.Request) (*inference.Response, error) {
 	return nil, nil
 }
 
-func (f *fakeClient) Stream(_ context.Context, _ inference.Request) (*inference.StreamReader[content.Chunk], error) {
+func (f *fakeClient) Stream(_ context.Context, _ inference.Request) (*stream.StreamReader[content.Chunk], error) {
 	return nil, nil
 }
 
@@ -26,8 +33,8 @@ var _ inference.Client = (*fakeClient)(nil)
 // sampleModel is a small local model builder standing in for a catalogue
 // constructor: it yields a valid Model with an opaque ProviderName, used purely
 // as a Request.Model fixture in this file.
-func sampleModel() inference.Model {
-	return inference.CustomModel(inference.ProviderName("chutes"), inference.APIFormatOpenAI, "https://api.chutes.ai", "moonshotai/Kimi-K2.6-TEE", inference.WithContextLimits(inference.ContextLimits{WindowTokens: 128_000}), inference.WithTools(), inference.WithThinking())
+func sampleModel() model.Model {
+	return model.CustomModel(model.ProviderName("chutes"), model.APIFormatOpenAI, "https://api.chutes.ai", "moonshotai/Kimi-K2.6-TEE", model.WithContextLimits(model.ContextLimits{WindowTokens: 128_000}), model.WithTools(), model.WithThinking())
 }
 
 func TestClient_InterfaceCompliance(t *testing.T) {
@@ -59,7 +66,7 @@ func TestClient_InterfaceCompliance(t *testing.T) {
 func TestRequest_Fields(t *testing.T) {
 	t.Parallel()
 
-	override := &inference.Sampling{Temperature: f64ptr(0.2)}
+	override := &model.Sampling{Temperature: f64ptr(0.2)}
 	req := inference.Request{
 		Model:    sampleModel(),
 		System:   "you are helpful",
@@ -68,7 +75,7 @@ func TestRequest_Fields(t *testing.T) {
 		Override: override,
 	}
 
-	if req.Model.Provider != inference.ProviderName("chutes") {
+	if req.Model.Provider != model.ProviderName("chutes") {
 		t.Errorf("Request.Model.Provider = %q, want chutes", req.Model.Provider)
 	}
 	if req.System != "you are helpful" {
@@ -139,12 +146,12 @@ func TestProviderName_OpaqueLabel(t *testing.T) {
 
 	cases := []struct {
 		name string
-		p    inference.ProviderName
+		p    model.ProviderName
 		want string
 	}{
-		{name: "empty is a wildcard", p: inference.ProviderName(""), want: ""},
-		{name: "arbitrary label", p: inference.ProviderName("chutes"), want: "chutes"},
-		{name: "unknown label accepted", p: inference.ProviderName("totally-made-up"), want: "totally-made-up"},
+		{name: "empty is a wildcard", p: model.ProviderName(""), want: ""},
+		{name: "arbitrary label", p: model.ProviderName("chutes"), want: "chutes"},
+		{name: "unknown label accepted", p: model.ProviderName("totally-made-up"), want: "totally-made-up"},
 	}
 
 	for _, tc := range cases {
@@ -162,18 +169,18 @@ func TestProviderName_OpaqueLabel(t *testing.T) {
 func TestEndpoint_Fields(t *testing.T) {
 	t.Parallel()
 
-	ep := inference.Endpoint{
+	ep := transport.Endpoint{
 		BaseURL:   "https://api.example.test/v1",
-		Provider:  inference.ProviderName("custom"),
-		APIFormat: inference.APIFormat("weird-dialect"),
+		Provider:  model.ProviderName("custom"),
+		APIFormat: model.APIFormat("weird-dialect"),
 	}
 	if ep.BaseURL != "https://api.example.test/v1" {
 		t.Errorf("Endpoint.BaseURL = %q, want https://api.example.test/v1", ep.BaseURL)
 	}
-	if ep.Provider != inference.ProviderName("custom") {
+	if ep.Provider != model.ProviderName("custom") {
 		t.Errorf("Endpoint.Provider = %q, want custom", ep.Provider)
 	}
-	if ep.APIFormat != inference.APIFormat("weird-dialect") {
+	if ep.APIFormat != model.APIFormat("weird-dialect") {
 		t.Errorf("Endpoint.APIFormat = %q, want weird-dialect", ep.APIFormat)
 	}
 }
@@ -196,7 +203,7 @@ func TestUsage(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			u := inference.Usage{
+			u := usage.Usage{
 				InputTokens:  tc.inputTokens,
 				OutputTokens: tc.outputTokens,
 			}

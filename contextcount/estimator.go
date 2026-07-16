@@ -8,6 +8,7 @@ import (
 	"github.com/looprig/inference/codec/anthropicapi"
 	"github.com/looprig/inference/codec/geminiapi"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 )
 
 const bytesPerEstimatedToken uint64 = 4
@@ -15,13 +16,13 @@ const bytesPerEstimatedToken uint64 = 4
 // EstimatorRevision pins both the bundled OpenAI/Anthropic/Gemini encoder suite
 // and the complete-request bytes/4 heuristic. Any count-affecting codec change
 // must bump this revision so durable measurements remain attributable.
-const EstimatorRevision inference.TokenizerRevision = "bundled-openai-anthropic-gemini-request-bytes-div4-v1"
+const EstimatorRevision TokenizerRevision = "bundled-openai-anthropic-gemini-request-bytes-div4-v1"
 
 // Estimator deterministically estimates input occupancy from a dialect's encoded
 // complete request. Its zero value is ready for use.
 type Estimator struct{}
 
-var _ inference.ContextCounter = (*Estimator)(nil)
+var _ ContextCounter = (*Estimator)(nil)
 
 // NewEstimator constructs a deterministic complete-request estimator.
 func NewEstimator() *Estimator { return &Estimator{} }
@@ -29,46 +30,46 @@ func NewEstimator() *Estimator { return &Estimator{} }
 // CountContext encodes the request in its model's API dialect and estimates one
 // token per four encoded bytes. Invoke mode is canonical because ContextCounter
 // has no response mode and streaming is response mechanics, not semantic input.
-func (e *Estimator) CountContext(ctx context.Context, req inference.Request) (inference.ContextCount, error) {
+func (e *Estimator) CountContext(ctx context.Context, req inference.Request) (ContextCount, error) {
 	if e == nil {
-		return inference.ContextCount{}, &EstimatorStateError{Reason: EstimatorStateNilReceiver}
+		return ContextCount{}, &EstimatorStateError{Reason: EstimatorStateNilReceiver}
 	}
 	if ctx == nil {
-		return inference.ContextCount{}, &EstimatorStateError{Reason: EstimatorStateNilContext}
+		return ContextCount{}, &EstimatorStateError{Reason: EstimatorStateNilContext}
 	}
 	if err := ctx.Err(); err != nil {
-		return inference.ContextCount{}, interruptedCount(req, err)
+		return ContextCount{}, interruptedCount(req, err)
 	}
 
 	model := req.Model.Key()
 	if err := model.Validate(); err != nil {
-		return inference.ContextCount{}, &ModelIdentityError{Model: model, Err: err}
+		return ContextCount{}, &ModelIdentityError{Model: model, Err: err}
 	}
 
 	body, err := encodeRequest(req)
 	if err != nil {
-		return inference.ContextCount{}, err
+		return ContextCount{}, err
 	}
 	// The bundled encoders are synchronous and do not accept a context, so they
 	// cannot be interrupted mid-encode. Observe cancellation immediately after
 	// that bounded local operation and before publishing its result.
 	if err := ctx.Err(); err != nil {
-		return inference.ContextCount{}, interruptedCount(req, err)
+		return ContextCount{}, interruptedCount(req, err)
 	}
 
-	return inference.ContextCount{
+	return ContextCount{
 		Model: model,
 		// len returns a nonnegative int, whose value always fits uint64 on Go's
 		// supported architectures.
 		InputTokens: estimatedTokensForBytes(uint64(len(body))),
-		Quality:     inference.CountQualityHeuristicEstimate,
+		Quality:     CountQualityHeuristicEstimate,
 	}, nil
 }
 
-func interruptedCount(req inference.Request, cause error) *inference.ContextCountError {
-	return &inference.ContextCountError{
+func interruptedCount(req inference.Request, cause error) *ContextCountError {
+	return &ContextCountError{
 		Model:   req.Model.Key(),
-		Quality: inference.CountQualityHeuristicEstimate,
+		Quality: CountQualityHeuristicEstimate,
 		Cause:   cause,
 	}
 }
@@ -76,15 +77,15 @@ func interruptedCount(req inference.Request, cause error) *inference.ContextCoun
 // CounterCapability declares that estimation stays in process, retains no
 // request data, and is provider-neutral. A nil receiver returns invalid zero
 // metadata rather than claiming a capability for unusable state.
-func (e *Estimator) CounterCapability() inference.CounterCapability {
+func (e *Estimator) CounterCapability() CounterCapability {
 	if e == nil {
-		return inference.CounterCapability{}
+		return CounterCapability{}
 	}
-	return inference.CounterCapability{
-		Transport:    inference.CounterTransportLocal,
-		Retention:    inference.RetentionNone,
+	return CounterCapability{
+		Transport:    CounterTransportLocal,
+		Retention:    RetentionNone,
 		TokenizerRev: EstimatorRevision,
-		Quality:      inference.CountQualityHeuristicEstimate,
+		Quality:      CountQualityHeuristicEstimate,
 	}
 }
 
@@ -94,11 +95,11 @@ func encodeRequest(req inference.Request) ([]byte, error) {
 		err  error
 	)
 	switch req.Model.APIFormat {
-	case inference.APIFormatOpenAI:
+	case model.APIFormatOpenAI:
 		body, err = openaiapi.EncodeRequest(req, false)
-	case inference.APIFormatAnthropic:
+	case model.APIFormatAnthropic:
 		body, err = anthropicapi.EncodeRequest(req, false)
-	case inference.APIFormatGemini:
+	case model.APIFormatGemini:
 		body, err = geminiapi.EncodeRequest(req)
 	default:
 		return nil, &UnsupportedAPIFormatError{APIFormat: req.Model.APIFormat}

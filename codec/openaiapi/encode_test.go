@@ -8,6 +8,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 )
 
 // mustDecode unmarshals raw JSON into a map for field inspection.
@@ -101,7 +102,7 @@ func TestEncodeRequestIgnoresUsage(t *testing.T) {
 		{name: "populated", usage: &content.Usage{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4, ReasoningTokens: 1}},
 	}
 
-	want, err := openaiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}}, false)
+	want, err := openaiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(textBlock("answer"))}}, false)
 	if err != nil {
 		t.Fatalf("EncodeRequest() baseline error = %v", err)
 	}
@@ -110,7 +111,7 @@ func TestEncodeRequestIgnoresUsage(t *testing.T) {
 			t.Parallel()
 			message := aiMsg(textBlock("answer"))
 			message.Usage = tt.usage
-			got, err := openaiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}, Messages: content.AgenticMessages{message}}, false)
+			got, err := openaiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{message}}, false)
 			if err != nil {
 				t.Fatalf("EncodeRequest() error = %v", err)
 			}
@@ -159,7 +160,7 @@ func TestEncodeRequest_System(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "test-model"},
+				Model:    model.Model{Name: "test-model"},
 				System:   tc.systemSpec,
 				Messages: tc.messages,
 			}
@@ -200,7 +201,7 @@ func TestEncodeRequest_StreamFlag(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("x"))},
 			}
 			got, err := openaiapi.EncodeRequest(req, tc.stream)
@@ -248,7 +249,7 @@ func TestEncodeRequestIncludeUsage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			body, err := openaiapi.EncodeRequest(inference.Request{Model: inference.Model{Name: "m"}}, tt.stream)
+			body, err := openaiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}}, tt.stream)
 			if err != nil {
 				t.Fatalf("EncodeRequest() error = %v", err)
 			}
@@ -405,7 +406,7 @@ func TestEncodeRequest_Messages(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: tc.msgs,
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -458,7 +459,7 @@ func TestEncodeRequest_ToolResultErrorReachesModel(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{tc.msg},
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -525,7 +526,7 @@ func TestEncodeRequest_Tools(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("hello"))},
 				Tools:    tc.tools,
 			}
@@ -591,7 +592,7 @@ func TestEncodeRequest_ThinkingIgnored(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: tc.msgs,
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -650,7 +651,7 @@ func TestEncodeRequest_ImageBlock_DataURL(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(imageDataBlock(tc.mediaType, tc.data))},
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -722,16 +723,16 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 		{
 			name: "minimal request",
 			req: inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
 			},
 		},
 		{
 			name: "full request with tools and system",
 			req: inference.Request{
-				Model: inference.Model{
+				Model: model.Model{
 					Name: "gpt-4o",
-					Sampling: inference.Sampling{
+					Sampling: model.Sampling{
 						Temperature: &temp,
 						MaxTokens:   &maxTok,
 						Stop:        []string{"STOP"},
@@ -751,7 +752,7 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 		{
 			name: "stream=true",
 			req: inference.Request{
-				Model:    inference.Model{Name: "m"},
+				Model:    model.Model{Name: "m"},
 				Messages: content.AgenticMessages{userMsg(textBlock("stream me"))},
 			},
 		},
@@ -779,7 +780,7 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 // TestEncodeRequest_Sampling locks the reshaped-domain sampling migration:
 //   - effective sampling is Request.Override when non-nil, else Model.Sampling;
 //   - Temperature/TopP/MaxTokens/Stop from the effective Sampling reach the wire;
-//   - inference.Effort maps to the reasoning_effort wire value, with EffortNone (and
+//   - model.Effort maps to the reasoning_effort wire value, with EffortNone (and
 //     any unknown value, fail-safe) omitting the field and EffortMax clamping to
 //     "high" (OpenAI's o-series accepts only low|medium|high — there is no "max").
 func TestEncodeRequest_Sampling(t *testing.T) {
@@ -793,8 +794,8 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 
 	cases := []struct {
 		name          string
-		model         inference.Model
-		override      *inference.Sampling
+		model         model.Model
+		override      *model.Sampling
 		wantTemp      *float64 // nil = temperature key must be absent
 		wantTopP      *float64 // nil = top_p key must be absent
 		wantMaxTokens *int     // nil = max_tokens key must be absent
@@ -803,7 +804,7 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 	}{
 		{
 			name:          "model sampling: temperature/top_p/max_tokens/stop on wire",
-			model:         inference.Model{Name: "m", Sampling: inference.Sampling{Temperature: &temp, TopP: &topP, MaxTokens: &maxTok, Stop: stopVals}},
+			model:         model.Model{Name: "m", Sampling: model.Sampling{Temperature: &temp, TopP: &topP, MaxTokens: &maxTok, Stop: stopVals}},
 			wantTemp:      &temp,
 			wantTopP:      &topP,
 			wantMaxTokens: &maxTok,
@@ -811,40 +812,40 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 		},
 		{
 			name:       "effort none omits reasoning_effort",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.EffortNone}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortNone}},
 			wantEffort: "",
 		},
 		{
 			name:       "effort low maps to low",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.EffortLow}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortLow}},
 			wantEffort: "low",
 		},
 		{
 			name:       "effort medium maps to medium",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.EffortMedium}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortMedium}},
 			wantEffort: "medium",
 		},
 		{
 			name:       "effort high maps to high",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.EffortHigh}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortHigh}},
 			wantEffort: "high",
 		},
 		{
 			name:       "effort max clamps to high",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.EffortMax}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortMax}},
 			wantEffort: "high",
 		},
 		{
 			// Unknown enum value hits the fail-safe default branch: omit rather
 			// than forward a value the server would reject.
 			name:       "unknown effort value omits reasoning_effort",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Effort: inference.Effort("garbage")}},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.Effort("garbage")}},
 			wantEffort: "",
 		},
 		{
 			name:       "override wins over model sampling",
-			model:      inference.Model{Name: "m", Sampling: inference.Sampling{Temperature: &temp, Effort: inference.EffortLow}},
-			override:   &inference.Sampling{Temperature: &overrideTemp, Effort: inference.EffortMax},
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Temperature: &temp, Effort: model.EffortLow}},
+			override:   &model.Sampling{Temperature: &overrideTemp, Effort: model.EffortMax},
 			wantTemp:   &overrideTemp,
 			wantEffort: "high",
 		},

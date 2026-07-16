@@ -8,7 +8,8 @@ import (
 	"bufio"
 	"io"
 
-	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
+	stream "github.com/looprig/inference/stream"
 )
 
 // maxLineBytes bounds a single NDJSON line so a buggy server cannot force unbounded
@@ -32,29 +33,29 @@ func (e *FramerError) Error() string {
 func (e *FramerError) Unwrap() error { return e.Err }
 
 // Compile-time proof that the package satisfies the framer contract.
-var _ inference.StreamFramer = framer{}
+var _ codec.StreamFramer = framer{}
 
 type framer struct{}
 
-func (framer) DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.StreamFrame], error) {
+func (framer) DecodeStreamFrames(body io.ReadCloser) (*stream.StreamReader[stream.StreamFrame], error) {
 	return DecodeStreamFrames(body)
 }
 
 // Framer returns the package's StreamFramer as an interface value, for callers that
-// inject an inference.StreamFramer.
-func Framer() inference.StreamFramer { return framer{} }
+// inject an codec.StreamFramer.
+func Framer() codec.StreamFramer { return framer{} }
 
 // DecodeStreamFrames frames an NDJSON body into one StreamFrame per non-empty line. It
 // owns body: the returned reader's Close closes body; on an early error (nil body)
 // there is no body to close.
-func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.StreamFrame], error) {
+func DecodeStreamFrames(body io.ReadCloser) (*stream.StreamReader[stream.StreamFrame], error) {
 	if body == nil {
 		return nil, &FramerError{Reason: "nil body"}
 	}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxLineBytes)
 
-	next := func() (inference.StreamFrame, error) {
+	next := func() (stream.StreamFrame, error) {
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			if len(line) == 0 {
@@ -63,13 +64,13 @@ func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.S
 			// scanner.Bytes() aliases the scan buffer; copy so the frame is stable.
 			out := make([]byte, len(line))
 			copy(out, line)
-			return inference.StreamFrame{Data: out}, nil
+			return stream.StreamFrame{Data: out}, nil
 		}
 		if err := scanner.Err(); err != nil {
-			return inference.StreamFrame{}, &FramerError{Reason: "read stream", Err: err}
+			return stream.StreamFrame{}, &FramerError{Reason: "read stream", Err: err}
 		}
-		return inference.StreamFrame{}, io.EOF
+		return stream.StreamFrame{}, io.EOF
 	}
 
-	return inference.NewStreamReader(next, body.Close), nil
+	return stream.NewStreamReader(next, body.Close), nil
 }

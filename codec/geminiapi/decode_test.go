@@ -9,6 +9,8 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
+	failure "github.com/looprig/inference/failure"
+	usage "github.com/looprig/inference/usage"
 )
 
 // TestDecodeResponse_CompileTimeCheck asserts the exact signature of DecodeResponse.
@@ -40,30 +42,30 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		name       string
 		usageField string
 		want       *content.Usage
-		wantField  inference.UsageNormalizationField
-		wantReason inference.UsageNormalizationReason
+		wantField  usage.UsageNormalizationField
+		wantReason usage.UsageNormalizationReason
 	}{
 		{name: "absent usage is unknown", want: nil},
 		{name: "present zero is known", usageField: `,"usageMetadata":{}`, want: &content.Usage{}},
 		{name: "cache read and thoughts are disjoint", usageField: `,"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":3,"candidatesTokenCount":5,"thoughtsTokenCount":2}`, want: &content.Usage{InputTokens: 7, OutputTokens: 7, CacheReadTokens: 3, ReasoningTokens: 2}},
-		{name: "negative prompt", usageField: `,"usageMetadata":{"promptTokenCount":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative cache read", usageField: `,"usageMetadata":{"cachedContentTokenCount":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":-1}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "null prompt", usageField: `,"usageMetadata":{"promptTokenCount":null}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNull},
-		{name: "fractional candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":1.5}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "out of range thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":9223372036854775808}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
-		{name: "cache exceeds prompt", usageField: `,"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
+		{name: "negative prompt", usageField: `,"usageMetadata":{"promptTokenCount":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":-1}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usageMetadata":{"cachedContentTokenCount":-1}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":-1}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "null prompt", usageField: `,"usageMetadata":{"promptTokenCount":null}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "fractional candidates", usageField: `,"usageMetadata":{"candidatesTokenCount":1.5}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "out of range thoughts", usageField: `,"usageMetadata":{"thoughtsTokenCount":9223372036854775808}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
+		{name: "cache exceeds prompt", usageField: `,"usageMetadata":{"promptTokenCount":2,"cachedContentTokenCount":3}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonComponentsExceedTotal},
 		{name: "max int sum is representable", usageField: fmt.Sprintf(`,"usageMetadata":{"candidatesTokenCount":%d,"thoughtsTokenCount":%d}`, maxInt, maxInt), want: &content.Usage{OutputTokens: content.TokenCount(maxInt) + content.TokenCount(maxInt), ReasoningTokens: content.TokenCount(maxInt)}},
 		{name: "total absent", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
 		{name: "explicit zero total exact", usageField: `,"usageMetadata":{"totalTokenCount":0}`, want: &content.Usage{}},
-		{name: "explicit zero total mismatch", usageField: `,"usageMetadata":{"promptTokenCount":1,"totalTokenCount":0}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonTotalMismatch},
-		{name: "negative total", usageField: `,"usageMetadata":{"totalTokenCount":-1}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "null total", usageField: `,"usageMetadata":{"totalTokenCount":null}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonNull},
-		{name: "fractional total", usageField: `,"usageMetadata":{"totalTokenCount":1.5}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "out of range total", usageField: `,"usageMetadata":{"totalTokenCount":9223372036854775808}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
+		{name: "explicit zero total mismatch", usageField: `,"usageMetadata":{"promptTokenCount":1,"totalTokenCount":0}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonTotalMismatch},
+		{name: "negative total", usageField: `,"usageMetadata":{"totalTokenCount":-1}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "null total", usageField: `,"usageMetadata":{"totalTokenCount":null}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "fractional total", usageField: `,"usageMetadata":{"totalTokenCount":1.5}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "out of range total", usageField: `,"usageMetadata":{"totalTokenCount":9223372036854775808}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
 		{name: "exact nonzero total", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4,"totalTokenCount":9}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
-		{name: "component total overflows", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":2,"totalTokenCount":0}`, wantField: inference.UsageNormalizationFieldTotalTokens, wantReason: inference.UsageNormalizationReasonOverflow},
+		{name: "component total overflows", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":2,"totalTokenCount":0}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonOverflow},
 		{name: "maximum total boundary", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"totalTokenCount":9223372036854775807}`, want: &content.Usage{InputTokens: 9223372036854775807}},
 	}
 
@@ -73,7 +75,7 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 			body := []byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]` + tt.usageField + `}`)
 			response, err := geminiapi.DecodeResponse(body)
 			if tt.wantReason != "" {
-				var normalizationErr *inference.UsageNormalizationError
+				var normalizationErr *usage.UsageNormalizationError
 				if !errors.As(err, &normalizationErr) {
 					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
 				}
@@ -214,9 +216,9 @@ func TestDecodeResponse(t *testing.T) {
 					t.Fatal("expected error, got nil")
 				}
 				if tc.wantAPIErr {
-					apiErr, ok := err.(*inference.APIError)
+					apiErr, ok := err.(*failure.APIError)
 					if !ok {
-						t.Fatalf("expected *inference.APIError, got %T: %v", err, err)
+						t.Fatalf("expected *failure.APIError, got %T: %v", err, err)
 					}
 					if tc.wantNoCandido && apiErr.Status != 0 {
 						t.Errorf("no-candidates APIError: want Status=0, got %d", apiErr.Status)

@@ -7,31 +7,32 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/wire/jsonbody"
 )
 
-// Codec is the Anthropic Messages API wire dialect expressed as an inference.Codec
-// (and, via DecodeStream, an inference.StreamingCodec). It is stateless (an empty
+// Codec is the Anthropic Messages API wire dialect expressed as an codec.Codec
+// (and, via DecodeStream, an codec.StreamingCodec). It is stateless (an empty
 // struct with value-receiver methods), so one value is safely shared across
 // goroutines: the transport owns HTTP mechanics, the Codec owns the JSON body,
 // per-event semantics, and SSE stream decoding. The methods delegate to package-level
 // free functions so the method surface and the free surface cannot diverge.
 type Codec struct{}
 
-// Compile-time proof that Codec honors the inference.Codec contract.
-var _ inference.Codec = Codec{}
+// Compile-time proof that Codec honors the codec.Codec contract.
+var _ codec.Codec = Codec{}
 
 // EncodeRequest builds the Anthropic Messages request: a JSON body reader plus the
 // application/json content type as an EncodedRequest. RequestModeStream sets
 // "stream":true in the body, every other mode omits it.
-func (Codec) EncodeRequest(req inference.Request, mode inference.RequestMode) (inference.EncodedRequest, error) {
-	body, err := EncodeRequest(req, mode == inference.RequestModeStream)
+func (Codec) EncodeRequest(req inference.Request, mode codec.RequestMode) (codec.EncodedRequest, error) {
+	body, err := EncodeRequest(req, mode == codec.RequestModeStream)
 	if err != nil {
-		return inference.EncodedRequest{}, err
+		return codec.EncodedRequest{}, err
 	}
 	h := http.Header{}
 	h.Set("Content-Type", jsonbody.ContentType)
-	return inference.EncodedRequest{Header: h, Body: bytes.NewReader(body)}, nil
+	return codec.EncodedRequest{Header: h, Body: bytes.NewReader(body)}, nil
 }
 
 // DecodeResponse parses a non-streaming Anthropic Messages response body,

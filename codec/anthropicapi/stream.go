@@ -5,31 +5,32 @@ import (
 	"net/http"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
+	stream "github.com/looprig/inference/stream"
 	"github.com/looprig/inference/wire/sse"
 )
 
-// Compile-time proof that Codec is a full inference.StreamingCodec.
-var _ inference.StreamingCodec = Codec{}
+// Compile-time proof that Codec is a full codec.StreamingCodec.
+var _ codec.StreamingCodec = Codec{}
 
 // DecodeStream frames a successful Anthropic Messages streaming response with wire/sse
 // and maps each frame through the codec's per-event decode logic. The message_stop
 // marker authorizes the terminal result but yields no chunk; the body's natural
 // EOF ends the transport stream. It owns resp.Body: the returned reader's Close
 // closes it.
-func (Codec) DecodeStream(resp *http.Response) (*inference.StreamReader[content.Chunk], error) {
+func (Codec) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chunk], error) {
 	frames, err := sse.DecodeStreamFrames(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 	collector := &streamResultCollector{}
-	return inference.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
+	return stream.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
 }
 
 // mapFrame decodes one raw SSE frame's Data via the shared per-event decoder. The
 // Anthropic event type lives inside the JSON payload (decodeEvent reads it), so the
 // SSE event Name on the frame is not needed here.
-func mapFrame(f inference.StreamFrame) ([]content.Chunk, error) {
+func mapFrame(f stream.StreamFrame) ([]content.Chunk, error) {
 	return decodeEvent(f.Data)
 }
 
@@ -37,10 +38,10 @@ type streamResultCollector struct {
 	wireUsage       messageUsage
 	usageSeen       bool
 	messageStopSeen bool
-	resultValue     inference.StreamResult
+	resultValue     stream.StreamResult
 }
 
-func (c *streamResultCollector) mapFrame(frame inference.StreamFrame) ([]content.Chunk, error) {
+func (c *streamResultCollector) mapFrame(frame stream.StreamFrame) ([]content.Chunk, error) {
 	var event streamEvent
 	if err := json.Unmarshal(frame.Data, &event); err == nil {
 		if err := c.collect(event); err != nil {
@@ -106,9 +107,9 @@ func (c *streamResultCollector) mergeUsage(update *messageUsage) error {
 	return nil
 }
 
-func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
+func (c *streamResultCollector) result() (stream.StreamResult, bool, error) {
 	if !c.messageStopSeen {
-		return inference.StreamResult{}, false, nil
+		return stream.StreamResult{}, false, nil
 	}
 	if !c.usageSeen {
 		c.resultValue.Usage = nil
@@ -116,17 +117,17 @@ func (c *streamResultCollector) result() (inference.StreamResult, bool, error) {
 	return c.resultValue, true, nil
 }
 
-func mapFinishReason(reason string) inference.FinishReason {
+func mapFinishReason(reason string) stream.FinishReason {
 	switch reason {
 	case "end_turn", "stop_sequence", "pause_turn":
-		return inference.FinishReasonStop
+		return stream.FinishReasonStop
 	case "max_tokens":
-		return inference.FinishReasonLength
+		return stream.FinishReasonLength
 	case "tool_use":
-		return inference.FinishReasonToolUse
+		return stream.FinishReasonToolUse
 	case "refusal":
-		return inference.FinishReasonContentFilter
+		return stream.FinishReasonContentFilter
 	default:
-		return inference.FinishReasonUnknown
+		return stream.FinishReasonUnknown
 	}
 }

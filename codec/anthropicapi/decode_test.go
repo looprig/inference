@@ -7,6 +7,8 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
+	failure "github.com/looprig/inference/failure"
+	usage "github.com/looprig/inference/usage"
 )
 
 // TestDecodeResponse_CompileTimeCheck pins the free function signature.
@@ -38,19 +40,19 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		name       string
 		usageField string
 		want       *content.Usage
-		wantField  inference.UsageNormalizationField
-		wantReason inference.UsageNormalizationReason
+		wantField  usage.UsageNormalizationField
+		wantReason usage.UsageNormalizationReason
 	}{
 		{name: "absent usage is unknown", want: nil},
 		{name: "present zero is known", usageField: `,"usage":{}`, want: &content.Usage{}},
 		{name: "cache categories are disjoint", usageField: `,"usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}`, want: &content.Usage{InputTokens: 5, OutputTokens: 6, CacheReadTokens: 3, CacheCreationTokens: 2}},
-		{name: "negative input", usageField: `,"usage":{"input_tokens":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative output", usageField: `,"usage":{"output_tokens":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative cache read", usageField: `,"usage":{"cache_read_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative cache creation", usageField: `,"usage":{"cache_creation_input_tokens":-1}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "null cache creation", usageField: `,"usage":{"cache_creation_input_tokens":null}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNull},
-		{name: "fractional input", usageField: `,"usage":{"input_tokens":1.5}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "out of range output", usageField: `,"usage":{"output_tokens":9223372036854775808}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
+		{name: "negative input", usageField: `,"usage":{"input_tokens":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative output", usageField: `,"usage":{"output_tokens":-1}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usage":{"cache_read_input_tokens":-1}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative cache creation", usageField: `,"usage":{"cache_creation_input_tokens":-1}`, wantField: usage.UsageNormalizationFieldCacheCreationTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "null cache creation", usageField: `,"usage":{"cache_creation_input_tokens":null}`, wantField: usage.UsageNormalizationFieldCacheCreationTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "fractional input", usageField: `,"usage":{"input_tokens":1.5}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "out of range output", usageField: `,"usage":{"output_tokens":9223372036854775808}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
 	}
 
 	for _, tt := range tests {
@@ -59,7 +61,7 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 			body := []byte(`{"type":"message","model":"claude-test","content":[{"type":"text","text":"ok"}]` + tt.usageField + `}`)
 			response, err := anthropicapi.DecodeResponse(body)
 			if tt.wantReason != "" {
-				var normalizationErr *inference.UsageNormalizationError
+				var normalizationErr *usage.UsageNormalizationError
 				if !errors.As(err, &normalizationErr) {
 					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
 				}
@@ -241,9 +243,9 @@ func TestDecodeResponse(t *testing.T) {
 			}
 			if tc.wantErr {
 				if tc.wantAPIErr {
-					var apiErr *inference.APIError
+					var apiErr *failure.APIError
 					if !errors.As(err, &apiErr) {
-						t.Errorf("error = %v, want *inference.APIError", err)
+						t.Errorf("error = %v, want *failure.APIError", err)
 					}
 				}
 				return

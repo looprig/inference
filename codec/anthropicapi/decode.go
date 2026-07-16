@@ -5,12 +5,14 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	failure "github.com/looprig/inference/failure"
 	"github.com/looprig/inference/internal/usagenorm"
+	usage "github.com/looprig/inference/usage"
 )
 
 // DecodeResponse parses a non-streaming Anthropic Messages API response body into
 // a provider-neutral *inference.Response. An `error`-type envelope (a 200 body carrying
-// {"type":"error",...}) is surfaced as an *inference.APIError. An empty content array
+// {"type":"error",...}) is surfaced as a *failure.APIError. An empty content array
 // is a valid response (e.g. a refusal or a pure stop), not an error.
 func DecodeResponse(body []byte) (*inference.Response, error) {
 	var wire messageResponse
@@ -23,7 +25,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 		if wire.Error != nil && wire.Error.Message != "" {
 			msg = wire.Error.Message
 		}
-		return nil, &inference.APIError{Status: 0, Message: msg, Body: body}
+		return nil, &failure.APIError{Status: 0, Message: msg, Body: body}
 	}
 
 	usage, err := normalizeUsage(wire.Usage)
@@ -49,7 +51,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}, nil
 }
 
-func normalizeUsage(wire *messageUsage) (*inference.Usage, error) {
+func normalizeUsage(wire *messageUsage) (*usage.Usage, error) {
 	if wire == nil {
 		return nil, nil
 	}
@@ -69,7 +71,7 @@ func normalizeUsage(wire *messageUsage) (*inference.Usage, error) {
 	if err != nil {
 		return nil, err
 	}
-	usage := inference.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation}
+	usage := usage.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation}
 	if err := usagenorm.ValidateUsage(usage); err != nil {
 		return nil, err
 	}

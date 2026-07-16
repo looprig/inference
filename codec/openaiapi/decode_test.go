@@ -8,6 +8,8 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/openaiapi"
+	failure "github.com/looprig/inference/failure"
+	usage "github.com/looprig/inference/usage"
 )
 
 // TestDecodeResponse_CompileTimeCheck asserts the exact signature of DecodeResponse.
@@ -23,8 +25,8 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		name       string
 		usageField string
 		want       *content.Usage
-		wantField  inference.UsageNormalizationField
-		wantReason inference.UsageNormalizationReason
+		wantField  usage.UsageNormalizationField
+		wantReason usage.UsageNormalizationReason
 	}{
 		{name: "absent usage is unknown", want: nil},
 		{name: "present zero is known", usageField: `,"usage":{}`, want: &content.Usage{}},
@@ -33,16 +35,16 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 			usageField: `,"usage":{"prompt_tokens":10,"completion_tokens":6,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"completion_tokens_details":{"reasoning_tokens":4}}`,
 			want:       &content.Usage{InputTokens: 5, OutputTokens: 6, CacheReadTokens: 3, CacheCreationTokens: 2, ReasoningTokens: 4},
 		},
-		{name: "negative prompt", usageField: `,"usage":{"prompt_tokens":-1}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative completion", usageField: `,"usage":{"completion_tokens":-1}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative cache creation", usageField: `,"usage":{"prompt_tokens_details":{"cache_write_tokens":-1}}`, wantField: inference.UsageNormalizationFieldCacheCreationTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "negative reasoning", usageField: `,"usage":{"completion_tokens_details":{"reasoning_tokens":-1}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonNegative},
-		{name: "null prompt", usageField: `,"usage":{"prompt_tokens":null}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonNull},
-		{name: "fractional completion", usageField: `,"usage":{"completion_tokens":1.5}`, wantField: inference.UsageNormalizationFieldOutputTokens, wantReason: inference.UsageNormalizationReasonFractional},
-		{name: "out of range cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":9223372036854775808}}`, wantField: inference.UsageNormalizationFieldCacheReadTokens, wantReason: inference.UsageNormalizationReasonOutOfRange},
-		{name: "cache totals exceed prompt", usageField: `,"usage":{"prompt_tokens":4,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}`, wantField: inference.UsageNormalizationFieldInputTokens, wantReason: inference.UsageNormalizationReasonComponentsExceedTotal},
-		{name: "reasoning exceeds output", usageField: `,"usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":3}}`, wantField: inference.UsageNormalizationFieldReasoningTokens, wantReason: inference.UsageNormalizationReasonReasoningExceedsOutput},
+		{name: "negative prompt", usageField: `,"usage":{"prompt_tokens":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative completion", usageField: `,"usage":{"completion_tokens":-1}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":-1}}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative cache creation", usageField: `,"usage":{"prompt_tokens_details":{"cache_write_tokens":-1}}`, wantField: usage.UsageNormalizationFieldCacheCreationTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "negative reasoning", usageField: `,"usage":{"completion_tokens_details":{"reasoning_tokens":-1}}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "null prompt", usageField: `,"usage":{"prompt_tokens":null}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "fractional completion", usageField: `,"usage":{"completion_tokens":1.5}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonFractional},
+		{name: "out of range cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":9223372036854775808}}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
+		{name: "cache totals exceed prompt", usageField: `,"usage":{"prompt_tokens":4,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonComponentsExceedTotal},
+		{name: "reasoning exceeds output", usageField: `,"usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":3}}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput},
 	}
 
 	for _, tt := range tests {
@@ -51,7 +53,7 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 			body := []byte(`{"model":"gpt-test","choices":[{"message":{"role":"assistant","content":"ok"}}]` + tt.usageField + `}`)
 			response, err := openaiapi.DecodeResponse(body)
 			if tt.wantReason != "" {
-				var normalizationErr *inference.UsageNormalizationError
+				var normalizationErr *usage.UsageNormalizationError
 				if !errors.As(err, &normalizationErr) {
 					t.Fatalf("DecodeResponse() error = %T %v, want *UsageNormalizationError", err, err)
 				}
@@ -291,9 +293,9 @@ func TestDecodeResponse(t *testing.T) {
 					t.Fatalf("expected error, got nil")
 				}
 				if tc.wantAPIErr {
-					apiErr, ok := err.(*inference.APIError)
+					apiErr, ok := err.(*failure.APIError)
 					if !ok {
-						t.Fatalf("expected *inference.APIError, got %T: %v", err, err)
+						t.Fatalf("expected *failure.APIError, got %T: %v", err, err)
 					}
 					if tc.wantNoChoices && apiErr.Status != 0 {
 						t.Errorf("no-choices APIError: want Status=0, got %d", apiErr.Status)

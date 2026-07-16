@@ -13,7 +13,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
+	stream "github.com/looprig/inference/stream"
 )
 
 // maxLineBytes bounds a single SSE line so a hostile or buggy server cannot force
@@ -45,26 +46,26 @@ func (e *FramerError) Unwrap() error { return e.Err }
 
 // Compile-time proof that the package-level DecodeStreamFrames satisfies the framer
 // contract via the framer adapter below.
-var _ inference.StreamFramer = framer{}
+var _ codec.StreamFramer = framer{}
 
-// framer is a value adapter so a caller can hold an inference.StreamFramer; the
+// framer is a value adapter so a caller can hold an codec.StreamFramer; the
 // package-level DecodeStreamFrames is the ordinary entry point.
 type framer struct{}
 
-func (framer) DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.StreamFrame], error) {
+func (framer) DecodeStreamFrames(body io.ReadCloser) (*stream.StreamReader[stream.StreamFrame], error) {
 	return DecodeStreamFrames(body)
 }
 
 // Framer returns the package's StreamFramer as an interface value, for callers that
-// inject an inference.StreamFramer.
-func Framer() inference.StreamFramer { return framer{} }
+// inject an codec.StreamFramer.
+func Framer() codec.StreamFramer { return framer{} }
 
-// DecodeStreamFrames frames an SSE body into raw inference.StreamFrames. It owns body:
+// DecodeStreamFrames frames an SSE body into raw stream.StreamFrames. It owns body:
 // the returned reader's Close closes body; on an early error (nil body) there is no
 // body to close. Framing itself is lazy — each Next() reads lines until it completes a
 // frame (blank line) or reaches EOF; a trailing unterminated event with buffered data
 // is flushed once at EOF rather than discarded.
-func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.StreamFrame], error) {
+func DecodeStreamFrames(body io.ReadCloser) (*stream.StreamReader[stream.StreamFrame], error) {
 	if body == nil {
 		return nil, &FramerError{Reason: "nil body"}
 	}
@@ -72,7 +73,7 @@ func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.S
 	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxLineBytes)
 	scanner.Split(scanSSELines)
 
-	next := func() (inference.StreamFrame, error) {
+	next := func() (stream.StreamFrame, error) {
 		var data bytes.Buffer
 		var event string
 		haveData := false
@@ -103,7 +104,7 @@ func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.S
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			return inference.StreamFrame{}, &FramerError{Reason: "read stream", Err: err}
+			return stream.StreamFrame{}, &FramerError{Reason: "read stream", Err: err}
 		}
 		// End of stream: flush a trailing event whose blank-line terminator never
 		// arrived, so a server that closes without a final "\n\n" still delivers its
@@ -111,20 +112,20 @@ func DecodeStreamFrames(body io.ReadCloser) (*inference.StreamReader[inference.S
 		if haveData {
 			return makeFrame(event, &data), nil
 		}
-		return inference.StreamFrame{}, io.EOF
+		return stream.StreamFrame{}, io.EOF
 	}
 
-	return inference.NewStreamReader(next, body.Close), nil
+	return stream.NewStreamReader(next, body.Close), nil
 }
 
 // makeFrame builds a StreamFrame from the accumulated event name and data buffer,
 // stripping the single trailing newline the accumulation loop appended and copying the
 // bytes so the frame never aliases the reusable buffer.
-func makeFrame(event string, data *bytes.Buffer) inference.StreamFrame {
+func makeFrame(event string, data *bytes.Buffer) stream.StreamFrame {
 	b := bytes.TrimSuffix(data.Bytes(), []byte{'\n'})
 	out := make([]byte, len(b))
 	copy(out, b)
-	return inference.StreamFrame{Name: event, Data: out}
+	return stream.StreamFrame{Name: event, Data: out}
 }
 
 // scanSSELines is a bufio.SplitFunc that splits a stream on any of the three SSE line

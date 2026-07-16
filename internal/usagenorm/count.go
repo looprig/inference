@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
+	usage "github.com/looprig/inference/usage"
 )
 
 // Count preserves whether a JSON count field was absent and defers semantic
@@ -40,25 +40,25 @@ func (c Count) TokenCount(field Field) (content.TokenCount, error) {
 
 	raw := bytes.TrimSpace(c.raw)
 	if bytes.Equal(raw, []byte("null")) {
-		return 0, scalarError(normalizedField, inference.UsageNormalizationReasonNull)
+		return 0, scalarError(normalizedField, usage.UsageNormalizationReasonNull)
 	}
 	if !isNumber(raw) {
-		return 0, scalarError(normalizedField, inference.UsageNormalizationReasonInvalidType)
+		return 0, scalarError(normalizedField, usage.UsageNormalizationReasonInvalidType)
 	}
 	if bytes.ContainsAny(raw, ".eE") {
-		return 0, scalarError(normalizedField, inference.UsageNormalizationReasonFractional)
+		return 0, scalarError(normalizedField, usage.UsageNormalizationReasonFractional)
 	}
 
 	value, parseErr := strconv.ParseInt(string(raw), 10, 64)
 	if parseErr != nil {
 		if errors.Is(parseErr, strconv.ErrRange) {
-			return 0, scalarError(normalizedField, inference.UsageNormalizationReasonOutOfRange)
+			return 0, scalarError(normalizedField, usage.UsageNormalizationReasonOutOfRange)
 		}
-		return 0, scalarError(normalizedField, inference.UsageNormalizationReasonInvalidType)
+		return 0, scalarError(normalizedField, usage.UsageNormalizationReasonInvalidType)
 	}
 	if value < 0 {
-		return 0, &inference.UsageNormalizationError{
-			Field: normalizedField, Reason: inference.UsageNormalizationReasonNegative, Value: value,
+		return 0, &usage.UsageNormalizationError{
+			Field: normalizedField, Reason: usage.UsageNormalizationReasonNegative, Value: value,
 		}
 	}
 	return content.TokenCount(value), nil
@@ -68,6 +68,6 @@ func isNumber(raw []byte) bool {
 	return len(raw) > 0 && (raw[0] == '-' || raw[0] >= '0' && raw[0] <= '9')
 }
 
-func scalarError(field inference.UsageNormalizationField, reason inference.UsageNormalizationReason) error {
-	return &inference.UsageNormalizationError{Field: field, Reason: reason}
+func scalarError(field usage.UsageNormalizationField, reason usage.UsageNormalizationReason) error {
+	return &usage.UsageNormalizationError{Field: field, Reason: reason}
 }

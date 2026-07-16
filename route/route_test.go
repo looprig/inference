@@ -6,13 +6,15 @@ import (
 	"testing"
 
 	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
+	model "github.com/looprig/inference/model"
 	"github.com/looprig/inference/route"
 )
 
 // Compile-time proof the builders satisfy the Router contract.
 var (
-	_ inference.Router = route.StaticChat("/chat/completions")
-	_ inference.Router = route.GeminiGenerateContent()
+	_ route.Router = route.StaticChat("/chat/completions")
+	_ route.Router = route.GeminiGenerateContent()
 )
 
 func TestStaticChat(t *testing.T) {
@@ -22,13 +24,13 @@ func TestStaticChat(t *testing.T) {
 		name    string
 		path    string
 		base    string
-		mode    inference.RequestMode
+		mode    codec.RequestMode
 		wantURL string
 	}{
-		{name: "openai invoke", path: "/chat/completions", base: "https://api.openai.test/v1", mode: inference.RequestModeInvoke, wantURL: "https://api.openai.test/v1/chat/completions"},
-		{name: "openai stream same url", path: "/chat/completions", base: "https://api.openai.test/v1", mode: inference.RequestModeStream, wantURL: "https://api.openai.test/v1/chat/completions"},
-		{name: "anthropic invoke", path: "/messages", base: "https://api.anthropic.test/v1", mode: inference.RequestModeInvoke, wantURL: "https://api.anthropic.test/v1/messages"},
-		{name: "trailing slash on base trimmed", path: "/messages", base: "https://api.anthropic.test/v1/", mode: inference.RequestModeStream, wantURL: "https://api.anthropic.test/v1/messages"},
+		{name: "openai invoke", path: "/chat/completions", base: "https://api.openai.test/v1", mode: codec.RequestModeInvoke, wantURL: "https://api.openai.test/v1/chat/completions"},
+		{name: "openai stream same url", path: "/chat/completions", base: "https://api.openai.test/v1", mode: codec.RequestModeStream, wantURL: "https://api.openai.test/v1/chat/completions"},
+		{name: "anthropic invoke", path: "/messages", base: "https://api.anthropic.test/v1", mode: codec.RequestModeInvoke, wantURL: "https://api.anthropic.test/v1/messages"},
+		{name: "trailing slash on base trimmed", path: "/messages", base: "https://api.anthropic.test/v1/", mode: codec.RequestModeStream, wantURL: "https://api.anthropic.test/v1/messages"},
 	}
 
 	for _, tc := range cases {
@@ -54,14 +56,14 @@ func TestGeminiGenerateContent(t *testing.T) {
 	t.Parallel()
 
 	model := func(name string) inference.Request {
-		return inference.Request{Model: inference.Model{Name: name}}
+		return inference.Request{Model: model.Model{Name: name}}
 	}
 
 	cases := []struct {
 		name    string
 		req     inference.Request
 		base    string
-		mode    inference.RequestMode
+		mode    codec.RequestMode
 		wantURL string
 		wantErr bool
 	}{
@@ -69,28 +71,28 @@ func TestGeminiGenerateContent(t *testing.T) {
 			name:    "invoke uses generateContent with model in path",
 			req:     model("gemini-2.5-pro"),
 			base:    "https://gen.googleapis.test/v1beta",
-			mode:    inference.RequestModeInvoke,
+			mode:    codec.RequestModeInvoke,
 			wantURL: "https://gen.googleapis.test/v1beta/models/gemini-2.5-pro:generateContent",
 		},
 		{
 			name:    "stream uses streamGenerateContent with alt=sse",
 			req:     model("gemini-2.5-flash"),
 			base:    "https://gen.googleapis.test/v1beta",
-			mode:    inference.RequestModeStream,
+			mode:    codec.RequestModeStream,
 			wantURL: "https://gen.googleapis.test/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
 		},
 		{
 			name:    "trailing slash trimmed",
 			req:     model("m"),
 			base:    "https://gen.googleapis.test/v1beta/",
-			mode:    inference.RequestModeInvoke,
+			mode:    codec.RequestModeInvoke,
 			wantURL: "https://gen.googleapis.test/v1beta/models/m:generateContent",
 		},
 		{
 			name:    "empty model name is an error",
 			req:     model(""),
 			base:    "https://gen.googleapis.test/v1beta",
-			mode:    inference.RequestModeInvoke,
+			mode:    codec.RequestModeInvoke,
 			wantErr: true,
 		},
 	}

@@ -8,8 +8,9 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
+	stream "github.com/looprig/inference/stream"
+	usage "github.com/looprig/inference/usage"
 )
 
 func TestGeminiStreamResult(t *testing.T) {
@@ -20,7 +21,7 @@ func TestGeminiStreamResult(t *testing.T) {
 		body       string
 		wantUsage  *content.Usage
 		wantModel  string
-		wantReason inference.FinishReason
+		wantReason stream.FinishReason
 		wantErr    bool
 		interrupt  bool
 		wantChunks int
@@ -31,13 +32,13 @@ func TestGeminiStreamResult(t *testing.T) {
 				"data: {\"modelVersion\":\"gemini-test-v2\",\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"cachedContentTokenCount\":4,\"thoughtsTokenCount\":2,\"totalTokenCount\":17}}\n\n",
 			wantUsage:  &content.Usage{InputTokens: 6, OutputTokens: 7, CacheReadTokens: 4, ReasoningTokens: 2},
 			wantModel:  "gemini-test-v2",
-			wantReason: inference.FinishReasonStop,
+			wantReason: stream.FinishReasonStop,
 		},
-		{name: "function call stop maps to tool use", body: "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\n", wantReason: inference.FinishReasonToolUse, wantChunks: 1},
-		{name: "split function call then STOP remains tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1}}\n\n", wantReason: inference.FinishReasonToolUse, wantUsage: &content.Usage{InputTokens: 1}, wantChunks: 1},
-		{name: "split function call then length overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n", wantReason: inference.FinishReasonLength, wantChunks: 1},
-		{name: "split function call then safety overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: inference.FinishReasonContentFilter, wantChunks: 1},
-		{name: "safety finish is provider-neutral", body: "data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: inference.FinishReasonContentFilter},
+		{name: "function call stop maps to tool use", body: "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\n", wantReason: stream.FinishReasonToolUse, wantChunks: 1},
+		{name: "split function call then STOP remains tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1}}\n\n", wantReason: stream.FinishReasonToolUse, wantUsage: &content.Usage{InputTokens: 1}, wantChunks: 1},
+		{name: "split function call then length overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n", wantReason: stream.FinishReasonLength, wantChunks: 1},
+		{name: "split function call then safety overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: stream.FinishReasonContentFilter, wantChunks: 1},
+		{name: "safety finish is provider-neutral", body: "data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: stream.FinishReasonContentFilter},
 		{name: "missing trailers remains clean", body: "data: {\"candidates\":[]}\n\n"},
 		{name: "null count fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":null}}\n\n", wantErr: true},
 		{name: "malformed count type fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":\"many\"}}\n\n", wantErr: true},
@@ -72,7 +73,7 @@ func TestGeminiStreamResult(t *testing.T) {
 					if errors.Is(err, io.EOF) {
 						t.Fatalf("Next() error = EOF, want terminal decode failure")
 					}
-					var normalizationErr *inference.UsageNormalizationError
+					var normalizationErr *usage.UsageNormalizationError
 					if !errors.As(err, &normalizationErr) {
 						t.Fatalf("Next() error = %T %v, want UsageNormalizationError", err, err)
 					}
@@ -114,7 +115,7 @@ func TestGeminiStreamResult(t *testing.T) {
 	}
 }
 
-func assertGeminiUsageSnapshot(t *testing.T, stream *inference.StreamReader[content.Chunk], usage *content.Usage) {
+func assertGeminiUsageSnapshot(t *testing.T, stream *stream.StreamReader[content.Chunk], usage *content.Usage) {
 	t.Helper()
 	if usage == nil {
 		return
