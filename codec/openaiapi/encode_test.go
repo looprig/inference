@@ -3,6 +3,7 @@ package openaiapi_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -88,6 +89,211 @@ func thinkingBlock(text string) content.Block {
 
 func toolUseBlock(id, name string, input json.RawMessage) content.Block {
 	return &content.ToolUseBlock{ID: id, Name: name, Input: input}
+}
+
+func structuredOutput() *inference.OutputSchema {
+	return &inference.OutputSchema{
+		Name:        "answer",
+		Description: "One answer",
+		Strict:      true,
+		Schema:      json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`),
+	}
+}
+
+func structuredModel(withTools bool) model.Model {
+	m := model.Model{Name: "gpt-4o"}
+	m.Caps.StructuredOutput = true
+	if withTools {
+		m.Caps.Tools = true
+		m.Caps.StructuredOutputWithTools = true
+	}
+	return m
+}
+
+func TestEncodeRequestStructuredOutput(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: structuredModel(false), Output: structuredOutput()}
+	body, err := openaiapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+
+	var wire struct {
+		ResponseFormat *struct {
+			Type       string `json:"type"`
+			JSONSchema *struct {
+				Name        string          `json:"name"`
+				Description json.RawMessage `json:"description"`
+				Strict      bool            `json:"strict"`
+				Schema      json.RawMessage `json:"schema"`
+			} `json:"json_schema"`
+		} `json:"response_format"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if wire.ResponseFormat == nil || wire.ResponseFormat.JSONSchema == nil {
+		t.Fatalf("response_format.json_schema missing: %s", body)
+	}
+	got := wire.ResponseFormat.JSONSchema
+	if wire.ResponseFormat.Type != "json_schema" || got.Name != "answer" || !got.Strict {
+		t.Errorf("response format = type %q name %q strict %v", wire.ResponseFormat.Type, got.Name, got.Strict)
+	}
+	if got.Description != nil {
+		t.Errorf("response_format.json_schema.description unexpectedly present: %s", got.Description)
+	}
+	if string(got.Schema) != string(req.Output.Schema) {
+		t.Errorf("response_format.json_schema.schema = %s, want %s", got.Schema, req.Output.Schema)
+	}
+	raw := mustDecode(t, body)
+	want := `{"type":"json_schema","json_schema":{"name":"answer","strict":true,"schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}}}`
+	if string(raw["response_format"]) != want {
+		t.Errorf("response_format = %s, want exact %s", raw["response_format"], want)
+	}
+}
+
+func TestEncodeRequestStructuredOutputWithTools(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:      structuredModel(true),
+		Output:     structuredOutput(),
+		ToolChoice: inference.ToolChoiceRequired,
+		Tools: []inference.Tool{{
+			Name:        "lookup",
+			Description: "Look up a value",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}`),
+		}},
+	}
+	body, err := openaiapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var wire struct {
+		ResponseFormat json.RawMessage `json:"response_format"`
+		ToolChoice     string          `json:"tool_choice"`
+		Tools          []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Parameters  json.RawMessage `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if wire.ResponseFormat == nil {
+		t.Fatalf("response_format missing: %s", body)
+	}
+	if wire.ToolChoice != "required" {
+		t.Errorf("tool_choice = %q, want required", wire.ToolChoice)
+	}
+	if len(wire.Tools) != 1 {
+		t.Fatalf("len(tools) = %d, want 1", len(wire.Tools))
+	}
+	tool := wire.Tools[0]
+	if tool.Type != "function" || tool.Function.Name != req.Tools[0].Name || tool.Function.Description != req.Tools[0].Description || string(tool.Function.Parameters) != string(req.Tools[0].Schema) {
+		t.Errorf("tool changed on combined request: %+v", tool)
+	}
+}
+
+func TestBuildChatRequestStructuredOutputValidationPrecedesEncoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		req          inference.Request
+		wantBase     bool
+		wantCombined bool
+		wantSchema   bool
+	}{
+		{
+			name:     "base capability error",
+			req:      inference.Request{Model: model.Model{Name: "unsupported"}, Messages: content.AgenticMessages{nil}, Output: structuredOutput()},
+			wantBase: true,
+		},
+		{
+			name: "combined capability error",
+			req: inference.Request{
+				Model:    model.Model{Name: "unsupported-combined", Caps: model.Capabilities{StructuredOutput: true, Tools: true}},
+				Messages: content.AgenticMessages{nil},
+				Output:   structuredOutput(),
+				Tools:    []inference.Tool{{Name: "lookup"}},
+			},
+			wantCombined: true,
+		},
+		{
+			name: "schema error",
+			req: func() inference.Request {
+				output := structuredOutput()
+				output.Schema = json.RawMessage(`{"type":"array"}`)
+				return inference.Request{Model: structuredModel(false), Messages: content.AgenticMessages{nil}, Output: output}
+			}(),
+			wantSchema: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := openaiapi.BuildChatRequest(tt.req, false)
+			if tt.wantBase {
+				var target *inference.StructuredOutputUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("BuildChatRequest() error = %T %v, want *StructuredOutputUnsupportedError", err, err)
+				}
+			}
+			if tt.wantCombined {
+				var target *inference.StructuredOutputWithToolsUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("BuildChatRequest() error = %T %v, want *StructuredOutputWithToolsUnsupportedError", err, err)
+				}
+			}
+			if tt.wantSchema {
+				var target *inference.SchemaValidationError
+				if !errors.As(err, &target) {
+					t.Fatalf("BuildChatRequest() error = %T %v, want *SchemaValidationError", err, err)
+				}
+			}
+		})
+	}
+}
+
+func TestEncodeRequestStructuredOutputStreamParity(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: structuredModel(false), Output: structuredOutput()}
+	oneshoot, err := openaiapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest(non-stream) error = %v", err)
+	}
+	streamed, err := openaiapi.EncodeRequest(req, true)
+	if err != nil {
+		t.Fatalf("EncodeRequest(stream) error = %v", err)
+	}
+	oneshootRaw := mustDecode(t, oneshoot)
+	streamedRaw := mustDecode(t, streamed)
+	if string(oneshootRaw["response_format"]) != string(streamedRaw["response_format"]) {
+		t.Errorf("response_format differs: non-stream %s, stream %s", oneshootRaw["response_format"], streamedRaw["response_format"])
+	}
+	if string(streamedRaw["stream"]) != "true" {
+		t.Errorf("stream = %s, want true", streamedRaw["stream"])
+	}
+}
+
+func TestEncodeRequestNilOutputByteShape(t *testing.T) {
+	t.Parallel()
+
+	body, err := openaiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	const want = `{"model":"m","messages":null}`
+	if string(body) != want {
+		t.Errorf("EncodeRequest() = %s, want byte-identical %s", body, want)
+	}
 }
 
 func TestEncodeRequestIgnoresUsage(t *testing.T) {

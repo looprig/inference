@@ -1,6 +1,7 @@
 package openaiapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -8,14 +9,44 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/inference"
 	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/openaiapi"
+	model "github.com/looprig/inference/model"
 	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
 
 // Compile-time proof the OpenAI codec is a full StreamingCodec.
 var _ codec.StreamingCodec = openaiapi.Codec{}
+
+func TestStreamingRequestPreservesStructuredOutput(t *testing.T) {
+	t.Parallel()
+
+	output := &inference.OutputSchema{
+		Name:   "answer",
+		Strict: true,
+		Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`),
+	}
+	req := inference.Request{
+		Model:  model.Model{Name: "gpt-4o", Caps: model.Capabilities{StructuredOutput: true}},
+		Output: output,
+	}
+	body, err := openaiapi.EncodeRequest(req, true)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var wire struct {
+		Stream         bool            `json:"stream"`
+		ResponseFormat json.RawMessage `json:"response_format"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !wire.Stream || wire.ResponseFormat == nil {
+		t.Errorf("stream request = stream %v response_format %s", wire.Stream, wire.ResponseFormat)
+	}
+}
 
 // closerSpy wraps an io.Reader and records whether Close was called.
 type closerSpy struct {
