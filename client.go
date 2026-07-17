@@ -81,9 +81,10 @@ func ValidateRequestFeatures(req Request) error {
 
 // Response is the complete provider-neutral response.
 type Response struct {
-	Message *content.AIMessage
-	Usage   *content.Usage
-	Model   string
+	Message      *content.AIMessage
+	Usage        *content.Usage
+	Model        string
+	FinishReason stream.FinishReason
 }
 
 // Tool is a callable function definition exposed to the model.

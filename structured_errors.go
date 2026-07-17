@@ -1,5 +1,11 @@
 package inference
 
+import (
+	"crypto/sha256"
+
+	"github.com/looprig/inference/stream"
+)
+
 // SchemaValidationField identifies the output-schema component that failed
 // validation. Values are stable classifications suitable for errors.As callers.
 type SchemaValidationField string
@@ -15,6 +21,7 @@ const (
 	SchemaFieldEnum                 SchemaValidationField = "Enum"
 	SchemaFieldRequired             SchemaValidationField = "Required"
 	SchemaFieldAdditionalProperties SchemaValidationField = "AdditionalProperties"
+	SchemaFieldOutput               SchemaValidationField = "Output"
 )
 
 // SchemaValidationReason identifies why an output-schema component failed
@@ -39,6 +46,8 @@ const (
 	SchemaReasonTypeMismatch      SchemaValidationReason = "type mismatch"
 	SchemaReasonTooDeep           SchemaValidationReason = "too deep"
 	SchemaReasonTooManyProperties SchemaValidationReason = "too many properties"
+	SchemaReasonInvalidTarget     SchemaValidationReason = "invalid target"
+	SchemaReasonDecodeFailed      SchemaValidationReason = "decode failed"
 )
 
 // SchemaValidationError reports a stable, bounded validation classification.
@@ -83,4 +92,44 @@ type StructuredOutputConflictError struct {
 
 func (e *StructuredOutputConflictError) Error() string {
 	return "inference: structured output feature conflict: " + e.Feature
+}
+
+// MalformedStructuredOutputReason is a bounded classification for an invalid
+// structured response representation. It never contains model output.
+type MalformedStructuredOutputReason string
+
+const (
+	MalformedReasonNilResponse           MalformedStructuredOutputReason = "nil response"
+	MalformedReasonNilMessage            MalformedStructuredOutputReason = "nil message"
+	MalformedReasonWrongRole             MalformedStructuredOutputReason = "wrong role"
+	MalformedReasonEmpty                 MalformedStructuredOutputReason = "empty"
+	MalformedReasonMalformedJSON         MalformedStructuredOutputReason = "malformed JSON"
+	MalformedReasonRootNotObject         MalformedStructuredOutputReason = "root is not object"
+	MalformedReasonInvalidRepresentation MalformedStructuredOutputReason = "invalid representation"
+	MalformedReasonAmbiguous             MalformedStructuredOutputReason = "ambiguous"
+	MalformedReasonInvalidBlock          MalformedStructuredOutputReason = "invalid block"
+	MalformedReasonNilBlock              MalformedStructuredOutputReason = "nil block"
+)
+
+// MalformedStructuredOutputError reports bounded metadata about malformed
+// model output. SHA256 and Length support correlation without retaining or
+// exposing the raw output bytes.
+type MalformedStructuredOutputError struct {
+	ReasonCode MalformedStructuredOutputReason
+	Length     int
+	SHA256     [sha256.Size]byte
+}
+
+func (e *MalformedStructuredOutputError) Error() string {
+	return "inference: malformed structured output: " + string(e.ReasonCode)
+}
+
+// StructuredOutputFinishError reports finish metadata that cannot safely
+// produce the requested structured result.
+type StructuredOutputFinishError struct {
+	Reason stream.FinishReason
+}
+
+func (e *StructuredOutputFinishError) Error() string {
+	return "inference: structured output rejected by finish reason"
 }
