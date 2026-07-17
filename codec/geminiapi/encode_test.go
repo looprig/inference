@@ -828,3 +828,239 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeRequest_StructuredOutput(t *testing.T) {
+	t.Parallel()
+
+	schema := json.RawMessage(`{"type":"object","description":"root","properties":{"answer":{"type":"string","enum":["yes","no"]},"nested":{"type":"object","properties":{"values":{"type":"array","items":{"type":"integer"}}},"required":["values"],"additionalProperties":false}},"required":["answer","nested"],"additionalProperties":false}`)
+	wantOriginal := append(json.RawMessage(nil), schema...)
+	output := &inference.OutputSchema{Name: "answer", Schema: schema, Strict: true}
+	req := inference.Request{
+		Model:    model.Model{Name: "gemini-structured", Caps: model.Capabilities{StructuredOutput: true}},
+		Messages: content.AgenticMessages{userMsg(textBlock("answer"))},
+		Output:   output,
+	}
+
+	wire, err := geminiapi.BuildGenerateContentRequest(req)
+	if err != nil {
+		t.Fatalf("BuildGenerateContentRequest() error = %v", err)
+	}
+	if wire.GenerationConfig == nil {
+		t.Fatal("GenerationConfig = nil, want structured output fields")
+	}
+	if got := wire.GenerationConfig.ResponseMIMEType; got != "application/json" {
+		t.Errorf("ResponseMIMEType = %q, want application/json", got)
+	}
+	wantProjected := json.RawMessage(`{"type":"object","description":"root","properties":{"answer":{"type":"string","enum":["yes","no"]},"nested":{"type":"object","properties":{"values":{"type":"array","items":{"type":"integer"}}},"required":["values"]}},"required":["answer","nested"]}`)
+	if string(wire.GenerationConfig.ResponseJSONSchema) != string(wantProjected) {
+		t.Errorf("ResponseJSONSchema = %s, want exact projection %s", wire.GenerationConfig.ResponseJSONSchema, wantProjected)
+	}
+	if string(output.Schema) != string(wantOriginal) {
+		t.Fatalf("BuildGenerateContentRequest() mutated caller schema to %s", output.Schema)
+	}
+	wire.GenerationConfig.ResponseJSONSchema[0] = '['
+	if string(output.Schema) != string(wantOriginal) {
+		t.Error("projected schema aliases caller schema")
+	}
+
+	encoded, err := geminiapi.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(raw["generationConfig"], &config); err != nil {
+		t.Fatalf("unmarshal generationConfig: %v", err)
+	}
+	if got := strField(t, config, "responseMimeType"); got != "application/json" {
+		t.Errorf("responseMimeType = %q, want application/json", got)
+	}
+	if string(config["responseJsonSchema"]) != string(wantProjected) {
+		t.Errorf("responseJsonSchema = %s, want %s", config["responseJsonSchema"], wantProjected)
+	}
+}
+
+func TestEncodeRequest_StructuredOutputWithToolsPreservesOrdinarySchema(t *testing.T) {
+	t.Parallel()
+
+	outputSchema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+	ordinarySchema := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"additionalProperties":false}`)
+	req := inference.Request{
+		Model: model.Model{Name: "gemini-combined", Caps: model.Capabilities{
+			Tools:                     true,
+			StructuredOutput:          true,
+			StructuredOutputWithTools: true,
+		}},
+		Messages: content.AgenticMessages{userMsg(textBlock("answer"))},
+		Tools:    []inference.Tool{{Name: "search", Schema: ordinarySchema}},
+		Output:   &inference.OutputSchema{Name: "answer", Schema: outputSchema, Strict: true},
+	}
+
+	encoded, err := geminiapi.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	var tools []struct {
+		FunctionDeclarations []struct {
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+		} `json:"functionDeclarations"`
+	}
+	if err := json.Unmarshal(raw["tools"], &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("tools = %+v, want one declaration", tools)
+	}
+	declaration := tools[0].FunctionDeclarations[0]
+	if declaration.Name != "search" || string(declaration.Parameters) != string(ordinarySchema) {
+		t.Errorf("ordinary tool = %q %s, want unchanged %q %s", declaration.Name, declaration.Parameters, "search", ordinarySchema)
+	}
+}
+
+func TestEncodeRequest_TerminalToolProjectionAndRequiredChoice(t *testing.T) {
+	t.Parallel()
+
+	terminalSchema := json.RawMessage(`{"type":"object","properties":{"result":{"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}}},"required":["items"],"additionalProperties":false}},"required":["result"],"additionalProperties":false}`)
+	ordinarySchema := json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"q":{"type":"string"}}}`)
+	req := inference.Request{
+		Model: model.Model{Name: "gemini-tools", Caps: model.Capabilities{Tools: true}},
+		Tools: []inference.Tool{
+			{Name: "search", Schema: ordinarySchema},
+			{Name: inference.StructuredOutputToolName, Description: "final", Schema: terminalSchema},
+		},
+		ToolChoice: inference.ToolChoiceRequired,
+	}
+
+	encoded, err := geminiapi.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	var tools []struct {
+		FunctionDeclarations []struct {
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+		} `json:"functionDeclarations"`
+	}
+	if err := json.Unmarshal(raw["tools"], &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 2 {
+		t.Fatalf("tools = %+v, want two declarations", tools)
+	}
+	if got := tools[0].FunctionDeclarations[0].Parameters; string(got) != string(ordinarySchema) {
+		t.Errorf("ordinary schema = %s, want unchanged %s", got, ordinarySchema)
+	}
+	wantTerminal := `{"type":"object","properties":{"result":{"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}}},"required":["items"]}},"required":["result"]}`
+	if got := tools[0].FunctionDeclarations[1].Parameters; string(got) != wantTerminal {
+		t.Errorf("terminal schema = %s, want %s", got, wantTerminal)
+	}
+	var toolConfig struct {
+		FunctionCallingConfig struct {
+			Mode string `json:"mode"`
+		} `json:"functionCallingConfig"`
+	}
+	if err := json.Unmarshal(raw["toolConfig"], &toolConfig); err != nil {
+		t.Fatalf("unmarshal toolConfig: %v", err)
+	}
+	if toolConfig.FunctionCallingConfig.Mode != "ANY" {
+		t.Errorf("functionCallingConfig.mode = %q, want ANY", toolConfig.FunctionCallingConfig.Mode)
+	}
+	if string(req.Tools[1].Schema) != string(terminalSchema) {
+		t.Error("terminal projection mutated caller schema")
+	}
+}
+
+func TestBuildGenerateContentRequest_StructuredFeatureValidation(t *testing.T) {
+	t.Parallel()
+
+	type errorKind uint8
+	const (
+		errorKindUnsupported errorKind = iota + 1
+		errorKindCombinedUnsupported
+		errorKindSchema
+	)
+
+	validSchema := json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
+	tests := []struct {
+		name    string
+		req     inference.Request
+		wantErr errorKind
+	}{
+		{
+			name:    "native capability missing",
+			req:     inference.Request{Model: model.Model{Name: "plain"}, Output: &inference.OutputSchema{Name: "out", Schema: validSchema}},
+			wantErr: errorKindUnsupported,
+		},
+		{
+			name: "combined capability missing",
+			req: inference.Request{
+				Model:  model.Model{Name: "output-only", Caps: model.Capabilities{StructuredOutput: true, Tools: true}},
+				Output: &inference.OutputSchema{Name: "out", Schema: validSchema},
+				Tools:  []inference.Tool{{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)}},
+			},
+			wantErr: errorKindCombinedUnsupported,
+		},
+		{
+			name: "malformed schema",
+			req: inference.Request{
+				Model:  model.Model{Name: "structured", Caps: model.Capabilities{StructuredOutput: true}},
+				Output: &inference.OutputSchema{Name: "out", Schema: json.RawMessage(`{"type":"object"}`)},
+			},
+			wantErr: errorKindSchema,
+		},
+		{
+			name: "invalid terminal schema",
+			req: inference.Request{
+				Model: model.Model{Name: "tools", Caps: model.Capabilities{Tools: true}},
+				Tools: []inference.Tool{{Name: inference.StructuredOutputToolName, Schema: json.RawMessage(`{"type":"object"}`)}},
+			},
+			wantErr: errorKindSchema,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := geminiapi.BuildGenerateContentRequest(tt.req)
+			if err == nil {
+				t.Fatal("BuildGenerateContentRequest() error = nil")
+			}
+			switch tt.wantErr {
+			case errorKindUnsupported:
+				var target *inference.StructuredOutputUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("error = %T, want StructuredOutputUnsupportedError", err)
+				}
+			case errorKindCombinedUnsupported:
+				var target *inference.StructuredOutputWithToolsUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("error = %T, want StructuredOutputWithToolsUnsupportedError", err)
+				}
+			case errorKindSchema:
+				var target *inference.SchemaValidationError
+				if !errors.As(err, &target) {
+					t.Fatalf("error = %T, want SchemaValidationError", err)
+				}
+			}
+		})
+	}
+}
+
+func TestEncodeRequest_NilOutputPreservesWireShape(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := geminiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	if _, ok := raw["generationConfig"]; ok {
+		t.Error("generationConfig present for nil output and zero sampling")
+	}
+	if _, ok := raw["toolConfig"]; ok {
+		t.Error("toolConfig present for automatic choice")
+	}
+}

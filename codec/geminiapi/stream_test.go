@@ -8,10 +8,45 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/inference"
+	codec "github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/geminiapi"
+	model "github.com/looprig/inference/model"
 	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
+
+func TestGeminiStructuredOutputStreamParity(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:  model.Model{Name: "gemini", Caps: model.Capabilities{StructuredOutput: true}},
+		Output: &inference.OutputSchema{Name: "out", Schema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`)},
+	}
+	invoke, err := (geminiapi.Codec{}).EncodeRequest(req, codec.RequestModeInvoke)
+	if err != nil {
+		t.Fatalf("invoke EncodeRequest() error = %v", err)
+	}
+	streamed, err := (geminiapi.Codec{}).EncodeRequest(req, codec.RequestModeStream)
+	if err != nil {
+		t.Fatalf("stream EncodeRequest() error = %v", err)
+	}
+	invokeBody, err := io.ReadAll(invoke.Body)
+	if err != nil {
+		t.Fatalf("read invoke body: %v", err)
+	}
+	streamBody, err := io.ReadAll(streamed.Body)
+	if err != nil {
+		t.Fatalf("read stream body: %v", err)
+	}
+	if string(invokeBody) != string(streamBody) {
+		t.Fatalf("invoke body = %s, stream body = %s", invokeBody, streamBody)
+	}
+	if !strings.Contains(string(streamBody), `"responseMimeType":"application/json"`) ||
+		!strings.Contains(string(streamBody), `"responseJsonSchema"`) {
+		t.Errorf("stream body lacks structured fields: %s", streamBody)
+	}
+}
 
 func TestGeminiStreamResult(t *testing.T) {
 	t.Parallel()

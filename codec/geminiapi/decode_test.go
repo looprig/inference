@@ -10,6 +10,7 @@ import (
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
 	failure "github.com/looprig/inference/failure"
+	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
 
@@ -266,6 +267,36 @@ func TestDecodeResponse(t *testing.T) {
 				if resp.Usage.OutputTokens != tc.wantOutputTokens {
 					t.Errorf("OutputTokens = %d, want %d", resp.Usage.OutputTokens, tc.wantOutputTokens)
 				}
+			}
+		})
+	}
+}
+
+func TestDecodeResponse_FinishReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want stream.FinishReason
+	}{
+		{name: "stop", body: `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`, want: stream.FinishReasonStop},
+		{name: "function call stop", body: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{}}}]},"finishReason":"STOP"}]}`, want: stream.FinishReasonToolUse},
+		{name: "function call without reason", body: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{}}}]}}]}`, want: stream.FinishReasonToolUse},
+		{name: "length overrides function call", body: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{}}}]},"finishReason":"MAX_TOKENS"}]}`, want: stream.FinishReasonLength},
+		{name: "safety", body: `{"candidates":[{"content":{"parts":[]},"finishReason":"SAFETY"}]}`, want: stream.FinishReasonContentFilter},
+		{name: "unknown fails closed to unknown", body: `{"candidates":[{"content":{"parts":[]},"finishReason":"FUTURE_REASON"}]}`, want: stream.FinishReasonUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response, err := geminiapi.DecodeResponse([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v", err)
+			}
+			if response.FinishReason != tt.want {
+				t.Errorf("FinishReason = %q, want %q", response.FinishReason, tt.want)
 			}
 		})
 	}
