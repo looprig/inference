@@ -62,6 +62,17 @@ func ValidateOutputSchema(output OutputSchema) error {
 	if firstJSONByte(output.Schema) != '{' {
 		return schemaError(SchemaFieldSchema, SchemaReasonRootNotObject)
 	}
+	duplicateKind, duplicate, err := findDuplicateObjectMember(output.Schema, true)
+	if err != nil {
+		return schemaError(SchemaFieldSchema, SchemaReasonMalformed)
+	}
+	if duplicate {
+		field := SchemaFieldKeyword
+		if duplicateKind == duplicateMemberSchemaProperty {
+			field = SchemaFieldProperties
+		}
+		return schemaError(field, SchemaReasonDuplicate)
+	}
 
 	validator := schemaValidator{}
 	return validator.validateNode(output.Schema, 1, true)

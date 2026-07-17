@@ -5,9 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"hash"
 	"io"
+	"math"
 	"reflect"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/looprig/core/content"
@@ -51,7 +52,7 @@ func StructuredMessageResult(msg *content.AIMessage) (json.RawMessage, error) {
 		return nil, malformedError(MalformedReasonWrongRole, nil)
 	}
 
-	var text strings.Builder
+	text := newStructuredTextCollector()
 	var terminalInput json.RawMessage
 	textSeen := false
 	terminalCount := 0
@@ -64,7 +65,7 @@ func StructuredMessageResult(msg *content.AIMessage) (json.RawMessage, error) {
 				return nil, malformedError(MalformedReasonNilBlock, nil)
 			}
 			textSeen = true
-			text.WriteString(typed.Text)
+			text.add(typed.Text)
 		case *content.ThinkingBlock:
 			if typed == nil {
 				return nil, malformedError(MalformedReasonNilBlock, nil)
@@ -114,9 +115,15 @@ func StructuredMessageResult(msg *content.AIMessage) (json.RawMessage, error) {
 		return nil, malformedError(MalformedReasonInvalidRepresentation, nil)
 	}
 	if textSeen {
-		return parseStructuredObject([]byte(text.String()))
+		if text.tooLarge {
+			return nil, text.malformedError(MalformedReasonTooLarge)
+		}
+		return parseStructuredObject(text.buffer.Bytes())
 	}
 	if terminalCount == 1 {
+		if len(terminalInput) > MaxStructuredResultBytes {
+			return nil, malformedError(MalformedReasonTooLarge, terminalInput)
+		}
 		return parseStructuredObject(terminalInput)
 	}
 	return nil, malformedError(MalformedReasonEmpty, nil)
@@ -143,6 +150,9 @@ func DecodeMessageOutput(msg *content.AIMessage, out any) error {
 }
 
 func parseStructuredObject(raw []byte) (json.RawMessage, error) {
+	if len(raw) > MaxStructuredResultBytes {
+		return nil, malformedError(MalformedReasonTooLarge, raw)
+	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, malformedError(MalformedReasonEmpty, raw)
@@ -153,16 +163,16 @@ func parseStructuredObject(raw []byte) (json.RawMessage, error) {
 	if trimmed[0] != '{' {
 		return nil, malformedError(MalformedReasonRootNotObject, raw)
 	}
+	_, duplicate, err := findDuplicateObjectMember(trimmed, false)
+	if err != nil || duplicate {
+		return nil, malformedError(MalformedReasonMalformedJSON, raw)
+	}
 
-	compact := make([]byte, 0, len(trimmed))
-	compact = append(compact, trimmed...)
-	buffer := bytes.NewBuffer(compact[:0])
+	buffer := bytes.NewBuffer(make([]byte, 0, len(trimmed)))
 	if err := json.Compact(buffer, trimmed); err != nil {
 		return nil, malformedError(MalformedReasonMalformedJSON, raw)
 	}
-	result := make(json.RawMessage, buffer.Len())
-	copy(result, buffer.Bytes())
-	return result, nil
+	return json.RawMessage(buffer.Bytes()), nil
 }
 
 func malformedError(reason MalformedStructuredOutputReason, raw []byte) error {
@@ -217,14 +227,80 @@ func decodeStructuredOutput(raw json.RawMessage, out any) error {
 		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonInvalidTarget}
 	}
 
+	scratch := reflect.New(target.Elem().Type())
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(out); err != nil {
+	if err := decoder.Decode(scratch.Interface()); err != nil {
 		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonDecodeFailed}
 	}
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonDecodeFailed}
 	}
+	target.Elem().Set(scratch.Elem())
 	return nil
+}
+
+type structuredTextCollector struct {
+	buffer      bytes.Buffer
+	digest      hash.Hash
+	length      int
+	tooLarge    bool
+	digestValid bool
+}
+
+func newStructuredTextCollector() structuredTextCollector {
+	return structuredTextCollector{}
+}
+
+func (c *structuredTextCollector) add(fragment string) {
+	if c.tooLarge {
+		c.length = saturatedLengthAdd(c.length, len(fragment))
+		c.digestValid = writeHashString(c.digest, fragment) && c.digestValid
+		return
+	}
+
+	if len(fragment) <= MaxStructuredResultBytes-c.buffer.Len() {
+		c.buffer.WriteString(fragment)
+		c.length += len(fragment)
+		return
+	}
+
+	c.tooLarge = true
+	c.length = saturatedLengthAdd(c.buffer.Len(), len(fragment))
+	c.digest = sha256.New()
+	c.digestValid = writeHashBytes(c.digest, c.buffer.Bytes()) && writeHashString(c.digest, fragment)
+	c.buffer = bytes.Buffer{}
+}
+
+func (c *structuredTextCollector) malformedError(reason MalformedStructuredOutputReason) error {
+	var sum [sha256.Size]byte
+	if c.digestValid {
+		copy(sum[:], c.digest.Sum(nil))
+	}
+	return &MalformedStructuredOutputError{ReasonCode: reason, Length: c.length, SHA256: sum}
+}
+
+func saturatedLengthAdd(current, added int) int {
+	if added > math.MaxInt-current {
+		return math.MaxInt
+	}
+	return current + added
+}
+
+func writeHashBytes(digest hash.Hash, value []byte) bool {
+	written, err := digest.Write(value)
+	return err == nil && written == len(value)
+}
+
+func writeHashString(digest hash.Hash, value string) bool {
+	const chunkBytes = 32 << 10
+	for len(value) > 0 {
+		length := min(len(value), chunkBytes)
+		if !writeHashBytes(digest, []byte(value[:length])) {
+			return false
+		}
+		value = value[length:]
+	}
+	return true
 }

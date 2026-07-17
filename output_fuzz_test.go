@@ -2,6 +2,7 @@ package inference_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -15,6 +16,8 @@ func FuzzValidateOutputSchema(f *testing.F) {
 		`{"type":"object","properties":{"x":{"type":"array","items":{"type":"integer"}}},"required":["x"],"additionalProperties":false}`,
 		`{"type":"object","additionalProperties":true}`,
 		`{"type":["object","null"]}`,
+		`{"type":"object","type":"object","properties":{},"required":[],"additionalProperties":false}`,
+		`{"type":"object","properties":{"x":{"type":"string"},"x":{"type":"boolean"}},"required":["x"],"additionalProperties":false}`,
 		`{`,
 		`[]`,
 		"\xff",
@@ -47,6 +50,9 @@ func FuzzStructuredResult(f *testing.F) {
 		{shape: 3, text: `{} {}`, block: `null`, finish: string(stream.FinishReasonContentFilter)},
 		{shape: 4, text: "世界", block: `{"unicode":"世界"}`},
 		{shape: 5, text: `{"ok":true}`, finish: "future-finish-reason"},
+		{shape: 0, text: `{"nested":{"x":1,"x":2}}`, finish: string(stream.FinishReasonStop)},
+		{shape: 1, block: `{"x":1,"x":2}`, finish: string(stream.FinishReasonToolUse)},
+		{shape: 0, text: strings.Repeat("x", inference.MaxStructuredResultBytes+1), finish: string(stream.FinishReasonStop)},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.shape, seed.text, seed.block, seed.finish)
@@ -98,6 +104,9 @@ func FuzzStructuredMessageResult(f *testing.F) {
 		{shape: 2, text: `{`, tool: `[]`},
 		{shape: 3, text: `{} {}`, tool: `null`},
 		{shape: 4, text: "世界", tool: `{"unicode":"世界"}`},
+		{shape: 0, text: `{"nested":{"x":1,"x":2}}`},
+		{shape: 1, tool: `{"x":1,"x":2}`},
+		{shape: 0, text: strings.Repeat("x", inference.MaxStructuredResultBytes+1)},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.shape, seed.text, seed.tool)

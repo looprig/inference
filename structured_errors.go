@@ -11,6 +11,11 @@ const (
 	// metadata retained by structured-output errors.
 	MaxStructuredOutputDiagnosticBytes = 128
 
+	// MaxStructuredResultBytes bounds a native structured result before JSON
+	// parsing or compaction. It matches the 1 MiB request-schema bound so both
+	// structured-output boundaries have a single conservative memory ceiling.
+	MaxStructuredResultBytes = 1 << 20
+
 	// StructuredOutputFinishReasonOther classifies a non-empty finish reason
 	// outside the provider-neutral set without retaining provider input.
 	StructuredOutputFinishReasonOther stream.FinishReason = "other"
@@ -119,6 +124,7 @@ const (
 	MalformedReasonAmbiguous             MalformedStructuredOutputReason = "ambiguous"
 	MalformedReasonInvalidBlock          MalformedStructuredOutputReason = "invalid block"
 	MalformedReasonNilBlock              MalformedStructuredOutputReason = "nil block"
+	MalformedReasonTooLarge              MalformedStructuredOutputReason = "too large"
 )
 
 // MalformedStructuredOutputError reports bounded metadata about malformed
