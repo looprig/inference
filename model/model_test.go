@@ -152,7 +152,8 @@ func TestCustomModel_Defaults(t *testing.T) {
 	if m.Origin != model.OriginCustom {
 		t.Errorf("Origin = %v, want OriginCustom (fail-safe default)", m.Origin)
 	}
-	if m.Caps.AcceptsImages || m.Caps.Tools || m.Caps.Thinking {
+	if m.Caps.AcceptsImages || m.Caps.Tools || m.Caps.Thinking ||
+		m.Caps.StructuredOutput || m.Caps.StructuredOutputWithTools {
 		t.Errorf("Caps bool flags = %+v, want all false by default", m.Caps)
 	}
 	if m.Limits != (model.ContextLimits{}) {
@@ -210,6 +211,30 @@ func TestCustomModel_Options(t *testing.T) {
 			},
 		},
 		{
+			name: "with structured output sets only structured output",
+			opts: []model.ModelOption{model.WithStructuredOutput()},
+			check: func(t *testing.T, m model.Model) {
+				if !m.Caps.StructuredOutput {
+					t.Error("Caps.StructuredOutput = false, want true")
+				}
+				if m.Caps.AcceptsImages || m.Caps.Tools || m.Caps.Thinking || m.Caps.StructuredOutputWithTools {
+					t.Errorf("Caps = %+v, want only StructuredOutput enabled", m.Caps)
+				}
+			},
+		},
+		{
+			name: "with structured output and tools sets required capabilities",
+			opts: []model.ModelOption{model.WithStructuredOutputWithTools()},
+			check: func(t *testing.T, m model.Model) {
+				if !m.Caps.Tools || !m.Caps.StructuredOutput || !m.Caps.StructuredOutputWithTools {
+					t.Errorf("Caps = %+v, want Tools, StructuredOutput, and StructuredOutputWithTools enabled", m.Caps)
+				}
+				if m.Caps.AcceptsImages || m.Caps.Thinking {
+					t.Errorf("Caps = %+v, want unrelated capabilities disabled", m.Caps)
+				}
+			},
+		},
+		{
 			name: "with sampling",
 			opts: []model.ModelOption{model.WithSampling(model.Sampling{Temperature: f64ptr(0.5), MaxTokens: intptr(128), Effort: model.EffortHigh})},
 			check: func(t *testing.T, m model.Model) {
@@ -239,6 +264,56 @@ func TestCustomModel_Options(t *testing.T) {
 			t.Parallel()
 			m := model.CustomModel(model.ProviderName("lmstudio"), model.APIFormatOpenAI, "http://localhost:1234", "qwen", tt.opts...)
 			tt.check(t, m)
+		})
+	}
+}
+
+func TestModel_ValidateStructuredOutputCapabilities(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		caps      model.Capabilities
+		wantField string
+	}{
+		{name: "zero value capabilities remain valid"},
+		{name: "structured output alone is valid", caps: model.Capabilities{StructuredOutput: true}},
+		{name: "tools alone is valid", caps: model.Capabilities{Tools: true}},
+		{
+			name: "independent tools and structured output are valid",
+			caps: model.Capabilities{Tools: true, StructuredOutput: true},
+		},
+		{
+			name: "structured output with tools is valid when prerequisites are set",
+			caps: model.Capabilities{Tools: true, StructuredOutput: true, StructuredOutputWithTools: true},
+		},
+		{
+			name:      "structured output with tools without tools is invalid",
+			caps:      model.Capabilities{StructuredOutput: true, StructuredOutputWithTools: true},
+			wantField: "Caps.StructuredOutputWithTools",
+		},
+		{
+			name:      "structured output with tools without structured output is invalid",
+			caps:      model.Capabilities{Tools: true, StructuredOutputWithTools: true},
+			wantField: "Caps.StructuredOutputWithTools",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := (model.Model{Name: "m", Caps: tt.caps}).Validate()
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			var validationErr *model.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("Validate() error = %T, want *model.ValidationError", err)
+			}
+			if validationErr.Field != tt.wantField {
+				t.Errorf("ValidationError.Field = %q, want %q", validationErr.Field, tt.wantField)
+			}
 		})
 	}
 }
@@ -288,8 +363,14 @@ func TestModel_Clone(t *testing.T) {
 				BaseURL:   "https://api.example.test/v1",
 				Name:      "provider/model",
 				Origin:    model.OriginCatalog,
-				Caps:      model.Capabilities{AcceptsImages: true, Tools: true, Thinking: true},
-				Limits:    model.ContextLimits{WindowTokens: 100, MaxInputTokens: 80, MaxOutputTokens: 20},
+				Caps: model.Capabilities{
+					AcceptsImages:             true,
+					Tools:                     true,
+					Thinking:                  true,
+					StructuredOutput:          true,
+					StructuredOutputWithTools: true,
+				},
+				Limits: model.ContextLimits{WindowTokens: 100, MaxInputTokens: 80, MaxOutputTokens: 20},
 				Sampling: model.Sampling{
 					Temperature: f64ptr(0.5),
 					TopP:        f64ptr(0.75),
@@ -317,6 +398,9 @@ func TestModel_Clone(t *testing.T) {
 			wantValues.Sampling = model.Sampling{}
 			if !reflect.DeepEqual(gotValues, wantValues) {
 				t.Errorf("Clone() value fields = %+v, want %+v", gotValues, wantValues)
+			}
+			if !got.Caps.StructuredOutput || !got.Caps.StructuredOutputWithTools {
+				t.Errorf("Clone().Caps = %+v, want structured output flags preserved", got.Caps)
 			}
 			if got.Sampling.Temperature == nil || *got.Sampling.Temperature != 0.5 || got.Sampling.Temperature == tt.model.Sampling.Temperature {
 				t.Errorf("Clone().Sampling.Temperature = %v at %p, want independent 0.5", got.Sampling.Temperature, got.Sampling.Temperature)
