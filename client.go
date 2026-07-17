@@ -16,16 +16,67 @@ type Client interface {
 	Stream(ctx context.Context, req Request) (*stream.StreamReader[content.Chunk], error)
 }
 
+// ToolChoice controls whether the model may choose between text and tools or
+// must call a tool. Its zero value preserves the existing automatic behavior.
+type ToolChoice uint8
+
+const (
+	ToolChoiceAuto ToolChoice = iota
+	ToolChoiceRequired
+)
+
 // Request is the provider-neutral inference request. It carries a secret-free
 // Model descriptor for this turn, the per-agent System prompt, the message
-// thread, the exposed tools, and an optional per-call sampling Override
-// (nil means use Model.Sampling).
+// thread, the exposed tools, an optional structured Output contract, and an
+// optional per-call sampling Override (nil means use Model.Sampling).
 type Request struct {
-	Model    model.Model
-	System   string
-	Messages content.AgenticMessages
-	Tools    []Tool
-	Override *model.Sampling
+	Model      model.Model
+	System     string
+	Messages   content.AgenticMessages
+	Tools      []Tool
+	Output     *OutputSchema
+	ToolChoice ToolChoice
+	Override   *model.Sampling
+}
+
+// ValidateRequestFeatures validates provider-neutral request feature
+// combinations before a codec attempts to encode them.
+func ValidateRequestFeatures(req Request) error {
+	switch req.ToolChoice {
+	case ToolChoiceAuto:
+	case ToolChoiceRequired:
+		if len(req.Tools) == 0 {
+			return &StructuredOutputConflictError{Feature: "tool_choice_required_without_tools"}
+		}
+	default:
+		return &StructuredOutputConflictError{Feature: "tool_choice"}
+	}
+
+	if req.Output == nil {
+		return nil
+	}
+	if err := ValidateOutputSchema(*req.Output); err != nil {
+		return err
+	}
+
+	seenTools := make(map[string]struct{}, len(req.Tools))
+	for _, tool := range req.Tools {
+		if tool.Name == StructuredOutputToolName {
+			return &StructuredOutputConflictError{Feature: "reserved_structured_output_tool"}
+		}
+		if _, ok := seenTools[tool.Name]; ok {
+			return &StructuredOutputConflictError{Feature: "duplicate_tool_name"}
+		}
+		seenTools[tool.Name] = struct{}{}
+	}
+
+	if !req.Model.Caps.StructuredOutput {
+		return &StructuredOutputUnsupportedError{Model: req.Model.Name}
+	}
+	if len(req.Tools) > 0 && !req.Model.Caps.StructuredOutputWithTools {
+		return &StructuredOutputWithToolsUnsupportedError{Model: req.Model.Name}
+	}
+	return nil
 }
 
 // Response is the complete provider-neutral response.

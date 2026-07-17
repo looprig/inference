@@ -52,3 +52,35 @@ type SchemaValidationError struct {
 func (e *SchemaValidationError) Error() string {
 	return "inference: invalid output schema field " + string(e.Field) + ": " + string(e.Reason)
 }
+
+// StructuredOutputUnsupportedError reports that a model does not advertise
+// native structured output. Model is diagnostic metadata only.
+type StructuredOutputUnsupportedError struct {
+	Model string
+}
+
+func (e *StructuredOutputUnsupportedError) Error() string {
+	return "inference: structured output unsupported"
+}
+
+// StructuredOutputWithToolsUnsupportedError reports that a model does not
+// advertise the distinct native structured-output-with-tools capability.
+// Model is diagnostic metadata only.
+type StructuredOutputWithToolsUnsupportedError struct {
+	Model string
+}
+
+func (e *StructuredOutputWithToolsUnsupportedError) Error() string {
+	return "inference: structured output with tools unsupported"
+}
+
+// StructuredOutputConflictError reports an invalid request feature
+// combination. Feature is a bounded classification, never a schema or tool
+// payload supplied by the caller.
+type StructuredOutputConflictError struct {
+	Feature string
+}
+
+func (e *StructuredOutputConflictError) Error() string {
+	return "inference: structured output feature conflict: " + e.Feature
+}

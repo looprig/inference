@@ -3,6 +3,8 @@ package inference_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -68,11 +70,13 @@ func TestRequest_Fields(t *testing.T) {
 
 	override := &model.Sampling{Temperature: f64ptr(0.2)}
 	req := inference.Request{
-		Model:    sampleModel(),
-		System:   "you are helpful",
-		Messages: content.AgenticMessages{},
-		Tools:    []inference.Tool{{Name: "search"}},
-		Override: override,
+		Model:      sampleModel(),
+		System:     "you are helpful",
+		Messages:   content.AgenticMessages{},
+		Tools:      []inference.Tool{{Name: "search"}},
+		Output:     &inference.OutputSchema{Name: "answer"},
+		ToolChoice: inference.ToolChoiceRequired,
+		Override:   override,
 	}
 
 	if req.Model.Provider != model.ProviderName("chutes") {
@@ -84,6 +88,12 @@ func TestRequest_Fields(t *testing.T) {
 	if len(req.Tools) != 1 || req.Tools[0].Name != "search" {
 		t.Errorf("Request.Tools = %+v, want one tool named search", req.Tools)
 	}
+	if req.Output == nil || req.Output.Name != "answer" {
+		t.Errorf("Request.Output = %+v, want output named answer", req.Output)
+	}
+	if req.ToolChoice != inference.ToolChoiceRequired {
+		t.Errorf("Request.ToolChoice = %d, want ToolChoiceRequired", req.ToolChoice)
+	}
 	if req.Override == nil || req.Override.Temperature == nil || *req.Override.Temperature != 0.2 {
 		t.Errorf("Request.Override = %+v, want Temperature 0.2", req.Override)
 	}
@@ -92,6 +102,166 @@ func TestRequest_Fields(t *testing.T) {
 	def := inference.Request{Model: sampleModel()}
 	if def.Override != nil {
 		t.Errorf("zero-value Request.Override = %+v, want nil", def.Override)
+	}
+	if def.Output != nil {
+		t.Errorf("zero-value Request.Output = %+v, want nil", def.Output)
+	}
+	if def.ToolChoice != inference.ToolChoiceAuto {
+		t.Errorf("zero-value Request.ToolChoice = %d, want ToolChoiceAuto", def.ToolChoice)
+	}
+}
+
+func TestValidateRequestFeatures(t *testing.T) {
+	t.Parallel()
+
+	output := validOutput(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
+	tool := inference.Tool{Name: "search"}
+	outputCap := model.Capabilities{StructuredOutput: true}
+	combinedCaps := model.Capabilities{
+		Tools:                     true,
+		StructuredOutput:          true,
+		StructuredOutputWithTools: true,
+	}
+
+	tests := []struct {
+		name                string
+		req                 inference.Request
+		wantUnsupported     bool
+		wantCombined        bool
+		wantConflict        bool
+		wantSchemaError     bool
+		wantConflictFeature string
+	}{
+		{name: "nil output and automatic tool choice", req: inference.Request{}},
+		{
+			name: "supported output only",
+			req:  inference.Request{Model: model.Model{Name: "supported", Caps: outputCap}, Output: &output},
+		},
+		{
+			name:            "missing base capability",
+			req:             inference.Request{Model: model.Model{Name: "plain"}, Output: &output},
+			wantUnsupported: true,
+		},
+		{
+			name:         "output with tools missing combined capability",
+			req:          inference.Request{Model: model.Model{Name: "base-only", Caps: outputCap}, Tools: []inference.Tool{tool}, Output: &output},
+			wantCombined: true,
+		},
+		{
+			name: "combined output with tools accepted",
+			req:  inference.Request{Model: model.Model{Name: "combined", Caps: combinedCaps}, Tools: []inference.Tool{tool}, Output: &output},
+		},
+		{
+			name:                "required tool choice without tools",
+			req:                 inference.Request{ToolChoice: inference.ToolChoiceRequired},
+			wantConflict:        true,
+			wantConflictFeature: "tool_choice_required_without_tools",
+		},
+		{
+			name: "required tool choice with tools",
+			req:  inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolChoiceRequired},
+		},
+		{
+			name:                "unknown tool choice",
+			req:                 inference.Request{ToolChoice: inference.ToolChoice(99)},
+			wantConflict:        true,
+			wantConflictFeature: "tool_choice",
+		},
+		{
+			name: "invalid schema propagates shared validation error",
+			req: inference.Request{
+				Model:  model.Model{Name: "supported", Caps: outputCap},
+				Output: &inference.OutputSchema{Name: "answer", Schema: json.RawMessage(`{"type":"array"}`)},
+			},
+			wantSchemaError: true,
+		},
+		{
+			name: "reserved terminal tool collision",
+			req: inference.Request{
+				Model:  model.Model{Name: "combined", Caps: combinedCaps},
+				Tools:  []inference.Tool{{Name: inference.StructuredOutputToolName}},
+				Output: &output,
+			},
+			wantConflict:        true,
+			wantConflictFeature: "reserved_structured_output_tool",
+		},
+		{
+			name: "duplicate tool names",
+			req: inference.Request{
+				Model:  model.Model{Name: "combined", Caps: combinedCaps},
+				Tools:  []inference.Tool{tool, tool},
+				Output: &output,
+			},
+			wantConflict:        true,
+			wantConflictFeature: "duplicate_tool_name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := inference.ValidateRequestFeatures(tt.req)
+			if tt.wantUnsupported {
+				var target *inference.StructuredOutputUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("ValidateRequestFeatures() error = %T %v, want *StructuredOutputUnsupportedError", err, err)
+				}
+				if target.Model != tt.req.Model.Name {
+					t.Errorf("StructuredOutputUnsupportedError.Model = %q, want %q", target.Model, tt.req.Model.Name)
+				}
+				return
+			}
+			if tt.wantCombined {
+				var target *inference.StructuredOutputWithToolsUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("ValidateRequestFeatures() error = %T %v, want *StructuredOutputWithToolsUnsupportedError", err, err)
+				}
+				if target.Model != tt.req.Model.Name {
+					t.Errorf("StructuredOutputWithToolsUnsupportedError.Model = %q, want %q", target.Model, tt.req.Model.Name)
+				}
+				return
+			}
+			if tt.wantConflict {
+				var target *inference.StructuredOutputConflictError
+				if !errors.As(err, &target) {
+					t.Fatalf("ValidateRequestFeatures() error = %T %v, want *StructuredOutputConflictError", err, err)
+				}
+				if target.Feature != tt.wantConflictFeature {
+					t.Errorf("StructuredOutputConflictError.Feature = %q, want %q", target.Feature, tt.wantConflictFeature)
+				}
+				return
+			}
+			if tt.wantSchemaError {
+				var target *inference.SchemaValidationError
+				if !errors.As(err, &target) {
+					t.Fatalf("ValidateRequestFeatures() error = %T %v, want propagated *SchemaValidationError", err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateRequestFeatures() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestValidateRequestFeaturesEmptyModelDoesNotExposePayloads(t *testing.T) {
+	t.Parallel()
+
+	const secret = "schema-secret-do-not-log"
+	output := validOutput(`{"type":"object","description":"` + secret + `","properties":{},"required":[],"additionalProperties":false}`)
+	err := inference.ValidateRequestFeatures(inference.Request{Output: &output})
+
+	var target *inference.StructuredOutputUnsupportedError
+	if !errors.As(err, &target) {
+		t.Fatalf("ValidateRequestFeatures() error = %T %v, want *StructuredOutputUnsupportedError", err, err)
+	}
+	if target.Model != "" {
+		t.Errorf("StructuredOutputUnsupportedError.Model = %q, want empty", target.Model)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), string(output.Schema)) {
+		t.Errorf("ValidateRequestFeatures() error exposed schema payload: %q", err)
 	}
 }
 
