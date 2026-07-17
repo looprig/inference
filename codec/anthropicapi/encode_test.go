@@ -86,6 +86,25 @@ func toolResultMsg(id string, isErr bool, blocks ...content.Block) *content.Tool
 
 func textBlock(s string) content.Block { return &content.TextBlock{Text: s} }
 
+func structuredOutput() *inference.OutputSchema {
+	return &inference.OutputSchema{
+		Name:        "answer",
+		Description: "One answer",
+		Strict:      true,
+		Schema:      json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`),
+	}
+}
+
+func structuredModel(withTools bool) model.Model {
+	m := baseModel()
+	m.Caps.StructuredOutput = true
+	if withTools {
+		m.Caps.Tools = true
+		m.Caps.StructuredOutputWithTools = true
+	}
+	return m
+}
+
 func TestEncodeRequestIgnoresUsage(t *testing.T) {
 	t.Parallel()
 
@@ -278,6 +297,156 @@ func TestEncodeRequest_Tools(t *testing.T) {
 				t.Errorf("tool input_schema = %s, want %s", got, tc.wantSchema)
 			}
 		})
+	}
+}
+
+func TestEncodeRequest_StructuredOutput(t *testing.T) {
+	t.Parallel()
+
+	m := structuredModel(true)
+	m.Caps.Thinking = true
+	m.Sampling.Effort = model.EffortHigh
+	req := inference.Request{
+		Model:      m,
+		Messages:   content.AgenticMessages{userMsg(textBlock("hi"))},
+		Output:     structuredOutput(),
+		ToolChoice: inference.ToolChoiceRequired,
+		Tools: []inference.Tool{{
+			Name:        "lookup",
+			Description: "Look something up",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+		}},
+	}
+
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	body := decodeObj(t, data)
+	outputConfig := decodeObj(t, body["output_config"])
+	if got := asString(t, outputConfig["effort"]); got != "high" {
+		t.Errorf("output_config.effort = %q, want high", got)
+	}
+	format := decodeObj(t, outputConfig["format"])
+	if len(format) != 2 {
+		t.Errorf("output_config.format fields = %v, want only type and schema", format)
+	}
+	if got := asString(t, format["type"]); got != "json_schema" {
+		t.Errorf("output_config.format.type = %q, want json_schema", got)
+	}
+	if got, want := string(format["schema"]), string(req.Output.Schema); got != want {
+		t.Errorf("output_config.format.schema = %s, want %s", got, want)
+	}
+
+	tools := asObjs(t, body["tools"])
+	if len(tools) != 1 || asString(t, tools[0]["name"]) != "lookup" {
+		t.Fatalf("tools = %s, want the one ordinary lookup tool", body["tools"])
+	}
+	toolChoice := decodeObj(t, body["tool_choice"])
+	if got := asString(t, toolChoice["type"]); got != "any" {
+		t.Errorf("tool_choice.type = %q, want any", got)
+	}
+}
+
+func TestEncodeRequest_StructuredOutputWithoutEffort(t *testing.T) {
+	t.Parallel()
+
+	data, err := anthropicapi.EncodeRequest(inference.Request{
+		Model:  structuredModel(false),
+		Output: structuredOutput(),
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	outputConfig := decodeObj(t, decodeObj(t, data)["output_config"])
+	if _, ok := outputConfig["format"]; !ok {
+		t.Fatal("output_config.format is absent without effort")
+	}
+	if _, ok := outputConfig["effort"]; ok {
+		t.Error("output_config.effort is present when effort is unset")
+	}
+}
+
+func TestEncodeRequest_StructuredOutputFeatureValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		req     inference.Request
+		wantErr func(error) bool
+	}{
+		{
+			name: "structured output capability is required",
+			req:  inference.Request{Model: baseModel(), Output: structuredOutput()},
+			wantErr: func(err error) bool {
+				var target *inference.StructuredOutputUnsupportedError
+				return errors.As(err, &target)
+			},
+		},
+		{
+			name: "combined capability is required with tools",
+			req: inference.Request{
+				Model:  structuredModel(false),
+				Output: structuredOutput(),
+				Tools:  []inference.Tool{{Name: "lookup"}},
+			},
+			wantErr: func(err error) bool {
+				var target *inference.StructuredOutputWithToolsUnsupportedError
+				return errors.As(err, &target)
+			},
+		},
+		{
+			name: "invalid schema returns schema validation error before marshal",
+			req: inference.Request{
+				Model: structuredModel(false),
+				Output: &inference.OutputSchema{
+					Name:   "answer",
+					Schema: json.RawMessage(`{"type":"object"`),
+				},
+			},
+			wantErr: func(err error) bool {
+				var target *inference.SchemaValidationError
+				return errors.As(err, &target)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := anthropicapi.EncodeRequest(tt.req, false)
+			if !tt.wantErr(err) {
+				t.Fatalf("EncodeRequest() error = %T %v, want typed feature-validation error", err, err)
+			}
+		})
+	}
+}
+
+func TestEncodeRequest_NilStructuredOutputPreservesWireShape(t *testing.T) {
+	t.Parallel()
+
+	got, err := anthropicapi.EncodeRequest(inference.Request{Model: baseModel()}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	const want = `{"model":"claude-opus-4-8","messages":null,"max_tokens":4096}`
+	if string(got) != want {
+		t.Errorf("EncodeRequest() = %s, want byte-identical prior shape %s", got, want)
+	}
+}
+
+func TestEncodeRequest_ToolChoiceAutoIsOmitted(t *testing.T) {
+	t.Parallel()
+
+	got, err := anthropicapi.EncodeRequest(inference.Request{
+		Model:  structuredModel(false),
+		Output: structuredOutput(),
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	if _, ok := decodeObj(t, got)["tool_choice"]; ok {
+		t.Error("tool_choice is present for ToolChoiceAuto")
 	}
 }
 

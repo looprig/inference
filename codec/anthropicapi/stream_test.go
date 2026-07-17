@@ -4,14 +4,36 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
 	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
+
+func TestEncodeRequest_StreamPreservesStructuredFields(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: structuredModel(false), Output: structuredOutput()}
+	nonStream, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest(non-stream) error = %v", err)
+	}
+	streaming, err := anthropicapi.EncodeRequest(req, true)
+	if err != nil {
+		t.Fatalf("EncodeRequest(stream) error = %v", err)
+	}
+	nonStreamBody := decodeObj(t, nonStream)
+	streamBody := decodeObj(t, streaming)
+	delete(streamBody, "stream")
+	if !reflect.DeepEqual(streamBody, nonStreamBody) {
+		t.Errorf("stream request fields differ from non-stream request:\nstream=%s\nnon-stream=%s", streaming, nonStream)
+	}
+}
 
 func TestAnthropicStreamResult(t *testing.T) {
 	t.Parallel()

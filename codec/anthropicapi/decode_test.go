@@ -8,6 +8,7 @@ import (
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
 	failure "github.com/looprig/inference/failure"
+	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
 
@@ -15,6 +16,36 @@ import (
 func TestDecodeResponse_CompileTimeCheck(t *testing.T) {
 	t.Parallel()
 	var _ func([]byte) (*inference.Response, error) = anthropicapi.DecodeResponse
+}
+
+func TestDecodeResponseFinishReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		stopReason string
+		want       stream.FinishReason
+	}{
+		{name: "stop", stopReason: "end_turn", want: stream.FinishReasonStop},
+		{name: "tool use", stopReason: "tool_use", want: stream.FinishReasonToolUse},
+		{name: "max tokens", stopReason: "max_tokens", want: stream.FinishReasonLength},
+		{name: "refusal", stopReason: "refusal", want: stream.FinishReasonContentFilter},
+		{name: "unknown", stopReason: "future_reason", want: stream.FinishReasonUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"type":"message","model":"claude-test","content":[],"stop_reason":"` + tt.stopReason + `"}`)
+			got, err := anthropicapi.DecodeResponse(body)
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v", err)
+			}
+			if got.FinishReason != tt.want {
+				t.Errorf("FinishReason = %q, want %q", got.FinishReason, tt.want)
+			}
+		})
+	}
 }
 
 // blockType maps a decoded block to its wire tag for order assertions.
