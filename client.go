@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"unicode/utf8"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference/model"
@@ -71,12 +72,26 @@ func ValidateRequestFeatures(req Request) error {
 	}
 
 	if !req.Model.Caps.StructuredOutput {
-		return &StructuredOutputUnsupportedError{Model: req.Model.Name}
+		return &StructuredOutputUnsupportedError{Model: boundedStructuredDiagnostic(req.Model.Name)}
 	}
 	if len(req.Tools) > 0 && !req.Model.Caps.StructuredOutputWithTools {
-		return &StructuredOutputWithToolsUnsupportedError{Model: req.Model.Name}
+		return &StructuredOutputWithToolsUnsupportedError{Model: boundedStructuredDiagnostic(req.Model.Name)}
 	}
 	return nil
+}
+
+func boundedStructuredDiagnostic(value string) string {
+	if !utf8.ValidString(value) {
+		return "invalid-utf8"
+	}
+	if len(value) <= MaxStructuredOutputDiagnosticBytes {
+		return value
+	}
+	end := MaxStructuredOutputDiagnosticBytes
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end]
 }
 
 // Response is the complete provider-neutral response.

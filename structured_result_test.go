@@ -164,7 +164,8 @@ func TestStructuredResultEnforcesFinishReason(t *testing.T) {
 		{name: "stop ordinary contradiction", resp: &inference.Response{Message: ordinary, FinishReason: stream.FinishReasonStop}, wantFinish: stream.FinishReasonStop},
 		{name: "tool use text contradiction", resp: &inference.Response{Message: text, FinishReason: stream.FinishReasonToolUse}, wantFinish: stream.FinishReasonToolUse},
 		{name: "tool use ordinary contradiction", resp: &inference.Response{Message: ordinary, FinishReason: stream.FinishReasonToolUse}, wantFinish: stream.FinishReasonToolUse},
-		{name: "future reason fails closed", resp: &inference.Response{Message: text, FinishReason: stream.FinishReason("future")}, wantFinish: stream.FinishReason("future")},
+		{name: "future reason fails closed", resp: &inference.Response{Message: text, FinishReason: stream.FinishReason("future")}, wantFinish: inference.StructuredOutputFinishReasonOther},
+		{name: "oversized future reason is normalized", resp: &inference.Response{Message: text, FinishReason: stream.FinishReason(strings.Repeat("未来", 1024))}, wantFinish: inference.StructuredOutputFinishReasonOther},
 		{name: "nil response", wantBad: inference.MalformedReasonNilResponse},
 	}
 
@@ -226,6 +227,11 @@ func TestDecodeOutputStrictlyDecodesConcretePointer(t *testing.T) {
 
 	var nilResult *result
 	var interfaceTarget any
+	mapTarget := map[string]string{}
+	rawTarget := json.RawMessage{}
+	byteSliceTarget := []byte{}
+	scalarTarget := 0
+	pointerTarget := &result{}
 	tests := []struct {
 		name string
 		resp *inference.Response
@@ -235,6 +241,11 @@ func TestDecodeOutputStrictlyDecodesConcretePointer(t *testing.T) {
 		{name: "non pointer", resp: response(`{}`), out: result{}},
 		{name: "nil pointer", resp: response(`{}`), out: nilResult},
 		{name: "interface pointer", resp: response(`{}`), out: &interfaceTarget},
+		{name: "map pointer", resp: response(`{}`), out: &mapTarget},
+		{name: "raw message pointer", resp: response(`{}`), out: &rawTarget},
+		{name: "byte slice pointer", resp: response(`{}`), out: &byteSliceTarget},
+		{name: "scalar pointer", resp: response(`{}`), out: &scalarTarget},
+		{name: "pointer to pointer", resp: response(`{}`), out: &pointerTarget},
 		{name: "unknown field", resp: response(`{"name":"ok","extra":"secret-value"}`), out: &result{}},
 		{name: "type mismatch", resp: response(`{"name":7}`), out: &result{}},
 	}
@@ -244,6 +255,13 @@ func TestDecodeOutputStrictlyDecodesConcretePointer(t *testing.T) {
 			var schemaErr *inference.SchemaValidationError
 			if !errors.As(err, &schemaErr) {
 				t.Fatalf("error = %T %v, want *SchemaValidationError", err, err)
+			}
+			wantReason := inference.SchemaReasonInvalidTarget
+			if tt.name == "unknown field" || tt.name == "type mismatch" {
+				wantReason = inference.SchemaReasonDecodeFailed
+			}
+			if schemaErr.ReasonCode != wantReason {
+				t.Errorf("ReasonCode = %q, want %q", schemaErr.ReasonCode, wantReason)
 			}
 			if strings.Contains(err.Error(), "secret-value") {
 				t.Errorf("error leaks raw output: %q", err)

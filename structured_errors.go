@@ -6,6 +6,16 @@ import (
 	"github.com/looprig/inference/stream"
 )
 
+const (
+	// MaxStructuredOutputDiagnosticBytes bounds caller-controlled string
+	// metadata retained by structured-output errors.
+	MaxStructuredOutputDiagnosticBytes = 128
+
+	// StructuredOutputFinishReasonOther classifies a non-empty finish reason
+	// outside the provider-neutral set without retaining provider input.
+	StructuredOutputFinishReasonOther stream.FinishReason = "other"
+)
+
 // SchemaValidationField identifies the output-schema component that failed
 // validation. Values are stable classifications suitable for errors.As callers.
 type SchemaValidationField string
@@ -54,12 +64,12 @@ const (
 // It never retains schema bytes, property names, descriptions, or JSON decoder
 // errors because those values may contain sensitive caller input.
 type SchemaValidationError struct {
-	Field  SchemaValidationField
-	Reason SchemaValidationReason
+	Field      SchemaValidationField
+	ReasonCode SchemaValidationReason
 }
 
 func (e *SchemaValidationError) Error() string {
-	return "inference: invalid output schema field " + string(e.Field) + ": " + string(e.Reason)
+	return "inference: invalid output schema field " + string(e.Field) + ": " + string(e.ReasonCode)
 }
 
 // StructuredOutputUnsupportedError reports that a model does not advertise

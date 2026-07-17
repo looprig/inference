@@ -3,6 +3,8 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -98,14 +100,89 @@ func isASCIIDigit(ch byte) bool {
 	return ch >= '0' && ch <= '9'
 }
 
-type rawSchemaNode struct {
-	typeValue            json.RawMessage
-	descriptionValue     json.RawMessage
-	propertiesValue      json.RawMessage
-	itemsValue           json.RawMessage
-	enumValue            json.RawMessage
-	requiredValue        json.RawMessage
-	additionalProperties json.RawMessage
+type schemaNode struct {
+	Type                 schemaStringValue     `json:"type"`
+	Description          schemaStringValue     `json:"description"`
+	Properties           schemaPropertiesValue `json:"properties"`
+	Items                schemaRawValue        `json:"items"`
+	Enum                 schemaEnumValue       `json:"enum"`
+	Required             schemaStringsValue    `json:"required"`
+	AdditionalProperties schemaBoolValue       `json:"additionalProperties"`
+}
+
+type schemaStringValue struct {
+	present bool
+	valid   bool
+	value   string
+}
+
+func (v *schemaStringValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	v.valid = firstJSONByte(raw) == '"' && json.Unmarshal(raw, &v.value) == nil && utf8.ValidString(v.value)
+	return nil
+}
+
+type schemaPropertiesValue struct {
+	present bool
+	valid   bool
+	values  map[string]json.RawMessage
+}
+
+func (v *schemaPropertiesValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	v.valid = firstJSONByte(raw) == '{' && json.Unmarshal(raw, &v.values) == nil && v.values != nil
+	return nil
+}
+
+type schemaRawValue struct {
+	present bool
+	value   json.RawMessage
+}
+
+func (v *schemaRawValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	v.value = append(v.value[:0], raw...)
+	return nil
+}
+
+type schemaEnumValue struct {
+	present bool
+	valid   bool
+	values  []json.RawMessage
+}
+
+func (v *schemaEnumValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	v.valid = firstJSONByte(raw) == '[' && json.Unmarshal(raw, &v.values) == nil && v.values != nil
+	return nil
+}
+
+type schemaStringsValue struct {
+	present bool
+	valid   bool
+	values  []string
+}
+
+func (v *schemaStringsValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	v.valid = firstJSONByte(raw) == '[' && json.Unmarshal(raw, &v.values) == nil && v.values != nil
+	return nil
+}
+
+type schemaBoolValue struct {
+	present bool
+	valid   bool
+	value   bool
+}
+
+func (v *schemaBoolValue) UnmarshalJSON(raw []byte) error {
+	v.present = true
+	trimmed := bytes.TrimSpace(raw)
+	v.valid = bytes.Equal(trimmed, []byte("true")) || bytes.Equal(trimmed, []byte("false"))
+	if v.valid {
+		v.value = bytes.Equal(trimmed, []byte("true"))
+	}
+	return nil
 }
 
 type schemaProperty struct {
@@ -125,29 +202,25 @@ func (v *schemaValidator) validateNode(raw json.RawMessage, depth int, root bool
 		return schemaError(SchemaFieldSchema, SchemaReasonInvalid)
 	}
 
-	node, err := decodeRawSchemaNode(raw)
+	node, err := decodeSchemaNode(raw)
 	if err != nil {
 		return err
 	}
-	if node.typeValue == nil {
+	if !node.Type.present {
 		return schemaError(SchemaFieldType, SchemaReasonMissing)
 	}
-	var schemaType string
-	if err := json.Unmarshal(node.typeValue, &schemaType); err != nil || schemaType == "" {
+	if !node.Type.valid || node.Type.value == "" {
 		return schemaError(SchemaFieldType, SchemaReasonInvalid)
 	}
+	schemaType := node.Type.value
 	if root && schemaType != "object" {
 		return schemaError(SchemaFieldSchema, SchemaReasonRootNotObject)
 	}
-	if node.descriptionValue != nil {
-		var description string
-		if firstJSONByte(node.descriptionValue) != '"' {
+	if node.Description.present {
+		if !node.Description.valid {
 			return schemaError(SchemaFieldDescription, SchemaReasonInvalid)
 		}
-		if err := json.Unmarshal(node.descriptionValue, &description); err != nil || !utf8.ValidString(description) {
-			return schemaError(SchemaFieldDescription, SchemaReasonInvalid)
-		}
-		if len(description) > maxOutputDescriptionBytes {
+		if len(node.Description.value) > maxOutputDescriptionBytes {
 			return schemaError(SchemaFieldDescription, SchemaReasonTooLong)
 		}
 	}
@@ -164,39 +237,45 @@ func (v *schemaValidator) validateNode(raw json.RawMessage, depth int, root bool
 	}
 }
 
-func (v *schemaValidator) validateObject(node rawSchemaNode, depth int) error {
-	if node.itemsValue != nil {
+func (v *schemaValidator) validateObject(node schemaNode, depth int) error {
+	if node.Items.present {
 		return schemaError(SchemaFieldItems, SchemaReasonUnsupported)
 	}
-	if node.enumValue != nil {
+	if node.Enum.present {
 		return schemaError(SchemaFieldEnum, SchemaReasonUnsupported)
 	}
-	if node.additionalProperties == nil {
+	if !node.AdditionalProperties.present {
 		return schemaError(SchemaFieldAdditionalProperties, SchemaReasonMissing)
 	}
-	if !bytes.Equal(bytes.TrimSpace(node.additionalProperties), []byte("false")) {
+	if !node.AdditionalProperties.valid || node.AdditionalProperties.value {
 		return schemaError(SchemaFieldAdditionalProperties, SchemaReasonMustBeFalse)
 	}
 
-	properties, err := decodeProperties(node.propertiesValue)
-	if err != nil {
-		return err
+	if node.Properties.present && !node.Properties.valid {
+		return schemaError(SchemaFieldProperties, SchemaReasonInvalid)
+	}
+	properties := make([]schemaProperty, 0, len(node.Properties.values))
+	for name, schema := range node.Properties.values {
+		properties = append(properties, schemaProperty{name: name, schema: schema})
 	}
 	v.propertyCount += len(properties)
 	if v.propertyCount > maxOutputSchemaProperties {
 		return schemaError(SchemaFieldProperties, SchemaReasonTooManyProperties)
 	}
 
-	required, err := decodeRequired(node.requiredValue, len(properties) > 0)
-	if err != nil {
-		return err
+	if !node.Required.present {
+		if len(properties) > 0 {
+			return schemaError(SchemaFieldRequired, SchemaReasonMissing)
+		}
+	} else if !node.Required.valid {
+		return schemaError(SchemaFieldRequired, SchemaReasonInvalid)
 	}
 	known := make(map[string]struct{}, len(properties))
 	for _, property := range properties {
 		known[property.name] = struct{}{}
 	}
-	seenRequired := make(map[string]struct{}, len(required))
-	for _, name := range required {
+	seenRequired := make(map[string]struct{}, len(node.Required.values))
+	for _, name := range node.Required.values {
 		if _, duplicate := seenRequired[name]; duplicate {
 			return schemaError(SchemaFieldRequired, SchemaReasonDuplicate)
 		}
@@ -217,50 +296,49 @@ func (v *schemaValidator) validateObject(node rawSchemaNode, depth int) error {
 	return nil
 }
 
-func (v *schemaValidator) validateArray(node rawSchemaNode, depth int) error {
-	if node.propertiesValue != nil {
+func (v *schemaValidator) validateArray(node schemaNode, depth int) error {
+	if node.Properties.present {
 		return schemaError(SchemaFieldProperties, SchemaReasonUnsupported)
 	}
-	if node.requiredValue != nil {
+	if node.Required.present {
 		return schemaError(SchemaFieldRequired, SchemaReasonUnsupported)
 	}
-	if node.additionalProperties != nil {
+	if node.AdditionalProperties.present {
 		return schemaError(SchemaFieldAdditionalProperties, SchemaReasonUnsupported)
 	}
-	if node.enumValue != nil {
+	if node.Enum.present {
 		return schemaError(SchemaFieldEnum, SchemaReasonUnsupported)
 	}
-	if node.itemsValue == nil {
+	if !node.Items.present {
 		return schemaError(SchemaFieldItems, SchemaReasonMissing)
 	}
-	if firstJSONByte(node.itemsValue) != '{' {
+	if firstJSONByte(node.Items.value) != '{' {
 		return schemaError(SchemaFieldItems, SchemaReasonInvalid)
 	}
-	return v.validateNode(node.itemsValue, depth+1, false)
+	return v.validateNode(node.Items.value, depth+1, false)
 }
 
-func validateScalar(node rawSchemaNode, schemaType string) error {
-	if node.propertiesValue != nil {
+func validateScalar(node schemaNode, schemaType string) error {
+	if node.Properties.present {
 		return schemaError(SchemaFieldProperties, SchemaReasonUnsupported)
 	}
-	if node.itemsValue != nil {
+	if node.Items.present {
 		return schemaError(SchemaFieldItems, SchemaReasonUnsupported)
 	}
-	if node.requiredValue != nil {
+	if node.Required.present {
 		return schemaError(SchemaFieldRequired, SchemaReasonUnsupported)
 	}
-	if node.additionalProperties != nil {
+	if node.AdditionalProperties.present {
 		return schemaError(SchemaFieldAdditionalProperties, SchemaReasonUnsupported)
 	}
-	if node.enumValue == nil {
+	if !node.Enum.present {
 		return nil
 	}
 
-	var values []json.RawMessage
-	if err := json.Unmarshal(node.enumValue, &values); err != nil || len(values) == 0 {
+	if !node.Enum.valid || len(node.Enum.values) == 0 {
 		return schemaError(SchemaFieldEnum, SchemaReasonInvalid)
 	}
-	for _, value := range values {
+	for _, value := range node.Enum.values {
 		if !enumValueMatches(value, schemaType) {
 			return schemaError(SchemaFieldEnum, SchemaReasonTypeMismatch)
 		}
@@ -314,66 +392,18 @@ func jsonNumberIsIntegral(number string) bool {
 	return strings.Trim(mantissa[len(mantissa)-remainingFraction:], "0") == ""
 }
 
-func decodeRawSchemaNode(raw json.RawMessage) (rawSchemaNode, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-		return rawSchemaNode{}, schemaError(SchemaFieldSchema, SchemaReasonInvalid)
+func decodeSchemaNode(raw json.RawMessage) (schemaNode, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var node schemaNode
+	if err := decoder.Decode(&node); err != nil {
+		return schemaNode{}, schemaError(SchemaFieldKeyword, SchemaReasonUnknownKeyword)
 	}
-
-	var node rawSchemaNode
-	for keyword, value := range fields {
-		switch keyword {
-		case "type":
-			node.typeValue = value
-		case "description":
-			node.descriptionValue = value
-		case "properties":
-			node.propertiesValue = value
-		case "items":
-			node.itemsValue = value
-		case "enum":
-			node.enumValue = value
-		case "required":
-			node.requiredValue = value
-		case "additionalProperties":
-			node.additionalProperties = value
-		default:
-			return rawSchemaNode{}, schemaError(SchemaFieldKeyword, SchemaReasonUnknownKeyword)
-		}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return schemaNode{}, schemaError(SchemaFieldSchema, SchemaReasonInvalid)
 	}
 	return node, nil
-}
-
-func decodeProperties(raw json.RawMessage) ([]schemaProperty, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	if firstJSONByte(raw) != '{' {
-		return nil, schemaError(SchemaFieldProperties, SchemaReasonInvalid)
-	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
-		return nil, schemaError(SchemaFieldProperties, SchemaReasonInvalid)
-	}
-	properties := make([]schemaProperty, 0, len(values))
-	for name, schema := range values {
-		properties = append(properties, schemaProperty{name: name, schema: schema})
-	}
-	return properties, nil
-}
-
-func decodeRequired(raw json.RawMessage, required bool) ([]string, error) {
-	if raw == nil {
-		if required {
-			return nil, schemaError(SchemaFieldRequired, SchemaReasonMissing)
-		}
-		return nil, nil
-	}
-	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
-		return nil, schemaError(SchemaFieldRequired, SchemaReasonInvalid)
-	}
-	return values, nil
 }
 
 func firstJSONByte(raw json.RawMessage) byte {
@@ -385,5 +415,5 @@ func firstJSONByte(raw json.RawMessage) byte {
 }
 
 func schemaError(field SchemaValidationField, reason SchemaValidationReason) error {
-	return &SchemaValidationError{Field: field, Reason: reason}
+	return &SchemaValidationError{Field: field, ReasonCode: reason}
 }

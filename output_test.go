@@ -243,8 +243,8 @@ func assertSchemaValidationError(t *testing.T, err error, field inference.Schema
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("error type = %T, want *inference.SchemaValidationError", err)
 	}
-	if validationErr.Field != field || validationErr.Reason != reason {
-		t.Fatalf("validation error = {Field:%q Reason:%q}, want {Field:%q Reason:%q}", validationErr.Field, validationErr.Reason, field, reason)
+	if validationErr.Field != field || validationErr.ReasonCode != reason {
+		t.Fatalf("validation error = {Field:%q ReasonCode:%q}, want {Field:%q ReasonCode:%q}", validationErr.Field, validationErr.ReasonCode, field, reason)
 	}
 }
 

@@ -34,7 +34,7 @@ func StructuredResult(resp *Response) (json.RawMessage, error) {
 		}
 	case stream.FinishReasonUnknown:
 	default:
-		return nil, &StructuredOutputFinishError{Reason: resp.FinishReason}
+		return nil, &StructuredOutputFinishError{Reason: StructuredOutputFinishReasonOther}
 	}
 
 	return StructuredMessageResult(resp.Message)
@@ -210,21 +210,21 @@ func isTerminalToolRepresentation(msg *content.AIMessage) bool {
 
 func decodeStructuredOutput(raw json.RawMessage, out any) error {
 	if out == nil {
-		return &SchemaValidationError{Field: SchemaFieldOutput, Reason: SchemaReasonInvalidTarget}
+		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonInvalidTarget}
 	}
 	target := reflect.ValueOf(out)
-	if target.Kind() != reflect.Pointer || target.IsNil() || target.Elem().Kind() == reflect.Interface {
-		return &SchemaValidationError{Field: SchemaFieldOutput, Reason: SchemaReasonInvalidTarget}
+	if target.Kind() != reflect.Pointer || target.IsNil() || target.Elem().Kind() != reflect.Struct {
+		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonInvalidTarget}
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
-		return &SchemaValidationError{Field: SchemaFieldOutput, Reason: SchemaReasonDecodeFailed}
+		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonDecodeFailed}
 	}
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return &SchemaValidationError{Field: SchemaFieldOutput, Reason: SchemaReasonDecodeFailed}
+		return &SchemaValidationError{Field: SchemaFieldOutput, ReasonCode: SchemaReasonDecodeFailed}
 	}
 	return nil
 }

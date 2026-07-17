@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
@@ -262,6 +263,60 @@ func TestValidateRequestFeaturesEmptyModelDoesNotExposePayloads(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), string(output.Schema)) {
 		t.Errorf("ValidateRequestFeatures() error exposed schema payload: %q", err)
+	}
+}
+
+func TestValidateRequestFeaturesBoundsUnsupportedModelMetadata(t *testing.T) {
+	t.Parallel()
+
+	output := validOutput(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
+	oversized := strings.Repeat("世", inference.MaxStructuredOutputDiagnosticBytes)
+	tests := []struct {
+		name string
+		req  inference.Request
+		get  func(error) string
+	}{
+		{
+			name: "base capability",
+			req:  inference.Request{Model: model.Model{Name: oversized}, Output: &output},
+			get: func(err error) string {
+				var target *inference.StructuredOutputUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("error = %T %v, want *StructuredOutputUnsupportedError", err, err)
+				}
+				return target.Model
+			},
+		},
+		{
+			name: "combined capability",
+			req: inference.Request{
+				Model:  model.Model{Name: oversized, Caps: model.Capabilities{StructuredOutput: true}},
+				Tools:  []inference.Tool{{Name: "search"}},
+				Output: &output,
+			},
+			get: func(err error) string {
+				var target *inference.StructuredOutputWithToolsUnsupportedError
+				if !errors.As(err, &target) {
+					t.Fatalf("error = %T %v, want *StructuredOutputWithToolsUnsupportedError", err, err)
+				}
+				return target.Model
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.get(inference.ValidateRequestFeatures(tt.req))
+			if len(got) > inference.MaxStructuredOutputDiagnosticBytes {
+				t.Fatalf("diagnostic model length = %d, max %d", len(got), inference.MaxStructuredOutputDiagnosticBytes)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("diagnostic model is invalid UTF-8: %q", got)
+			}
+			if got == oversized {
+				t.Fatal("diagnostic model retained oversized input")
+			}
+		})
 	}
 }
 
