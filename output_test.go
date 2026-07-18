@@ -222,6 +222,45 @@ func TestValidateOutputSchemaRejectsInvalidSchemas(t *testing.T) {
 	}
 }
 
+func TestValidateOutputSchemaRejectsNonStringRequiredMembers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		properties string
+		required   string
+	}{
+		{
+			name:       "null cannot name empty property",
+			properties: `"":{"type":"string"}`,
+			required:   `null`,
+		},
+		{name: "boolean", required: `true`},
+		{name: "number", required: `1`},
+		{name: "object", required: `{"value":"schema-secret-object"}`},
+		{name: "array", required: `["schema-secret-array"]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const secret = "schema-secret-required-member"
+			schema := fmt.Sprintf(
+				`{"type":"object","description":%q,"properties":{%s},"required":[%s],"additionalProperties":false}`,
+				secret,
+				tt.properties,
+				tt.required,
+			)
+			err := inference.ValidateOutputSchema(validOutput(schema))
+			assertSchemaValidationError(t, err, inference.SchemaFieldRequired, inference.SchemaReasonInvalid)
+			if strings.Contains(err.Error(), secret) || len(err.Error()) > inference.MaxStructuredOutputDiagnosticBytes {
+				t.Fatalf("validation diagnostic is unbounded or exposes schema bytes: %q", err)
+			}
+		})
+	}
+}
+
 func TestValidateOutputSchemaDoesNotExposeSchemaBytes(t *testing.T) {
 	t.Parallel()
 
