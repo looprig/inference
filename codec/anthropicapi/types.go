@@ -25,6 +25,8 @@ const (
 	outputFormatJSONSchema = "json_schema"
 	toolChoiceAny          = "any"
 
+	cacheControlEphemeral = "ephemeral"
+
 	responseTypeError = "error"
 
 	// SSE event `type` values.
@@ -61,7 +63,7 @@ const defaultMaxTokens = 4096
 // read model → conversation → tools → sampling → thinking → stream.
 type messagesRequest struct {
 	Model         string             `json:"model"`
-	System        string             `json:"system,omitempty"`
+	System        *systemPrompt      `json:"system,omitempty"`
 	Messages      []anthropicMessage `json:"messages"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
 	ToolChoice    *toolChoice        `json:"tool_choice,omitempty"`
@@ -72,6 +74,32 @@ type messagesRequest struct {
 	Thinking      *thinkingConfig    `json:"thinking,omitempty"`
 	OutputConfig  *outputConfig      `json:"output_config,omitempty"`
 	Stream        bool               `json:"stream,omitempty"`
+}
+
+// cacheControl is the `cache_control` breakpoint marker on a content block.
+// Only the ephemeral type exists on the wire today (default 5-minute TTL).
+type cacheControl struct {
+	Type string `json:"type"`
+}
+
+// systemPrompt marshals the top-level `system` field. Without a breakpoint it
+// emits the plain-string form — byte-compatible with the pre-caching wire
+// shape. With Cache set it emits the array-of-blocks form, because a bare
+// string cannot carry a cache_control marker.
+type systemPrompt struct {
+	Text  string
+	Cache bool
+}
+
+func (s systemPrompt) MarshalJSON() ([]byte, error) {
+	if !s.Cache {
+		return json.Marshal(s.Text)
+	}
+	return json.Marshal([]anthropicBlock{{
+		Type:         blockTypeText,
+		Text:         s.Text,
+		CacheControl: &cacheControl{Type: cacheControlEphemeral},
+	}})
 }
 
 // thinkingConfig is the `thinking` request field. Only adaptive thinking is
@@ -140,6 +168,9 @@ type anthropicBlock struct {
 	ToolUseID string           `json:"tool_use_id,omitempty"`
 	Content   []anthropicBlock `json:"content,omitempty"`
 	IsError   bool             `json:"is_error,omitempty"`
+
+	// cache breakpoint marker (encode only; never populated on decode)
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 // imageSource is the `source` object of an image block: either a base64 inline
