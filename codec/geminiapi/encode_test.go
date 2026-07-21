@@ -394,7 +394,7 @@ func TestEncodeRequest_ImageInlineData(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    model.Model{Name: "m"},
+				Model:    model.Model{Name: "m", Caps: model.Capabilities{AcceptsImages: true}},
 				Messages: content.AgenticMessages{userMsg(textBlock("look"), imageDataBlock(tc.mediaType, tc.data))},
 			}
 			got, err := geminiapi.EncodeRequest(req)
@@ -435,7 +435,7 @@ func TestEncodeRequest_ImageURLFileData(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model:    model.Model{Name: "m"},
+		Model:    model.Model{Name: "m", Caps: model.Capabilities{AcceptsImages: true}},
 		Messages: content.AgenticMessages{userMsg(imageURLBlock("https://example.com/x.jpg"))},
 	}
 	got, err := geminiapi.EncodeRequest(req)
@@ -800,7 +800,7 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 			req: inference.Request{
 				Model: model.Model{
 					Name:     "gemini-2.5-flash",
-					Caps:     model.Capabilities{Thinking: true},
+					Caps:     model.Capabilities{Thinking: true, AcceptsImages: true},
 					Sampling: model.Sampling{Temperature: &temp, MaxTokens: &maxTok, Stop: []string{"STOP"}, Effort: model.EffortHigh},
 				},
 				System: "Be helpful.",

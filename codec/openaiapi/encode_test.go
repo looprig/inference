@@ -612,7 +612,7 @@ func TestEncodeRequest_Messages(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    model.Model{Name: "m"},
+				Model:    model.Model{Name: "m", Caps: model.Capabilities{AcceptsImages: true}},
 				Messages: tc.msgs,
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -857,7 +857,7 @@ func TestEncodeRequest_ImageBlock_DataURL(t *testing.T) {
 			t.Parallel()
 
 			req := inference.Request{
-				Model:    model.Model{Name: "m"},
+				Model:    model.Model{Name: "m", Caps: model.Capabilities{AcceptsImages: true}},
 				Messages: content.AgenticMessages{userMsg(imageDataBlock(tc.mediaType, tc.data))},
 			}
 			got, err := openaiapi.EncodeRequest(req, false)
@@ -938,6 +938,7 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 			req: inference.Request{
 				Model: model.Model{
 					Name: "gpt-4o",
+					Caps: model.Capabilities{AcceptsImages: true},
 					Sampling: model.Sampling{
 						Temperature: &temp,
 						MaxTokens:   &maxTok,

@@ -483,7 +483,9 @@ func TestEncodeRequest_Images(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			req := inference.Request{Model: baseModel(), Messages: content.AgenticMessages{userMsg(tc.block)}}
+			m := baseModel()
+			m.Caps.AcceptsImages = true
+			req := inference.Request{Model: m, Messages: content.AgenticMessages{userMsg(tc.block)}}
 			data, err := anthropicapi.EncodeRequest(req, false)
 			if err != nil {
 				t.Fatalf("EncodeRequest: %v", err)

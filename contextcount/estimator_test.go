@@ -577,6 +577,7 @@ func addTool(req *inference.Request) {
 }
 
 func addImage(req *inference.Request) {
+	req.Model.Caps.AcceptsImages = true
 	req.Messages = content.AgenticMessages{&content.UserMessage{Message: content.Message{
 		Role: content.RoleUser,
 		Blocks: []content.Block{&content.ImageBlock{
