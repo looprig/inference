@@ -718,7 +718,9 @@ func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 // fail secure with a *geminiapi.UnsupportedBlockError rather than being silently
 // dropped — the model must never receive less than the caller sent. This mirrors
 // the sibling anthropicapi codec. A ThinkingBlock on an assistant turn remains an
-// intentional (documented) skip, not an error — covered by TestEncodeRequest_ThinkingIgnored.
+// intentional (documented) skip, not an error, UNLESS it carries a thoughtSignature
+// (ProviderState) — covered by TestEncodeRequest_ThinkingWithoutSignatureIsDropped
+// and TestEncodeRequest_ThinkingWithSignatureRoundTrips.
 func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 	t.Parallel()
 
@@ -756,10 +758,14 @@ func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 	}
 }
 
-// --- TestEncodeRequest_ThinkingIgnored ---
+// --- TestEncodeRequest_ThinkingWithoutSignatureIsDropped ---
 
-// A ThinkingBlock on an assistant turn is dropped (no thoughtSignature round-trip).
-func TestEncodeRequest_ThinkingIgnored(t *testing.T) {
+// A ThinkingBlock with no ProviderState (no thoughtSignature to replay) is
+// still dropped: real Gemini 2.5+ models require a replayed thought part to
+// carry the model's own exact signature, and there is nothing faithful to
+// send without one. See TestEncodeRequest_ThinkingWithSignatureRoundTrips for
+// the case that DOES now survive encoding.
+func TestEncodeRequest_ThinkingWithoutSignatureIsDropped(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
@@ -776,6 +782,57 @@ func TestEncodeRequest_ThinkingIgnored(t *testing.T) {
 		t.Fatalf("expected only the text part to survive, got %d parts", len(parts))
 	}
 	if txt := strField(t, parts[0], "text"); txt != "visible" {
+		t.Errorf("surviving text = %q, want visible", txt)
+	}
+}
+
+// --- TestEncodeRequest_ThinkingWithSignatureRoundTrips ---
+
+// A ThinkingBlock built via content.NewThinkingBlock with a non-nil
+// ProviderState (the JSON-marshaled form of a Gemini thoughtSignature, per
+// this codec's convention) is now replayed as a thought part carrying that
+// exact signature — the encode.go fix this task makes, replacing the prior
+// silent, undocumented drop.
+func TestEncodeRequest_ThinkingWithSignatureRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	providerState := json.RawMessage(`"opaque-thought-sig"`)
+	req := inference.Request{
+		Model: model.Model{Name: "m"},
+		Messages: content.AgenticMessages{
+			&content.AIMessage{Message: content.Message{
+				Role: content.RoleAssistant,
+				Blocks: []content.Block{
+					content.NewThinkingBlock("secret", "", providerState, "gemini"),
+					textBlock("visible"),
+				},
+			}},
+		},
+	}
+	got, err := geminiapi.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest error: %v", err)
+	}
+	contents := contentsFromRaw(t, mustDecode(t, got))
+	parts := partsOf(t, contents[0])
+	if len(parts) != 2 {
+		t.Fatalf("expected thought and text parts to survive, got %d parts", len(parts))
+	}
+	if txt := strField(t, parts[0], "text"); txt != "secret" {
+		t.Errorf("thought text = %q, want secret", txt)
+	}
+	thoughtVal, ok := parts[0]["thought"]
+	if !ok {
+		t.Fatalf("parts[0] missing thought field: %#v", parts[0])
+	}
+	var thought bool
+	if err := json.Unmarshal(thoughtVal, &thought); err != nil || !thought {
+		t.Errorf("thought = %v, want true", thoughtVal)
+	}
+	if sig := strField(t, parts[0], "thoughtSignature"); sig != "opaque-thought-sig" {
+		t.Errorf("thoughtSignature = %q, want opaque-thought-sig", sig)
+	}
+	if txt := strField(t, parts[1], "text"); txt != "visible" {
 		t.Errorf("surviving text = %q, want visible", txt)
 	}
 }
