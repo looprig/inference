@@ -361,3 +361,60 @@ func TestDecodeResponse_EmptyArgsNormalized(t *testing.T) {
 		t.Errorf("Input is not valid JSON: %s", tu.Input)
 	}
 }
+
+// TestDecodeResponse_ThoughtSignaturePopulatesProviderState proves buildBlocks
+// now populates ThinkingBlock.ProviderState from the wire thoughtSignature
+// (via content.NewThinkingBlock) instead of the prior bare struct literal that
+// dropped it — the decode.go fix this task makes, mirroring the sibling
+// encode.go fix that stops silently dropping a ThinkingBlock's signature on
+// the outbound leg.
+func TestDecodeResponse_ThoughtSignaturePopulatesProviderState(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"candidates": [{"content": {"parts": [
+			{"text": "planning", "thought": true, "thoughtSignature": "opaque-sig"}
+		], "role": "model"}}]
+	}`)
+	resp, err := geminiapi.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse error: %v", err)
+	}
+	if len(resp.Message.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(resp.Message.Blocks))
+	}
+	tb, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok {
+		t.Fatalf("expected ThinkingBlock, got %T", resp.Message.Blocks[0])
+	}
+	if tb.Thinking != "planning" {
+		t.Errorf("Thinking = %q, want planning", tb.Thinking)
+	}
+	var sig string
+	if err := json.Unmarshal(tb.ProviderState, &sig); err != nil {
+		t.Fatalf("ProviderState not a JSON string: %v (%s)", err, tb.ProviderState)
+	}
+	if sig != "opaque-sig" {
+		t.Errorf("ProviderState = %q, want opaque-sig", sig)
+	}
+}
+
+// TestDecodeResponse_ThoughtWithoutSignatureLeavesProviderStateNil proves a
+// thought part with no thoughtSignature still decodes to a ThinkingBlock, but
+// with ProviderState left nil rather than an empty-but-non-nil value.
+func TestDecodeResponse_ThoughtWithoutSignatureLeavesProviderStateNil(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"candidates": [{"content": {"parts": [{"text": "planning", "thought": true}], "role": "model"}}]}`)
+	resp, err := geminiapi.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse error: %v", err)
+	}
+	tb, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok {
+		t.Fatalf("expected ThinkingBlock, got %T", resp.Message.Blocks[0])
+	}
+	if tb.ProviderState != nil {
+		t.Errorf("ProviderState = %q, want nil", tb.ProviderState)
+	}
+}

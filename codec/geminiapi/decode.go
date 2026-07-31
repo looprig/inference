@@ -147,9 +147,14 @@ func totalComponents(wire usageMetadata) (content.TokenCount, error) {
 
 // buildBlocks maps candidate parts to content blocks, preserving Gemini's part
 // order (which interleaves text, thoughts, and tool calls). A functionCall part
-// becomes a ToolUseBlock; a thought-tagged text part becomes a ThinkingBlock; any
-// other non-empty text part becomes a TextBlock. Empty text and unknown parts are
-// skipped.
+// becomes a ToolUseBlock; a thought-tagged part becomes a ThinkingBlock (built via
+// content.NewThinkingBlock so its thoughtSignature, if present, is defensively
+// copied into ProviderState for a same-dialect replay — see
+// providerStateFromThoughtSignature); any other non-empty text part becomes a
+// TextBlock. Empty text and unknown parts are skipped, EXCEPT a thought part
+// carrying only a signature and no text: that still yields a (Thinking: "")
+// ThinkingBlock rather than being dropped, since dropping it would silently lose
+// the opaque continuation state a same-dialect follow-up request needs to replay.
 func buildBlocks(parts []geminiPart) []content.Block {
 	var blocks []content.Block
 	for _, p := range parts {
@@ -160,11 +165,28 @@ func buildBlocks(parts []geminiPart) []content.Block {
 				Name:  p.FunctionCall.Name,
 				Input: argsJSON(p.FunctionCall.Args),
 			})
-		case p.Thought && p.Text != "":
-			blocks = append(blocks, &content.ThinkingBlock{Thinking: p.Text})
+		case p.Thought && (p.Text != "" || p.ThoughtSignature != ""):
+			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature)))
 		case p.Text != "":
 			blocks = append(blocks, &content.TextBlock{Text: p.Text})
 		}
 	}
 	return blocks
+}
+
+// providerStateFromThoughtSignature marshals the wire `thoughtSignature`
+// string into the json.RawMessage form ThinkingBlock.ProviderState carries,
+// or returns nil for an absent signature. Pairing with
+// providerStateToThoughtSignature (encode.go) makes ProviderState always
+// "the JSON-encoded form of the provider-opaque wire value" for this
+// dialect, so it round-trips arbitrary bytes/characters through ordinary
+// JSON string escaping — the same convention codec/openairesponses uses for
+// its own encrypted_content field.
+func providerStateFromThoughtSignature(sig string) json.RawMessage {
+	if sig == "" {
+		return nil
+	}
+	// json.Marshal of a string cannot fail.
+	encoded, _ := json.Marshal(sig)
+	return encoded
 }
