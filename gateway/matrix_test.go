@@ -337,7 +337,7 @@ func TestMatrix_ThinkingOpaqueState_SameDialectReplaySurvives(t *testing.T) {
 			Message: &content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					content.NewThinkingBlock("step by step", "", json.RawMessage(`"opaque-thought-sig-999"`)),
+					content.NewThinkingBlock("step by step", "", json.RawMessage(`"opaque-thought-sig-999"`), "gemini"),
 					&content.TextBlock{Text: "42"},
 				},
 			}},
@@ -384,20 +384,30 @@ func TestMatrix_ThinkingOpaqueState_SameDialectReplaySurvives(t *testing.T) {
 // TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded proves that when
 // ingress and target dialects DIFFER, a ThinkingBlock's ingress-native
 // opaque continuation state is NOT forwarded to the differently-dialected
-// target as if it were meaningful there. This is deliberately a 3-pair
-// subset (not the full 12 cross-dialect combinations): all 3 pairs pivot on
+// target as if it were meaningful there. The first 3 pairs pivot on
 // Anthropic's Signature field, which is a structurally distinct Go field
 // from every other dialect's ProviderState -- no bundled codec's outbound
 // encoder ever reads Signature, and Anthropic's own outbound encoder never
 // reads ProviderState, so these pairs demonstrate the property by
-// construction. See this task's final report for why the
-// Gemini<->OpenAIResponses pair (the other two ProviderState-carrying
-// dialects, which happen to share the same "bare JSON string" opaque
-// encoding convention -- see geminiapi/decode.go's
+// construction.
+//
+// The final 2 pairs are the regression case for a real bug found in this
+// task's own integration testing: geminiapi and openairesponses both store
+// their opaque state as a bare JSON-marshaled string in ProviderState with
+// no tag identifying which dialect produced it (see geminiapi/decode.go's
 // providerStateFromThoughtSignature and openairesponses/decode.go's
-// opaqueStateFromWire doc comments) was deliberately excluded: it was
-// verified to actually leak, and closing it is an architectural change
-// outside this task's scope (see the report).
+// opaqueStateFromWire doc comments), so a ThinkingBlock decoded from one of
+// them would round-trip undetected through the other's encoder as if it
+// were that encoder's own native state. content.ThinkingBlock.
+// ProviderStateFormat (and the guards added to each codec's forwarding
+// sites) now closes this: a block is tagged with the dialect that produced
+// it, and each codec only replays ProviderState toward its own wire field
+// when that tag matches its own label. These two cases set the format tag
+// to match INGRESS (so it survives that dialect's own outbound-encode step
+// unmolested -- see geminiapi/encode.go's and openairesponses/encode.go's
+// forwarding guards) while TARGET is the other, mismatched dialect, proving
+// the target's own forwarding guard -- not just the ingress one -- refuses
+// to treat the foreign tag as its own.
 func TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded(t *testing.T) {
 	t.Parallel()
 
@@ -420,7 +430,7 @@ func TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded(t *testing.T) {
 			name:      "gemini_providerstate_not_forwarded_to_anthropic_target",
 			ingress:   model.APIFormatGemini,
 			target:    model.APIFormatAnthropic,
-			block:     content.NewThinkingBlock("reasoning", "", json.RawMessage(`"gemini-secret-thought-xyz"`)),
+			block:     content.NewThinkingBlock("reasoning", "", json.RawMessage(`"gemini-secret-thought-xyz"`), "gemini"),
 			secretSub: "gemini-secret-thought-xyz",
 		},
 		{
@@ -429,6 +439,28 @@ func TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded(t *testing.T) {
 			target:    model.APIFormatOpenAIResponses,
 			block:     &content.ThinkingBlock{Thinking: "reasoning", Signature: "sig-anthropic-secret-def"},
 			secretSub: "sig-anthropic-secret-def",
+		},
+		{
+			// Regression case: a ThinkingBlock genuinely native to Gemini
+			// (ProviderStateFormat "gemini", so it survives geminiapi's own
+			// outbound-encode guard) replayed toward an OpenAI-Responses
+			// target must NOT be treated as that target's own
+			// encrypted_content.
+			name:      "gemini_providerstate_not_forwarded_to_responses_target",
+			ingress:   model.APIFormatGemini,
+			target:    model.APIFormatOpenAIResponses,
+			block:     content.NewThinkingBlock("reasoning", "", json.RawMessage(`"gemini-secret-cross-format-111"`), "gemini"),
+			secretSub: "gemini-secret-cross-format-111",
+		},
+		{
+			// The inverse of the pair above: a ThinkingBlock genuinely
+			// native to OpenAI-Responses replayed toward a Gemini target
+			// must NOT be treated as that target's own thoughtSignature.
+			name:      "responses_providerstate_not_forwarded_to_gemini_target",
+			ingress:   model.APIFormatOpenAIResponses,
+			target:    model.APIFormatGemini,
+			block:     content.NewThinkingBlock("reasoning", "", json.RawMessage(`"responses-secret-cross-format-222"`), "openai-responses"),
+			secretSub: "responses-secret-cross-format-222",
 		},
 	}
 

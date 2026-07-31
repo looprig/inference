@@ -396,7 +396,7 @@ func decodeModelParts(parts []geminiPart) (*content.AIMessage, error) {
 		case p.FunctionCall != nil:
 			blocks = append(blocks, &content.ToolUseBlock{ID: p.FunctionCall.ID, Name: p.FunctionCall.Name, Input: argsJSON(p.FunctionCall.Args)})
 		case p.Thought && (p.Text != "" || p.ThoughtSignature != ""):
-			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature)))
+			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature), providerStateFormatFor(p.ThoughtSignature)))
 		case p.Text != "":
 			blocks = append(blocks, &content.TextBlock{Text: p.Text})
 		default:

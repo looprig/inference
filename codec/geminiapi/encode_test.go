@@ -803,7 +803,7 @@ func TestEncodeRequest_ThinkingWithSignatureRoundTrips(t *testing.T) {
 			&content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					content.NewThinkingBlock("secret", "", providerState),
+					content.NewThinkingBlock("secret", "", providerState, "gemini"),
 					textBlock("visible"),
 				},
 			}},

@@ -98,7 +98,7 @@ func TestServerEncode_WriteResponse_ThinkingWithSignature(t *testing.T) {
 	resp := &inference.Response{
 		Message: &content.AIMessage{
 			Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
-				content.NewThinkingBlock("planning", "", json.RawMessage(`"opaque-sig"`)),
+				content.NewThinkingBlock("planning", "", json.RawMessage(`"opaque-sig"`), "gemini"),
 				&content.TextBlock{Text: "answer"},
 			}},
 		},
@@ -133,7 +133,7 @@ func TestServerEncode_WriteResponse_ThinkingWithoutSignatureStillWritten(t *test
 	resp := &inference.Response{
 		Message: &content.AIMessage{
 			Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
-				content.NewThinkingBlock("planning", "", nil),
+				content.NewThinkingBlock("planning", "", nil, ""),
 			}},
 		},
 	}

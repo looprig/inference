@@ -172,6 +172,16 @@ func decodeFunctionCallArguments(raw string) (json.RawMessage, error) {
 	return json.RawMessage(raw), nil
 }
 
+// providerStateFormatOpenAIResponses tags a ThinkingBlock.ProviderState as
+// having been produced by this codec (i.e. containing an OpenAI Responses
+// encrypted_content value). Per the invariant documented on
+// content.ThinkingBlock, every site in this package that forwards
+// ProviderState onto the wire as encrypted_content must first check
+// ProviderStateFormat == providerStateFormatOpenAIResponses; a ProviderState
+// tagged with any other format (or untagged) originated from a different
+// dialect and must be treated as absent, never replayed here.
+const providerStateFormatOpenAIResponses = "openai-responses"
+
 // decodeReasoningItem builds a ThinkingBlock from a reasoning item's summary
 // parts (concatenated) and its opaque encrypted_content, if present, via
 // content.NewThinkingBlock so ProviderState is defensively copied.
@@ -185,10 +195,12 @@ func decodeReasoningItem(summary []wireSummaryPart, encryptedContent string) *co
 	}
 
 	var providerState json.RawMessage
+	var providerStateFormat string
 	if encryptedContent != "" {
 		providerState = opaqueStateFromWire(encryptedContent)
+		providerStateFormat = providerStateFormatOpenAIResponses
 	}
-	return content.NewThinkingBlock(sb.String(), "", providerState)
+	return content.NewThinkingBlock(sb.String(), "", providerState, providerStateFormat)
 }
 
 // opaqueStateFromWire marshals the wire `encrypted_content` string into the

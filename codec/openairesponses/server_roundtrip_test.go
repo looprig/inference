@@ -95,7 +95,7 @@ func TestResponsesServerCodec_SameDialectRoundTrip(t *testing.T) {
 			&content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					content.NewThinkingBlock("step by step", "", providerState),
+					content.NewThinkingBlock("step by step", "", providerState, "openai-responses"),
 					&content.ToolUseBlock{ID: "call_1", Name: "calc", Input: json.RawMessage(`{"x":1}`)},
 				},
 			}},

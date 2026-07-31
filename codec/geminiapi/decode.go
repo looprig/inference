@@ -166,13 +166,22 @@ func buildBlocks(parts []geminiPart) []content.Block {
 				Input: argsJSON(p.FunctionCall.Args),
 			})
 		case p.Thought && (p.Text != "" || p.ThoughtSignature != ""):
-			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature)))
+			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature), providerStateFormatFor(p.ThoughtSignature)))
 		case p.Text != "":
 			blocks = append(blocks, &content.TextBlock{Text: p.Text})
 		}
 	}
 	return blocks
 }
+
+// providerStateFormatGemini tags a ThinkingBlock.ProviderState as having been
+// produced by this codec (i.e. containing a Gemini thoughtSignature). Per the
+// invariant documented on content.ThinkingBlock, every site in this package
+// that forwards ProviderState onto the wire as thoughtSignature must first
+// check ProviderStateFormat == providerStateFormatGemini; a ProviderState
+// tagged with any other format (or untagged) originated from a different
+// dialect and must be treated as absent, never replayed here.
+const providerStateFormatGemini = "gemini"
 
 // providerStateFromThoughtSignature marshals the wire `thoughtSignature`
 // string into the json.RawMessage form ThinkingBlock.ProviderState carries,
@@ -189,4 +198,15 @@ func providerStateFromThoughtSignature(sig string) json.RawMessage {
 	// json.Marshal of a string cannot fail.
 	encoded, _ := json.Marshal(sig)
 	return encoded
+}
+
+// providerStateFormatFor returns providerStateFormatGemini when sig is
+// present, or "" otherwise — mirroring providerStateFromThoughtSignature's
+// nil-for-empty behavior so a signature-less ThinkingBlock never carries a
+// stray format tag with no ProviderState to justify it.
+func providerStateFormatFor(sig string) string {
+	if sig == "" {
+		return ""
+	}
+	return providerStateFormatGemini
 }

@@ -108,7 +108,7 @@ func TestServerEncode_WriteResponse_ReasoningContent(t *testing.T) {
 	resp := &inference.Response{
 		Message: &content.AIMessage{
 			Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
-				content.NewThinkingBlock("thinking...", "", nil),
+				content.NewThinkingBlock("thinking...", "", nil, ""),
 				&content.TextBlock{Text: "answer"},
 			}},
 		},

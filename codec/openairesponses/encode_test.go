@@ -321,7 +321,7 @@ func TestEncodeRequest_EncryptedReasoningReplay(t *testing.T) {
 			&content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					content.NewThinkingBlock("step by step", "", providerState),
+					content.NewThinkingBlock("step by step", "", providerState, "openai-responses"),
 				},
 			}},
 		},

@@ -111,7 +111,7 @@ func TestServerEncode_ThinkingBlockToReasoningItem(t *testing.T) {
 	resp := &inference.Response{
 		Message: &content.AIMessage{
 			Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
-				content.NewThinkingBlock("step 1", "", json.RawMessage(`"opaque-xyz"`)),
+				content.NewThinkingBlock("step 1", "", json.RawMessage(`"opaque-xyz"`), "openai-responses"),
 			}},
 		},
 		FinishReason: stream.FinishReasonStop,
