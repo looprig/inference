@@ -129,12 +129,6 @@ func (c *controlledStreamClient) Stream(ctx context.Context, req inference.Reque
 	return stream.NewStreamReaderWithResult(next, closer, producer), nil
 }
 
-func (c *controlledStreamClient) lastRequest() inference.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.gotReq
-}
-
 func (c *controlledStreamClient) callCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

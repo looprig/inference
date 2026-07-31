@@ -22,7 +22,7 @@ import (
 // narrower, separately-invoked `/v1/messages/count_tokens` auxiliary endpoint.
 const (
 	pathMessages     = "/v1/messages"
-	pathCountTokens  = "/v1/messages/count_tokens"
+	pathCountTokens  = "/v1/messages/count_tokens" // #nosec G101 -- a URL path, not a credential
 	toolChoiceAuto   = "auto"
 	toolChoiceTool   = "tool"
 	toolChoiceNone   = "none"

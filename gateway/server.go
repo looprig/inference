@@ -228,14 +228,22 @@ func (s *Server) Start(ctx context.Context) error {
 		state := s.state
 		s.mu.Unlock()
 		// Lost the race (or Start was already called, successfully or
-		// not): this listener is spurious and must not leak.
-		ln.Close()
+		// not): this listener is spurious and must not leak. Best-effort
+		// close: there is no further action to take on failure.
+		_ = ln.Close()
 		return &ServerStateError{Op: "Start", State: state.String()}
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/", authMiddleware(token, s.handler))
-	httpServer := &http.Server{Handler: mux}
+	httpServer := &http.Server{
+		Handler: mux,
+		// Bounds how long a client may take to send request headers, so a
+		// slow-header client cannot hold a connection (and its goroutine)
+		// open indefinitely -- defense in depth even though this server is
+		// loopback-only.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	s.listener = ln
 	s.http = httpServer

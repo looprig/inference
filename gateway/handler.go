@@ -30,9 +30,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 
+	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/anthropicapi"
@@ -251,7 +253,19 @@ func (h *Handler) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 	// See the encode-failure comment in serveInference: nothing further can
 	// be done over the wire once WriteCountTokensResponse has started
 	// writing.
-	_ = anthropicapi.WriteCountTokensResponse(w, int(count.InputTokens))
+	_ = anthropicapi.WriteCountTokensResponse(w, saturatingIntFromTokenCount(count.InputTokens))
+}
+
+// saturatingIntFromTokenCount converts a uint64-backed content.TokenCount to
+// int, saturating at math.MaxInt rather than silently wrapping. In practice
+// count.InputTokens comes from contextcount.Estimator's local heuristic and
+// is never remotely close to this bound, but the conversion itself must not
+// be able to overflow.
+func saturatingIntFromTokenCount(n content.TokenCount) int {
+	if uint64(n) > uint64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(n) // #nosec G115 -- bounded by the guard above; cannot overflow
 }
 
 // applyBoundedBody implements step 4: it reads r.Body fully, bounded by
