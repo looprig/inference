@@ -14,6 +14,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	codec "github.com/looprig/inference/codec"
+	"github.com/looprig/inference/internal/jsonstrict"
 	model "github.com/looprig/inference/model"
 	"github.com/looprig/inference/wire/jsonbody"
 )
@@ -408,11 +409,12 @@ func decodeModelParts(parts []geminiPart) (*content.AIMessage, error) {
 
 // --- duplicate JSON object key detection -----------------------------------
 //
-// A small, independent, package-local scan mirroring anthropicapi's,
-// openairesponses', and openaiapi's own identical copies (see those
-// packages' server_decode.go for the shared rationale: this repetition is a
-// known, already-flagged follow-up, not something this task should resolve
-// on its own).
+// The actual scan lives in internal/jsonstrict, shared by every codec/*api
+// dialect's server-decode path (extracted once a fourth identical copy of
+// this logic appeared — see that package's doc comment). This wrapper only
+// translates jsonstrict's dialect-neutral error types to this package's own
+// ServerDecodeError/DuplicateKeyError, so callers and existing tests see no
+// change in behavior.
 
 // rejectDuplicateObjectKeys reports the first duplicate object member name
 // found anywhere in raw (at any nesting depth), or nil if raw has none. A
@@ -420,66 +422,14 @@ func decodeModelParts(parts []geminiPart) (*content.AIMessage, error) {
 // function's job to validate JSON, but it must never silently accept a body
 // it cannot fully walk.
 func rejectDuplicateObjectKeys(raw []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-
-	type frame struct {
-		isObject     bool
-		keys         map[string]struct{}
-		expectingKey bool
-	}
-	var stack []frame
-
-	finishValue := func() {
-		if len(stack) == 0 {
-			return
-		}
-		top := &stack[len(stack)-1]
-		if top.isObject && !top.expectingKey {
-			top.expectingKey = true
-		}
-	}
-
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return &ServerDecodeError{Reason: "malformed_body", Detail: err.Error()}
-		}
-
-		switch t := tok.(type) {
-		case json.Delim:
-			switch t {
-			case '{':
-				finishValue()
-				stack = append(stack, frame{isObject: true, keys: make(map[string]struct{}), expectingKey: true})
-			case '[':
-				finishValue()
-				stack = append(stack, frame{})
-			case '}', ']':
-				if len(stack) == 0 {
-					return &ServerDecodeError{Reason: "malformed_body", Detail: "mismatched JSON delimiter"}
-				}
-				stack = stack[:len(stack)-1]
-				finishValue()
-			}
-		case string:
-			if len(stack) > 0 {
-				top := &stack[len(stack)-1]
-				if top.isObject && top.expectingKey {
-					if _, dup := top.keys[t]; dup {
-						return &DuplicateKeyError{Key: t}
-					}
-					top.keys[t] = struct{}{}
-					top.expectingKey = false
-					continue
-				}
-			}
-			finishValue()
-		default:
-			finishValue()
-		}
+	switch err := jsonstrict.RejectDuplicateKeys(raw).(type) {
+	case nil:
+		return nil
+	case *jsonstrict.DuplicateKeyError:
+		return &DuplicateKeyError{Key: err.Key}
+	case *jsonstrict.MalformedError:
+		return &ServerDecodeError{Reason: "malformed_body", Detail: err.Detail}
+	default:
+		return err
 	}
 }
