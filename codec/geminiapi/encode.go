@@ -191,7 +191,7 @@ func encodeAIParts(m *content.AIMessage, toolNames map[string]string) ([]geminiP
 				Args: argsJSON(b.Input),
 			}})
 		case *content.ThinkingBlock:
-			if len(b.ProviderState) == 0 || b.ProviderStateFormat != providerStateFormatGemini {
+			if !b.ReplayableAs(providerStateFormatGemini) {
 				continue
 			}
 			sig, err := providerStateToThoughtSignature(b.ProviderState)

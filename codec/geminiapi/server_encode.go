@@ -102,7 +102,7 @@ func buildResponseParts(blocks []content.Block) ([]geminiPart, error) {
 		switch b := b.(type) {
 		case *content.ThinkingBlock:
 			var sig string
-			if len(b.ProviderState) > 0 && b.ProviderStateFormat == providerStateFormatGemini {
+			if b.ReplayableAs(providerStateFormatGemini) {
 				s, err := providerStateToThoughtSignature(b.ProviderState)
 				if err != nil {
 					return nil, err

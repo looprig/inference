@@ -162,7 +162,7 @@ func blocksToItems(blocks []content.Block, ids func() string) ([]wireItem, error
 			if b.Thinking != "" {
 				item.Summary = []wireSummaryPart{{Type: summaryTypeText, Text: b.Thinking}}
 			}
-			if len(b.ProviderState) > 0 && b.ProviderStateFormat == providerStateFormatOpenAIResponses {
+			if b.ReplayableAs(providerStateFormatOpenAIResponses) {
 				s, err := opaqueStateToWire(b.ProviderState)
 				if err != nil {
 					return nil, err
