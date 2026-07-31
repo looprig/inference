@@ -97,15 +97,6 @@ func (e *ConcurrencyLimitExceededError) Error() string {
 	return "gateway: concurrency limit exceeded"
 }
 
-// StreamingUnavailableError is returned by the intentionally minimal
-// Task-6 streaming stub (Handler.serveStreaming). See that method's doc
-// comment.
-type StreamingUnavailableError struct{}
-
-func (e *StreamingUnavailableError) Error() string {
-	return "gateway: streaming is not yet available"
-}
-
 // CountTokensUnavailableError reports that the count_tokens route was
 // invoked but the Handler was constructed with a nil Config.ContextCounter.
 type CountTokensUnavailableError struct{}
@@ -176,8 +167,6 @@ func classifyStatus(err error) (int, bool) {
 		return http.StatusInternalServerError, true
 	case as[*ConcurrencyLimitExceededError](err):
 		return http.StatusTooManyRequests, true
-	case as[*StreamingUnavailableError](err):
-		return http.StatusNotImplemented, true
 	case as[*CountTokensUnavailableError](err):
 		return http.StatusServiceUnavailable, true
 	case as[*ResponseEncodeError](err):
