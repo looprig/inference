@@ -2,7 +2,7 @@ module github.com/looprig/inference
 
 go 1.26.4
 
-require github.com/looprig/core v0.2.0
+require github.com/looprig/core v0.4.0
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -58,8 +58,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	honnef.co/go/tools v0.7.0 // indirect
 )
-
-replace github.com/looprig/core => ../core
 
 tool (
 	github.com/securego/gosec/v2/cmd/gosec
