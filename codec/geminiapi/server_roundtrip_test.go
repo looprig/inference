@@ -89,6 +89,29 @@ func TestGeminiServerCodec_SatisfiesContract(t *testing.T) {
 		},
 
 		SampleError: &geminiapi.ServerDecodeError{Reason: "missing_model"},
+
+		// ForeignProviderStateResponse tags its ThinkingBlock with
+		// "openai-responses" -- a format Gemini's codec does NOT own -- to
+		// prove WriteResponse never replays it as a thoughtSignature. See
+		// codec/servertest's testRejectsForeignProviderState.
+		ForeignProviderStateResponse: &inference.Response{
+			Message: &content.AIMessage{
+				Message: content.Message{
+					Role: content.RoleAssistant,
+					Blocks: []content.Block{
+						content.NewThinkingBlock(
+							"planning",
+							"",
+							json.RawMessage(`"FOREIGN-STATE-3f9a1c7e-do-not-forward"`),
+							"openai-responses",
+						),
+						&content.TextBlock{Text: "answer"},
+					},
+				},
+			},
+			Model: "gemini-test",
+		},
+		ForeignProviderStateMarker: "FOREIGN-STATE-3f9a1c7e-do-not-forward",
 	})
 }
 

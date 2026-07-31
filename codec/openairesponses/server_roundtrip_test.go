@@ -69,6 +69,29 @@ func TestResponsesServerCodec_SatisfiesContract(t *testing.T) {
 		},
 
 		SampleError: &openairesponses.ServerDecodeError{Reason: "missing_model"},
+
+		// ForeignProviderStateResponse tags its ThinkingBlock with "gemini"
+		// -- a format this codec does NOT own -- to prove WriteResponse
+		// never replays it as encrypted_content. See codec/servertest's
+		// testRejectsForeignProviderState.
+		ForeignProviderStateResponse: &inference.Response{
+			Message: &content.AIMessage{
+				Message: content.Message{
+					Role: content.RoleAssistant,
+					Blocks: []content.Block{
+						content.NewThinkingBlock(
+							"planning",
+							"",
+							json.RawMessage(`"FOREIGN-STATE-3f9a1c7e-do-not-forward"`),
+							"gemini",
+						),
+						&content.TextBlock{Text: "answer"},
+					},
+				},
+			},
+			Model: "gpt-test",
+		},
+		ForeignProviderStateMarker: "FOREIGN-STATE-3f9a1c7e-do-not-forward",
 	})
 }
 

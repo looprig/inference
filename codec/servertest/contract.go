@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,16 @@ type Config struct {
 
 	// SampleError is fed to WriteError and to StreamEncoder.Fail.
 	SampleError error
+
+	// ForeignProviderStateResponse, if set, is fed to WriteResponse to prove
+	// this codec never forwards a content.ThinkingBlock.ProviderState whose
+	// ProviderStateFormat does not match this codec's own dialect label — the
+	// written response bytes must not contain ForeignProviderStateMarker.
+	// Optional: a codec with no ProviderState-based opaque-replay mechanism
+	// leaves both fields at their zero value, and RejectsForeignProviderState
+	// is skipped rather than failing.
+	ForeignProviderStateResponse *inference.Response
+	ForeignProviderStateMarker   string
 }
 
 // Run exercises cfg.NewCodec against the shared server-codec contract: exactly one
@@ -100,6 +111,7 @@ func Run(t *testing.T, cfg Config) {
 	t.Run("StreamFail", func(t *testing.T) { testStreamFail(t, cfg) })
 	t.Run("StreamSingleTermination", func(t *testing.T) { testStreamSingleTermination(t, cfg) })
 	t.Run("DecodeReturnsPromptlyOnCanceledContext", func(t *testing.T) { testDecodeReturnsPromptlyOnCanceledContext(t, cfg) })
+	t.Run("RejectsForeignProviderState", func(t *testing.T) { testRejectsForeignProviderState(t, cfg) })
 }
 
 func validateConfig(t *testing.T, cfg Config) {
@@ -377,5 +389,29 @@ func testDecodeReturnsPromptlyOnCanceledContext(t *testing.T, cfg Config) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("DecodeRequest did not return promptly for a canceled request context")
+	}
+}
+
+// testRejectsForeignProviderState structurally guards the opaque-replay
+// invariant documented on content.ThinkingBlock.ProviderStateFormat: a codec
+// must never forward a ThinkingBlock.ProviderState tagged with a DIFFERENT
+// dialect's format label toward a wire field it owns. Every dialect that
+// carries an opaque-replay mechanism (currently geminiapi, openairesponses)
+// must wire ForeignProviderStateResponse/ForeignProviderStateMarker so this
+// runs for real; a dialect with no such mechanism (anthropicapi's
+// Signature-only approach, openaiapi's lack of one at all) legitimately
+// leaves both fields unset and this sub-test skips.
+func testRejectsForeignProviderState(t *testing.T, cfg Config) {
+	t.Helper()
+	if cfg.ForeignProviderStateResponse == nil {
+		t.Skip("codec does not use ThinkingBlock.ProviderState; nothing to guard")
+	}
+	c := cfg.NewCodec()
+	rec := httptest.NewRecorder()
+	if err := c.WriteResponse(rec, cfg.ForeignProviderStateResponse); err != nil {
+		t.Fatalf("WriteResponse: %v", err)
+	}
+	if strings.Contains(rec.Body.String(), cfg.ForeignProviderStateMarker) {
+		t.Errorf("WriteResponse forwarded foreign provider-opaque state (marker %q present in response body) -- a codec must only replay ThinkingBlock.ProviderState tagged with its own ProviderStateFormat", cfg.ForeignProviderStateMarker)
 	}
 }
