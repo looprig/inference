@@ -169,8 +169,8 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, ingress
 	defer h.release()
 
 	if decoded.Streaming {
-		// Step 10/11 (streaming): intentionally minimal Task-6 stub -- see
-		// serveStreaming's doc comment.
+		// Step 10/11 (streaming): see serveStreaming (stream.go) for the
+		// full incremental pull loop.
 		_ = h.serveStreaming(w, r, decoded, target, sc)
 		return
 	}
@@ -198,24 +198,6 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, ingress
 	// type's doc comment) via its own instrumentation, which this Handler
 	// does not do (it has no logger contract).
 	_ = sc.WriteResponse(w, resp)
-}
-
-// serveStreaming is the single, narrow extension seam for streaming
-// responses (DecodedRequest.Streaming == true). Its Task-6 body is
-// intentionally minimal: it writes a native codec error response via
-// sc.WriteError for a typed StreamingUnavailableError (HTTP 501) and does
-// nothing else -- no upstream call is made.
-//
-// A later task (Task 7) replaces ONLY this method's body: it will call
-// target.Client.Stream and drive an incremental pull loop through
-// sc.OpenStream/codec.StreamEncoder, using w, r, decoded, and target exactly
-// as already threaded through here. ServeHTTP's call site
-// (`h.serveStreaming(w, r, decoded, target, sc)` in serveInference) and the
-// admission acquire/release around it are not expected to change.
-func (h *Handler) serveStreaming(w http.ResponseWriter, r *http.Request, decoded codec.DecodedRequest, target Target, sc codec.ServerCodec) error {
-	err := &StreamingUnavailableError{}
-	h.writeError(sc, w, err)
-	return err
 }
 
 // serveCountTokens implements the Anthropic-only

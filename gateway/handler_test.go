@@ -449,42 +449,6 @@ func TestHandler_RedactedDiagnostics_AuthFailureBodyOmitsSuppliedToken(t *testin
 	}
 }
 
-// --- Streaming stub (Task 6 minimal seam; replaced by Task 7) ---------------
-
-// TestHandler_StreamingRequest_501Stub proves a streaming request currently
-// gets a clean, typed "not yet implemented" response (correct status, no
-// panic) and that admission is still released afterward. This test is
-// expected to be deleted/replaced once Task 7 implements real streaming.
-func TestHandler_StreamingRequest_501Stub(t *testing.T) {
-	t.Parallel()
-	h, _ := newHandler(t, anthropicModel("kimi-k2"), &recordingClient{})
-	body := `{"model":"primary","max_tokens":16,"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
-	req := messagesRequest(t, "test-token", body)
-	rr := httptest.NewRecorder()
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Fatalf("ServeHTTP panicked on a streaming request: %v", r)
-			}
-		}()
-		h.ServeHTTP(rr, req)
-	}()
-
-	if rr.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want %d; body: %s", rr.Code, http.StatusNotImplemented, rr.Body.String())
-	}
-
-	// Admission must have been released: a normal (non-streaming) request
-	// right after must not be starved by a leaked admission slot.
-	req2 := messagesRequest(t, "test-token", validMessagesBody)
-	rr2 := httptest.NewRecorder()
-	h.ServeHTTP(rr2, req2)
-	if rr2.Code != http.StatusOK {
-		t.Errorf("post-stream-stub request status = %d, want %d (admission leaked?); body: %s", rr2.Code, http.StatusOK, rr2.Body.String())
-	}
-}
-
 // --- count_tokens auxiliary route -------------------------------------------
 
 // countingResolverHandler builds a Handler configured with counter as its
