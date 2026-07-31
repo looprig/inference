@@ -178,10 +178,7 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, ingress
 	// Step 10: invoke. Never retried.
 	resp, err := target.Client.Invoke(ctx, decoded.Request)
 	if err != nil {
-		h.writeError(sc, w, &UpstreamInvocationError{
-			Err:              err,
-			DeadlineExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
-		})
+		h.writeError(sc, w, h.upstreamError(ctx, err))
 		return
 	}
 
@@ -229,6 +226,11 @@ func (h *Handler) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	decoded.Request.Model = target.Model
 
+	// Unlike serveInference, this path never calls inference.ValidateRequestFeatures:
+	// that check exists to protect Target.Client.Invoke/Stream from a request
+	// shaped in a way the target can't handle, and this route never calls
+	// Target.Client at all -- only the local ContextCounter below.
+
 	if h.contextCounter == nil {
 		h.writeError(sc, w, &CountTokensUnavailableError{})
 		return
@@ -242,10 +244,7 @@ func (h *Handler) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 
 	count, err := h.contextCounter.CountContext(ctx, decoded.Request)
 	if err != nil {
-		h.writeError(sc, w, &UpstreamInvocationError{
-			Err:              err,
-			DeadlineExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
-		})
+		h.writeError(sc, w, h.upstreamError(ctx, err))
 		return
 	}
 
@@ -313,6 +312,19 @@ func (h *Handler) writeError(sc codec.ServerCodec, w http.ResponseWriter, err er
 		return
 	}
 	sc.WriteError(w, err)
+}
+
+// upstreamError wraps err (from Target.Client.Invoke, Target.Client.Stream,
+// or a configured contextcount.ContextCounter.CountContext) as the single
+// shared *UpstreamInvocationError construction used by every upstream-calling
+// site in this package (serveInference's Invoke path, serveCountTokens, and
+// serveStreaming's pre-header Stream path in stream.go), so the
+// DeadlineExceeded classification logic has exactly one implementation.
+func (h *Handler) upstreamError(ctx context.Context, err error) *UpstreamInvocationError {
+	return &UpstreamInvocationError{
+		Err:              err,
+		DeadlineExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
+	}
 }
 
 // isJSONContentType reports whether raw is the application/json media type,

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/looprig/inference"
@@ -60,7 +61,7 @@ func (e *UnsupportedContentTypeError) Error() string {
 type RequestTooLargeError struct{ Limit int64 }
 
 func (e *RequestTooLargeError) Error() string {
-	return "gateway: request body exceeds limit"
+	return fmt.Sprintf("gateway: request body exceeds %d byte limit", e.Limit)
 }
 
 // NoMatchingCodecError reports that no configured ServerCodec recognized a

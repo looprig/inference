@@ -36,13 +36,11 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -375,31 +373,16 @@ func generateToken() (string, error) {
 }
 
 // authMiddleware wraps next with a constant-time bearer-token check against
-// token, mirroring auth.go's staticTokenAuthenticator: every failure mode
-// (missing header, wrong scheme, oversized header, wrong length, wrong
-// bytes) is rejected identically, with no distinguishing detail in the
-// response, and the comparison against token is constant-time whenever both
-// sides are actually compared. This is entirely independent of, and
-// unaware of, any Authenticator a wrapped *Handler itself might separately
-// run (see the package doc above).
+// token, sharing checkBearerToken's parsing/comparison mechanics with
+// auth.go's staticTokenAuthenticator: every failure mode (missing header,
+// wrong scheme, oversized header, wrong length, wrong bytes) is rejected
+// identically, with no distinguishing detail in the response. This is
+// entirely independent of, and unaware of, any Authenticator a wrapped
+// *Handler itself might separately run (see the package doc above).
 func authMiddleware(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if len(header) > maxAuthorizationHeaderBytes {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if !strings.HasPrefix(header, bearerPrefix) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		supplied := []byte(header[len(bearerPrefix):])
-		if len(supplied) != len(want) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if subtle.ConstantTimeCompare(supplied, want) != 1 {
+		if !checkBearerToken(r.Header.Get("Authorization"), want) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

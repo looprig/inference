@@ -64,12 +64,30 @@ func StaticToken(token string) Authenticator {
 // returns the same *AuthenticationError, and the comparison against the
 // configured token is constant-time whenever both sides are compared at all.
 func (a *staticTokenAuthenticator) Authenticate(req *http.Request) error {
-	header := req.Header.Get("Authorization")
-	if len(header) > maxAuthorizationHeaderBytes {
+	if !checkBearerToken(req.Header.Get("Authorization"), a.token) {
 		return &AuthenticationError{}
 	}
+	return nil
+}
+
+// checkBearerToken reports whether header is a well-formed
+// "Bearer <token>" Authorization value whose token matches want, using a
+// constant-time comparison. Every rejection path -- oversized header, wrong
+// scheme, wrong length, wrong bytes -- is indistinguishable to a caller: this
+// function returns only a bool, never a reason.
+//
+// It is the single shared implementation of gateway-local bearer-token
+// checking, used by both staticTokenAuthenticator (this file) and Server's
+// independent authMiddleware (server.go) -- those two authentication paths
+// are deliberately separate concepts (see server.go's package doc for why),
+// but the security-sensitive parsing/comparison mechanics must not be
+// re-derived twice.
+func checkBearerToken(header string, want []byte) bool {
+	if len(header) > maxAuthorizationHeaderBytes {
+		return false
+	}
 	if !strings.HasPrefix(header, bearerPrefix) {
-		return &AuthenticationError{}
+		return false
 	}
 	supplied := []byte(header[len(bearerPrefix):])
 
@@ -77,12 +95,10 @@ func (a *staticTokenAuthenticator) Authenticate(req *http.Request) error {
 	// subtle.ConstantTimeCompare requires equal-length inputs (it reports
 	// unequal immediately, without comparing, when lengths differ) -- so this
 	// branch adds no exploitable timing signal beyond what the length of the
-	// attacker-supplied header already reveals.
-	if len(supplied) != len(a.token) {
-		return &AuthenticationError{}
+	// attacker-supplied header already reveals, and is in fact redundant with
+	// the identical short-circuit ConstantTimeCompare performs internally.
+	if len(supplied) != len(want) {
+		return false
 	}
-	if subtle.ConstantTimeCompare(supplied, a.token) != 1 {
-		return &AuthenticationError{}
-	}
-	return nil
+	return subtle.ConstantTimeCompare(supplied, want) == 1
 }

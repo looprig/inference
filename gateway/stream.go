@@ -48,13 +48,10 @@ func (h *Handler) serveStreaming(w http.ResponseWriter, r *http.Request, decoded
 	if err != nil {
 		// Pre-header failure: no native streaming response has started, so
 		// this classifies and writes exactly like a normal pipeline error,
-		// reusing the same *UpstreamInvocationError type the non-streaming
+		// via the same h.upstreamError construction the non-streaming
 		// Invoke failure path uses (see serveInference), for consistent
 		// classification between the two upstream-failure paths.
-		wrapped := &UpstreamInvocationError{
-			Err:              err,
-			DeadlineExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
-		}
+		wrapped := h.upstreamError(ctx, err)
 		h.writeError(sc, w, wrapped)
 		return wrapped
 	}
@@ -83,6 +80,12 @@ func (h *Handler) serveStreaming(w http.ResponseWriter, r *http.Request, decoded
 	// so the watcher is disarmed the moment the pull loop returns for any
 	// other reason -- a fast, non-canceled request never leaves this
 	// registered against a longer-lived parent context.
+	//
+	// This watcher only ever calls reader.Close(); it never touches enc. Only
+	// pullStream calls enc.Finish/enc.Fail, and it does so exactly once as its
+	// sole terminal action, so this watcher cannot race a second
+	// Finish/Fail call onto enc no matter when it fires relative to the pull
+	// loop's own termination.
 	stop := context.AfterFunc(ctx, func() {
 		_ = reader.Close()
 	})
