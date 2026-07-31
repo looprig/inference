@@ -267,10 +267,10 @@ func TestDecodeRequest_Tools(t *testing.T) {
 func TestDecodeRequest_ToolChoice(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
+		name           string
 		toolChoiceJSON string
-		want      inference.ToolChoice
-		wantError bool
+		want           inference.ToolChoice
+		wantError      bool
 	}{
 		{name: "absent", toolChoiceJSON: ``, want: inference.ToolChoiceAuto},
 		{name: "auto", toolChoiceJSON: `,"tool_choice":{"type":"auto"}`, want: inference.ToolChoiceAuto},
