@@ -135,10 +135,13 @@ func (e *serverStreamEncoder) writeDeltaEvent(delta encodeSSEDelta) error {
 
 // Finish encodes the native stream-completion event(s) from authoritative
 // terminal metadata: a final chunk carrying `finish_reason` on an empty
-// delta, then (only when result.Usage is present — see the package doc for
-// why this codec does not gate emission on the request's
-// stream_options.include_usage) a second chunk with an EMPTY choices array
-// carrying `usage`, then the [DONE] sentinel.
+// delta, then (only when result.Usage is present) a second chunk with an
+// EMPTY choices array carrying `usage`, then the [DONE] sentinel. Emission is
+// gated solely on result.Usage being present, not on whether the request set
+// stream_options.include_usage: DecodeRequest does not thread that flag
+// through to the StreamEncoder, so this codec always reports authoritative
+// usage when available rather than silently withholding it from a harness
+// that requested it under a header this layer never inspects the value of.
 func (e *serverStreamEncoder) Finish(result stream.StreamResult) error {
 	if e.done {
 		return &StreamTerminatedError{}

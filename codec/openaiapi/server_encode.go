@@ -232,7 +232,7 @@ func encodeUsage(u *content.Usage) *encodeChatUsage {
 // chatErrorEnvelope is this codec's own best-effort choice for the native
 // Chat Completions error shape (`{"error":{"message":...,"type":...,"code":...}}`,
 // matching OpenAI's real documented error envelope); it is not verified
-// against a live endpoint, see the package doc.
+// against a live endpoint.
 type chatErrorEnvelope struct {
 	Error chatErrorBody `json:"error"`
 }
