@@ -22,6 +22,7 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 		want   content.TokenCount
 	}{
 		{name: "OpenAI", format: model.APIFormatOpenAI, want: 199},
+		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses, want: 253},
 		{name: "Anthropic", format: model.APIFormatAnthropic, want: 231},
 		{name: "Gemini", format: model.APIFormatGemini, want: 213},
 	}
@@ -95,6 +96,12 @@ func TestEstimatorCountsCompleteRequest(t *testing.T) {
 		{name: "OpenAI tool and schema", format: model.APIFormatOpenAI, mutate: addTool},
 		{name: "OpenAI image", format: model.APIFormatOpenAI, mutate: addImage},
 		{name: "OpenAI sampling", format: model.APIFormatOpenAI, mutate: addSampling},
+		{name: "OpenAIResponses system", format: model.APIFormatOpenAIResponses, mutate: addSystem},
+		{name: "OpenAIResponses model", format: model.APIFormatOpenAIResponses, mutate: addModelName},
+		{name: "OpenAIResponses message", format: model.APIFormatOpenAIResponses, mutate: addMessage},
+		{name: "OpenAIResponses tool and schema", format: model.APIFormatOpenAIResponses, mutate: addTool},
+		{name: "OpenAIResponses image", format: model.APIFormatOpenAIResponses, mutate: addImage},
+		{name: "OpenAIResponses sampling", format: model.APIFormatOpenAIResponses, mutate: addSampling},
 		{name: "Anthropic system", format: model.APIFormatAnthropic, mutate: addSystem},
 		{name: "Anthropic model", format: model.APIFormatAnthropic, mutate: addModelName},
 		{name: "Anthropic message", format: model.APIFormatAnthropic, mutate: addMessage},
@@ -134,6 +141,7 @@ func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 		wantChanged bool
 	}{
 		{name: "OpenAI intentionally omits IsError", format: model.APIFormatOpenAI, wantChanged: false},
+		{name: "OpenAIResponses intentionally omits IsError", format: model.APIFormatOpenAIResponses, wantChanged: false},
 		{name: "Anthropic includes IsError", format: model.APIFormatAnthropic, wantChanged: true},
 		{name: "Gemini intentionally omits IsError", format: model.APIFormatGemini, wantChanged: false},
 	}
@@ -153,6 +161,7 @@ func TestEstimatorCountsHistoricalThinking(t *testing.T) {
 		wantChanged bool
 	}{
 		{name: "OpenAI intentionally omits thinking", format: model.APIFormatOpenAI, wantChanged: false},
+		{name: "OpenAIResponses includes thinking as a reasoning item", format: model.APIFormatOpenAIResponses, wantChanged: true},
 		{name: "Anthropic includes thinking and signature", format: model.APIFormatAnthropic, wantChanged: true},
 		{name: "Gemini intentionally omits thinking", format: model.APIFormatGemini, wantChanged: false},
 	}
@@ -171,6 +180,8 @@ func TestEstimatorCountsEffortByDialect(t *testing.T) {
 		wantChanged bool
 	}{
 		{name: "OpenAI effort ignores capability gate", before: requestWithEffort(model.APIFormatOpenAI, model.EffortNone, false), after: requestWithEffort(model.APIFormatOpenAI, model.EffortLow, false), wantChanged: true},
+		{name: "OpenAIResponses effort with thinking", before: requestWithEffort(model.APIFormatOpenAIResponses, model.EffortNone, true), after: requestWithEffort(model.APIFormatOpenAIResponses, model.EffortLow, true), wantChanged: true},
+		{name: "OpenAIResponses gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatOpenAIResponses, model.EffortNone, false), after: requestWithEffort(model.APIFormatOpenAIResponses, model.EffortLow, false), wantChanged: false},
 		{name: "Anthropic effort with thinking", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, true), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, true), wantChanged: true},
 		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, false), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, false), wantChanged: false},
 		{name: "Gemini effort with thinking", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, true), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, true), wantChanged: true},
@@ -233,6 +244,7 @@ func TestEstimatorIgnoresHistoricalUsage(t *testing.T) {
 		format model.APIFormat
 	}{
 		{name: "OpenAI", format: model.APIFormatOpenAI},
+		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses},
 		{name: "Anthropic", format: model.APIFormatAnthropic},
 		{name: "Gemini", format: model.APIFormatGemini},
 	}
@@ -309,6 +321,18 @@ func TestEstimatorTypedFailures(t *testing.T) {
 			wantEncoding: model.APIFormatOpenAI,
 		},
 		{
+			name:         "OpenAIResponses encoding failure",
+			estimator:    NewEstimator(),
+			req:          requestWithInvalidToolSchema(model.APIFormatOpenAIResponses),
+			wantEncoding: model.APIFormatOpenAIResponses,
+		},
+		{
+			name:         "OpenAIResponses unsupported document",
+			estimator:    NewEstimator(),
+			req:          requestWithDocument(model.APIFormatOpenAIResponses),
+			wantEncoding: model.APIFormatOpenAIResponses,
+		},
+		{
 			name:         "Anthropic unsupported document",
 			estimator:    NewEstimator(),
 			req:          requestWithDocument(model.APIFormatAnthropic),
@@ -374,7 +398,7 @@ func TestEstimatorCapability(t *testing.T) {
 	want := CounterCapability{
 		Transport:    CounterTransportLocal,
 		Retention:    RetentionNone,
-		TokenizerRev: TokenizerRevision("bundled-openai-anthropic-gemini-request-bytes-div4-v1"),
+		TokenizerRev: TokenizerRevision("bundled-openai-responses-anthropic-gemini-request-bytes-div4-v1"),
 		Quality:      CountQualityHeuristicEstimate,
 	}
 	tests := []struct {
@@ -407,6 +431,7 @@ func TestEstimatorDeterminismAndInputIntegrity(t *testing.T) {
 		format model.APIFormat
 	}{
 		{name: "OpenAI", format: model.APIFormatOpenAI},
+		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses},
 		{name: "Anthropic", format: model.APIFormatAnthropic},
 		{name: "Gemini", format: model.APIFormatGemini},
 	}
