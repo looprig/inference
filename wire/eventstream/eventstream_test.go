@@ -122,7 +122,7 @@ func collect(r *stream.StreamReader[stream.StreamFrame]) ([]stream.StreamFrame, 
 func TestDecodeStreamFrames_ValidFrame(t *testing.T) {
 	t.Parallel()
 
-	body := buildFrame([]testHeader{{name: ":message-type", typ: headerTypeString, value: "event"}, {name: "event-type", typ: headerTypeString, value: "chunk"}}, []byte(`{"messageStart":{}}`))
+	body := buildFrame([]testHeader{{name: ":message-type", typ: headerTypeString, value: "event"}, {name: ":event-type", typ: headerTypeString, value: "chunk"}}, []byte(`{"messageStart":{}}`))
 	r, err := eventstream.DecodeStreamFrames(io.NopCloser(bytes.NewReader(body)))
 	if err != nil {
 		t.Fatalf("DecodeStreamFrames() error = %v", err)
@@ -139,11 +139,14 @@ func TestDecodeStreamFrames_ValidFrame(t *testing.T) {
 	if got, want := string(frames[0].Data), `{"messageStart":{}}`; got != want {
 		t.Errorf("Data = %q, want %q", got, want)
 	}
+	if got, want := frames[0].Name, "chunk"; got != want {
+		t.Errorf("Name = %q, want %q", got, want)
+	}
 	if got, want := frames[0].Metadata[":message-type"], "event"; got != want {
 		t.Errorf("Metadata[:message-type] = %q, want %q", got, want)
 	}
-	if got, want := frames[0].Metadata["event-type"], "chunk"; got != want {
-		t.Errorf("Metadata[event-type] = %q, want %q", got, want)
+	if got, want := frames[0].Metadata[":event-type"], "chunk"; got != want {
+		t.Errorf("Metadata[:event-type] = %q, want %q", got, want)
 	}
 }
 

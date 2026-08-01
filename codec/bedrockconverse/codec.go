@@ -41,5 +41,5 @@ func (Codec) EncodeRequest(req inference.Request, _ codec.RequestMode) (codec.En
 // DecodeResponse is completed in decode.go; keeping the method here makes the
 // codec's public shape explicit while request encoding is developed separately.
 func (Codec) DecodeResponse(body []byte) (*inference.Response, error) {
-	return nil, &DecodeError{Reason: "response decoder unavailable"}
+	return DecodeResponse(body)
 }

@@ -100,7 +100,11 @@ func DecodeStreamFrames(body io.ReadCloser) (*stream.StreamReader[stream.StreamF
 		payloadEnd := len(frame) - messageCRCBytes
 		payload := make([]byte, payloadEnd-headerEnd)
 		copy(payload, frame[headerEnd:payloadEnd])
-		return stream.StreamFrame{Metadata: metadata, Data: payload}, nil
+		name := metadata[":event-type"]
+		if name == "" {
+			name = metadata[":message-type"]
+		}
+		return stream.StreamFrame{Name: name, Metadata: metadata, Data: payload}, nil
 	}
 
 	return stream.NewStreamReader(next, body.Close), nil

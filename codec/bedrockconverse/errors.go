@@ -85,3 +85,37 @@ func (e *DecodeError) Error() string {
 }
 
 func (e *DecodeError) Unwrap() error { return e.Err }
+
+// StreamDecodeError reports malformed or out-of-order ConverseStream events.
+// It never includes the raw provider event body in its diagnostic.
+type StreamDecodeError struct {
+	Reason string
+	Err    error
+}
+
+func (e *StreamDecodeError) Error() string {
+	if e.Err != nil {
+		return "bedrockconverse: stream " + e.Reason + ": " + e.Err.Error()
+	}
+	return "bedrockconverse: stream " + e.Reason
+}
+
+func (e *StreamDecodeError) Unwrap() error { return e.Err }
+
+// StreamAPIError reports an AWS event-stream exception after the HTTP success
+// boundary. Only its typed exception name and bounded message are retained.
+type StreamAPIError struct {
+	Type    string
+	Message string
+}
+
+func (e *StreamAPIError) Error() string {
+	message := "bedrockconverse: stream error"
+	if e.Type != "" {
+		message += " (" + e.Type + ")"
+	}
+	if e.Message != "" {
+		message += ": " + e.Message
+	}
+	return message
+}
