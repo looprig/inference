@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +94,12 @@ func anthropicModel(name string, opts ...model.ModelOption) model.Model {
 func newHandler(t *testing.T, upstreamModel model.Model, client inference.Client) (*gateway.Handler, gateway.Target) {
 	t.Helper()
 	target := gateway.Target{ID: "t", Client: client, Model: upstreamModel}
+	h := newHandlerWithTarget(t, target, anthropicapi.Codec{})
+	return h, target
+}
+
+func newHandlerWithTarget(t *testing.T, target gateway.Target, sc codec.ServerCodec) *gateway.Handler {
+	t.Helper()
 	resolver, err := gateway.NewMux(gateway.Mux{
 		Routes: map[gateway.RouteKey]gateway.Target{
 			{Ingress: model.APIFormatAnthropic, Model: "primary"}: target,
@@ -103,13 +110,13 @@ func newHandler(t *testing.T, upstreamModel model.Model, client inference.Client
 	}
 	h, err := gateway.New(gateway.Config{
 		Resolver:     resolver,
-		Codecs:       map[model.APIFormat]codec.ServerCodec{model.APIFormatAnthropic: anthropicapi.Codec{}},
+		Codecs:       map[model.APIFormat]codec.ServerCodec{model.APIFormatAnthropic: sc},
 		Authenticate: gateway.StaticToken("test-token"),
 	})
 	if err != nil {
 		t.Fatalf("gateway.New: %v", err)
 	}
-	return h, target
+	return h
 }
 
 func messagesRequest(t *testing.T, token, body string) *http.Request {
@@ -159,6 +166,132 @@ func TestHandler_VerticalSlice_ReplacesModelAndReportsAlias(t *testing.T) {
 	if wire.Model != "primary" {
 		t.Errorf("response model field = %q, want the harness alias %q", wire.Model, "primary")
 	}
+}
+
+func TestHandlerAuthoritativeEffort(t *testing.T) {
+	t.Parallel()
+
+	const ingressTemperature = 0.25
+	const targetTemperature = 0.75
+	cases := []struct {
+		name               string
+		authoritative      bool
+		targetEffort       model.Effort
+		ingressEffort      model.Effort
+		wantEffort         model.Effort
+		nilOverride        bool
+		wantTargetSampling bool
+	}{
+		{
+			name:          "authoritative max replaces ingress low",
+			authoritative: true,
+			targetEffort:  model.EffortMax,
+			ingressEffort: model.EffortLow,
+			wantEffort:    model.EffortMax,
+		},
+		{
+			name:          "authoritative none replaces ingress high",
+			authoritative: true,
+			targetEffort:  model.EffortNone,
+			ingressEffort: model.EffortHigh,
+			wantEffort:    model.EffortNone,
+		},
+		{
+			name:          "authoritative high replaces ingress none",
+			authoritative: true,
+			targetEffort:  model.EffortHigh,
+			ingressEffort: model.EffortNone,
+			wantEffort:    model.EffortHigh,
+		},
+		{
+			name:          "non-authoritative preserves ingress low",
+			authoritative: false,
+			targetEffort:  model.EffortMax,
+			ingressEffort: model.EffortLow,
+			wantEffort:    model.EffortLow,
+		},
+		{
+			name:               "nil override uses authoritative target sampling",
+			authoritative:      true,
+			targetEffort:       model.EffortHigh,
+			wantEffort:         model.EffortHigh,
+			nilOverride:        true,
+			wantTargetSampling: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &recordingClient{}
+			upstream := anthropicModel("kimi-k2", model.WithSampling(model.Sampling{
+				Temperature: f64ptr(targetTemperature),
+				Effort:      tc.targetEffort,
+			}))
+			target := gateway.Target{
+				ID:                  "t",
+				Client:              client,
+				Model:               upstream,
+				AuthoritativeEffort: tc.authoritative,
+			}
+
+			var sc codec.ServerCodec = anthropicapi.Codec{}
+			if tc.nilOverride {
+				sc = nilOverrideCodec{}
+			}
+			h := newHandlerWithTarget(t, target, sc)
+
+			body := validMessagesBody
+			if !tc.nilOverride {
+				body = messagesBodyWithEffort(tc.ingressEffort, ingressTemperature)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, messagesRequest(t, "test-token", body))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", rr.Code, http.StatusOK, rr.Body.String())
+			}
+
+			got := client.lastRequest()
+			effectiveEffort := got.Model.Sampling.Effort
+			if got.Override != nil {
+				effectiveEffort = got.Override.Effort
+			}
+			if effectiveEffort != tc.wantEffort {
+				t.Errorf("effective effort = %q, want %q", effectiveEffort, tc.wantEffort)
+			}
+
+			if tc.wantTargetSampling {
+				if got.Override != nil {
+					t.Fatalf("Override = %#v, want nil", got.Override)
+				}
+				if got.Model.Sampling.Effort != tc.targetEffort {
+					t.Errorf("Model.Sampling.Effort = %q, want target effort %q", got.Model.Sampling.Effort, tc.targetEffort)
+				}
+				if got.Model.Sampling.Temperature == nil || *got.Model.Sampling.Temperature != targetTemperature {
+					t.Errorf("Model.Sampling.Temperature = %v, want %v", got.Model.Sampling.Temperature, targetTemperature)
+				}
+				return
+			}
+
+			if got.Override == nil {
+				t.Fatal("Override = nil, want ingress override")
+			}
+			if got.Override.Effort != tc.wantEffort {
+				t.Errorf("Override.Effort = %q, want %q", got.Override.Effort, tc.wantEffort)
+			}
+			if got.Override.Temperature == nil || *got.Override.Temperature != ingressTemperature {
+				t.Errorf("Override.Temperature = %v, want %v", got.Override.Temperature, ingressTemperature)
+			}
+		})
+	}
+}
+
+func messagesBodyWithEffort(effort model.Effort, temperature float64) string {
+	body := `{"model":"primary","max_tokens":16,"temperature":` + strconv.FormatFloat(temperature, 'f', -1, 64)
+	if effort != model.EffortNone {
+		body += `,"thinking":{"type":"adaptive"},"output_config":{"effort":"` + string(effort) + `"}`
+	}
+	return body + `,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 }
 
 // --- Step 2: failure categories ---------------------------------------------
@@ -265,6 +398,31 @@ func (matchAnythingCodec) OpenStream(http.ResponseWriter) (codec.StreamEncoder, 
 	return nil, errors.New("matchAnythingCodec.OpenStream: not implemented")
 }
 func (matchAnythingCodec) WriteError(http.ResponseWriter, error) {}
+
+type nilOverrideCodec struct{}
+
+func (nilOverrideCodec) MatchRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/v1/messages"
+}
+
+func (nilOverrideCodec) DecodeRequest(*http.Request) (codec.DecodedRequest, error) {
+	return codec.DecodedRequest{
+		Request:        inference.Request{},
+		RequestedModel: "primary",
+		Streaming:      false,
+	}, nil
+}
+
+func (nilOverrideCodec) WriteResponse(w http.ResponseWriter, _ *inference.Response) error {
+	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+func (nilOverrideCodec) OpenStream(http.ResponseWriter) (codec.StreamEncoder, error) {
+	return nil, errors.New("nilOverrideCodec.OpenStream: not implemented")
+}
+
+func (nilOverrideCodec) WriteError(http.ResponseWriter, error) {}
 
 func TestHandler_NoRouteForRequestedModel_404(t *testing.T) {
 	t.Parallel()

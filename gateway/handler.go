@@ -156,6 +156,9 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, ingress
 	// Step 7: replace the neutral request's model. The harness alias
 	// (decoded.RequestedModel) is never sent upstream as the target model.
 	decoded.Request.Model = target.Model
+	if target.AuthoritativeEffort && decoded.Request.Override != nil {
+		decoded.Request.Override.Effort = target.Model.Sampling.Effort
+	}
 
 	// Step 8: validate request features against Target.Model.Caps.
 	if err := inference.ValidateRequestFeatures(decoded.Request); err != nil {
@@ -227,6 +230,9 @@ func (h *Handler) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decoded.Request.Model = target.Model
+	if target.AuthoritativeEffort && decoded.Request.Override != nil {
+		decoded.Request.Override.Effort = target.Model.Sampling.Effort
+	}
 
 	// Unlike serveInference, this path never calls inference.ValidateRequestFeatures:
 	// that check exists to protect Target.Client.Invoke/Stream from a request
