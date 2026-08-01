@@ -43,6 +43,13 @@ type Mux struct {
 	Default        *Target
 }
 
+// exactResolver exposes only exact registrations to Strict. It is private so
+// a resolver cannot accidentally claim strict support without defining what
+// its registered aliases are.
+type exactResolver interface {
+	resolveExact(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, bool)
+}
+
 // NewMux validates and defensively copies cfg's Routes, FormatDefaults, and
 // Default into a new, independent *Mux. After NewMux returns, mutating
 // cfg.Routes, cfg.FormatDefaults, cfg.Default (the pointer, or the Target it
@@ -131,8 +138,8 @@ func NewMux(cfg Mux) (*Mux, error) {
 // The returned Target is independent of Mux's internal state: it is safe for
 // the caller to mutate, including its Model.Sampling pointer/slice fields.
 func (m *Mux) Resolve(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, error) {
-	if t, ok := m.Routes[RouteKey{Ingress: ingress, Model: requestedModel}]; ok {
-		return cloneTarget(t), nil
+	if t, ok := m.resolveExact(ctx, ingress, requestedModel); ok {
+		return t, nil
 	}
 	if t, ok := m.FormatDefaults[ingress]; ok {
 		return cloneTarget(t), nil
@@ -141,6 +148,54 @@ func (m *Mux) Resolve(ctx context.Context, ingress model.APIFormat, requestedMod
 		return cloneTarget(*m.Default), nil
 	}
 	return Target{}, &RouteNotFoundError{Ingress: ingress, Model: requestedModel}
+}
+
+// resolveExact returns only an exact Routes hit. It deliberately does not
+// consult either default tier so Strict can reject unknown aliases.
+func (m *Mux) resolveExact(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, bool) {
+	if t, ok := m.Routes[RouteKey{Ingress: ingress, Model: requestedModel}]; ok {
+		return cloneTarget(t), true
+	}
+	return Target{}, false
+}
+
+// UnknownRouteError reports a strict-resolution miss. It includes only the
+// untrusted request key; resolved targets and their provider/endpoint details
+// are intentionally absent.
+type UnknownRouteError struct {
+	Ingress model.APIFormat
+	Alias   string
+}
+
+func (e *UnknownRouteError) Error() string {
+	return fmt.Sprintf("gateway: no route for ingress %q alias %q", e.Ingress, e.Alias)
+}
+
+// Is lets callers match any UnknownRouteError with errors.Is while errors.As
+// still exposes the request key fields.
+func (e *UnknownRouteError) Is(target error) bool {
+	_, ok := target.(*UnknownRouteError)
+	return ok
+}
+
+type strictResolver struct {
+	inner Resolver
+}
+
+// Strict wraps inner with exact-only resolution. Resolvers without a private
+// exact registration view cannot prove a request is registered, so strict
+// resolution rejects them rather than permitting wildcard or fallback output.
+func Strict(inner Resolver) Resolver {
+	return &strictResolver{inner: inner}
+}
+
+func (s *strictResolver) Resolve(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, error) {
+	if exact, ok := s.inner.(exactResolver); ok {
+		if t, ok := exact.resolveExact(ctx, ingress, requestedModel); ok {
+			return t, nil
+		}
+	}
+	return Target{}, &UnknownRouteError{Ingress: ingress, Alias: requestedModel}
 }
 
 // cloneTarget returns a Target independent of t's Model.Sampling
@@ -162,6 +217,15 @@ type FixedResolver struct {
 // always succeeds with the target Fixed was constructed with.
 func (f *FixedResolver) Resolve(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, error) {
 	return cloneTarget(f.target), nil
+}
+
+// resolveExact treats Fixed's target model identity as its one strict
+// registration. Direct Fixed resolution remains wildcard-compatible.
+func (f *FixedResolver) resolveExact(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, bool) {
+	if f.target.Model.APIFormat != ingress || f.target.Model.Name != requestedModel {
+		return Target{}, false
+	}
+	return cloneTarget(f.target), true
 }
 
 // Fixed returns a Resolver that ignores the requested model alias -- and the

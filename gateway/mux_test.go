@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -65,6 +66,139 @@ func TestMux_Resolve_ExactRoute(t *testing.T) {
 	}
 	if target.Client != clientA {
 		t.Errorf("target.Client = %v, want %v", target.Client, clientA)
+	}
+}
+
+// TestStrictMuxRejectsUnknownAlias verifies that strict resolution accepts an
+// exact route but never falls through to a format or global default, including
+// when the same alias exists under a different ingress format.
+func TestStrictMuxRejectsUnknownAlias(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	exactClient := &fakeClient{name: "exact"}
+	formatClient := &fakeClient{name: "format-default"}
+	globalClient := &fakeClient{name: "global-default"}
+
+	exactModel := validModel("upstream-sonnet-5")
+	exactModel.Provider = model.ProviderName("exact-provider")
+	exactModel.BaseURL = "https://exact.example.test"
+	formatModel := validModel("upstream-format-default")
+	formatModel.Provider = model.ProviderName("format-provider")
+	formatModel.BaseURL = "https://format.example.test"
+	globalModel := validModel("upstream-global-default")
+	globalModel.Provider = model.ProviderName("global-provider")
+	globalModel.BaseURL = "https://global.example.test"
+	globalDefault := gateway.Target{
+		ID:     "global-default-target",
+		Client: globalClient,
+		Model:  globalModel,
+	}
+
+	mux, err := gateway.NewMux(gateway.Mux{
+		Routes: map[gateway.RouteKey]gateway.Target{
+			{Ingress: model.APIFormatAnthropic, Model: "sonnet-5"}: {
+				ID:     "exact-target",
+				Client: exactClient,
+				Model:  exactModel,
+			},
+		},
+		FormatDefaults: map[model.APIFormat]gateway.Target{
+			model.APIFormatAnthropic: {
+				ID:     "format-default-target",
+				Client: formatClient,
+				Model:  formatModel,
+			},
+		},
+		Default: &globalDefault,
+	})
+	if err != nil {
+		t.Fatalf("NewMux: unexpected error: %v", err)
+	}
+	strict := gateway.Strict(mux)
+
+	target, err := strict.Resolve(ctx, model.APIFormatAnthropic, "sonnet-5")
+	if err != nil {
+		t.Fatalf("Strict.Resolve exact route: unexpected error: %v", err)
+	}
+	if target.ID != "exact-target" {
+		t.Errorf("Strict.Resolve exact route target.ID = %q, want %q", target.ID, "exact-target")
+	}
+
+	assertUnknown := func(ingress model.APIFormat, alias string) {
+		t.Helper()
+		_, err := strict.Resolve(ctx, ingress, alias)
+		if err == nil {
+			t.Fatalf("Strict.Resolve(%q, %q): expected unknown-route error", ingress, alias)
+		}
+		if !errors.Is(err, &gateway.UnknownRouteError{}) {
+			t.Errorf("Strict.Resolve(%q, %q) error = %v (%T), errors.Is does not match *gateway.UnknownRouteError", ingress, alias, err, err)
+		}
+		var unknown *gateway.UnknownRouteError
+		if !errors.As(err, &unknown) {
+			t.Fatalf("Strict.Resolve(%q, %q) error = %v (%T), want *gateway.UnknownRouteError", ingress, alias, err, err)
+		}
+		if unknown.Ingress != ingress || unknown.Alias != alias {
+			t.Errorf("UnknownRouteError = %+v, want Ingress=%q Alias=%q", unknown, ingress, alias)
+		}
+		if !strings.Contains(err.Error(), alias) {
+			t.Errorf("unknown-route error %q does not include requested alias %q", err, alias)
+		}
+		for _, detail := range []string{
+			"exact-target",
+			"format-default-target",
+			"global-default-target",
+			"exact-provider",
+			"format-provider",
+			"global-provider",
+			"https://exact.example.test",
+			"https://format.example.test",
+			"https://global.example.test",
+		} {
+			if strings.Contains(err.Error(), detail) {
+				t.Errorf("unknown-route error %q leaks target detail %q", err, detail)
+			}
+		}
+	}
+
+	assertUnknown(model.APIFormatAnthropic, "luna@max")
+	assertUnknown(model.APIFormatOpenAIResponses, "sonnet-5")
+}
+
+// TestStrictFixedResolverRejectsUnknownAlias verifies that Strict does not
+// inherit Fixed's wildcard behavior: the fixed target's model identity is its
+// one exact registration, and a different ingress or alias is rejected.
+func TestStrictFixedResolverRejectsUnknownAlias(t *testing.T) {
+	t.Parallel()
+	resolver, err := gateway.Fixed(&fakeClient{name: "fixed"}, validModel("kimi-k2"))
+	if err != nil {
+		t.Fatalf("Fixed: unexpected error: %v", err)
+	}
+	strict := gateway.Strict(resolver)
+
+	target, err := strict.Resolve(context.Background(), model.APIFormatAnthropic, "kimi-k2")
+	if err != nil {
+		t.Fatalf("Strict.Resolve exact Fixed registration: unexpected error: %v", err)
+	}
+	if target.Model.Name != "kimi-k2" {
+		t.Errorf("Strict.Resolve exact Fixed registration target.Model.Name = %q, want %q", target.Model.Name, "kimi-k2")
+	}
+
+	for _, tc := range []struct {
+		format model.APIFormat
+		alias  string
+	}{
+		{model.APIFormatAnthropic, "primary"},
+		{model.APIFormatOpenAI, "kimi-k2"},
+	} {
+		_, err := strict.Resolve(context.Background(), tc.format, tc.alias)
+		if err == nil {
+			t.Errorf("Strict.Resolve(%q, %q): expected unknown-route error", tc.format, tc.alias)
+			continue
+		}
+		var unknown *gateway.UnknownRouteError
+		if !errors.As(err, &unknown) {
+			t.Errorf("Strict.Resolve(%q, %q) error = %v (%T), want *gateway.UnknownRouteError", tc.format, tc.alias, err, err)
+		}
 	}
 }
 
