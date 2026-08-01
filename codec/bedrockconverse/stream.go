@@ -243,10 +243,6 @@ func (c *streamResultCollector) result() (stream.StreamResult, bool, error) {
 	return c.resultValue, true, nil
 }
 
-type streamMessageStart struct {
-	Role string `json:"role"`
-}
-
 type streamContentBlockStart struct {
 	Index *int              `json:"contentBlockIndex"`
 	Start *streamBlockStart `json:"start"`

@@ -231,7 +231,7 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 		// closed resp.Body before returning an error, but a contract-violating third-party
 		// decoder might not. A double Close on an http response body is harmless, so close
 		// here to guarantee the connection is never leaked on the highest-risk seam.
-		httpResp.Body.Close()
+		_ = httpResp.Body.Close()
 		return nil, err
 	}
 	return reader, nil

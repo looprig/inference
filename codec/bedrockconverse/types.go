@@ -10,13 +10,6 @@ const (
 	roleUser      = "user"
 	roleAssistant = "assistant"
 
-	contentTypeText             = "text"
-	contentTypeImage            = "image"
-	contentTypeDocument         = "document"
-	contentTypeReasoningContent = "reasoningContent"
-	contentTypeToolUse          = "toolUse"
-	contentTypeToolResult       = "toolResult"
-
 	toolResultStatusSuccess = "success"
 	toolResultStatusError   = "error"
 
