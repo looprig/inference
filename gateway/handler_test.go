@@ -614,6 +614,11 @@ func TestHandler_RedactedDiagnostics_AuthFailureBodyOmitsSuppliedToken(t *testin
 func countingResolverHandler(t *testing.T, client *recordingClient, counter contextcount.ContextCounter) *gateway.Handler {
 	t.Helper()
 	target := gateway.Target{ID: "t", Client: client, Model: anthropicModel("kimi-k2")}
+	return countingResolverHandlerWithTarget(t, target, counter)
+}
+
+func countingResolverHandlerWithTarget(t *testing.T, target gateway.Target, counter contextcount.ContextCounter) *gateway.Handler {
+	t.Helper()
 	resolver, err := gateway.NewMux(gateway.Mux{
 		Routes: map[gateway.RouteKey]gateway.Target{{Ingress: model.APIFormatAnthropic, Model: "primary"}: target},
 	})
@@ -679,6 +684,56 @@ func TestHandlerCountTokens_Success(t *testing.T) {
 	}
 	if calls := client.callCount(); calls != 0 {
 		t.Errorf("Target.Client.Invoke was called %d times for a count_tokens request; it must never be called", calls)
+	}
+}
+
+func TestHandlerCountTokensAuthoritativeEffort(t *testing.T) {
+	t.Parallel()
+
+	const ingressTemperature = 0.25
+	target := gateway.Target{
+		ID:     "t",
+		Client: &recordingClient{},
+		Model: anthropicModel("kimi-k2", model.WithSampling(model.Sampling{
+			Temperature: f64ptr(0.75),
+			Effort:      model.EffortMax,
+		})),
+		AuthoritativeEffort: true,
+	}
+	var got inference.Request
+	counter := contextcount.ContextCounterFunc{
+		Count: func(ctx context.Context, req inference.Request) (contextcount.ContextCount, error) {
+			got = req
+			return contextcount.ContextCount{
+				Model:       req.Model.Key(),
+				InputTokens: 42,
+				Quality:     contextcount.CountQualityHeuristicEstimate,
+			}, nil
+		},
+		Capability: contextcount.CounterCapability{
+			Transport: contextcount.CounterTransportLocal,
+			Quality:   contextcount.CountQualityHeuristicEstimate,
+		},
+	}
+	h := countingResolverHandlerWithTarget(t, target, counter)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(messagesBodyWithEffort(model.EffortLow, ingressTemperature)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if got.Override == nil {
+		t.Fatal("ContextCounter received Override = nil, want ingress override")
+	}
+	if got.Override.Effort != target.Model.Sampling.Effort {
+		t.Errorf("ContextCounter received Override.Effort = %q, want target effort %q", got.Override.Effort, target.Model.Sampling.Effort)
+	}
+	if got.Override.Temperature == nil || *got.Override.Temperature != ingressTemperature {
+		t.Errorf("ContextCounter received Override.Temperature = %v, want %v", got.Override.Temperature, ingressTemperature)
 	}
 }
 
