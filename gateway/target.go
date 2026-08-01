@@ -28,4 +28,11 @@ type Target struct {
 	ID     string
 	Client inference.Client
 	Model  model.Model
+
+	// AuthoritativeEffort makes Model.Sampling.Effort authoritative for every
+	// request served by this target. The handler will stamp it after ingress
+	// decode and before validation/encoding, replacing ingress effort even when
+	// the target effort is model.EffortNone. Other override fields remain
+	// untouched. False preserves current behavior.
+	AuthoritativeEffort bool
 }
