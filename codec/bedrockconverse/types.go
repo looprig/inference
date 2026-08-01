@@ -36,6 +36,12 @@ type converseRequest struct {
 	AdditionalModelResponseFieldPaths []string             `json:"additionalModelResponseFieldPaths,omitempty"`
 }
 
+type converseCountTokensRequest struct {
+	Messages   []converseMessage    `json:"messages"`
+	System     []systemContentBlock `json:"system,omitempty"`
+	ToolConfig *toolConfig          `json:"toolConfig,omitempty"`
+}
+
 type inferenceConfig struct {
 	MaxTokens     *int     `json:"maxTokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`

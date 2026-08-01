@@ -330,6 +330,42 @@ func TestEncodeRequest_OmitsUnrequestedOptionalFields(t *testing.T) {
 	}
 }
 
+func TestEncodeCountTokensInput_UsesOnlyConverseCountableFields(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	m.Caps.StructuredOutput = true
+	m.Caps.StructuredOutputWithTools = true
+	maxTokens := 128
+	req := inference.Request{
+		Model:    m,
+		System:   "count this system",
+		Messages: content.AgenticMessages{userMessage(&content.TextBlock{Text: "hello"})},
+		Tools:    []inference.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object","additionalProperties":false}`)}},
+		Override: &model.Sampling{MaxTokens: &maxTokens, Temperature: floatPtr(0.1)},
+		Output: &inference.OutputSchema{
+			Name:   "answer",
+			Schema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+		},
+	}
+	raw, err := bedrockconverse.EncodeCountTokensInput(req)
+	if err != nil {
+		t.Fatalf("EncodeCountTokensInput() error = %v", err)
+	}
+	body := decodeObject(t, raw)
+	for _, field := range []string{"messages", "system", "toolConfig"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("count input missing %q", field)
+		}
+	}
+	for _, field := range []string{"inferenceConfig", "outputConfig", "model", "guardrailConfig", "serviceTier"} {
+		if _, ok := body[field]; ok {
+			t.Errorf("count input unexpectedly includes %q", field)
+		}
+	}
+}
+
 func TestCodecEncodeRequest_HeadersAndMode(t *testing.T) {
 	t.Parallel()
 

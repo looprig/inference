@@ -2,6 +2,7 @@ package bedrockconverse
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 
 	"github.com/looprig/inference"
@@ -24,6 +25,23 @@ func EncodeRequest(req inference.Request) ([]byte, error) {
 		return nil, err
 	}
 	return marshalRequest(r)
+}
+
+// EncodeCountTokensInput emits the Converse union member accepted by Bedrock's
+// CountTokens API. Inference controls, output formatting, response-field paths,
+// guardrails, and service tiers are intentionally excluded because CountTokens
+// accepts only the conversation, system, tool configuration, and additional
+// model-request fields.
+func EncodeCountTokensInput(req inference.Request) ([]byte, error) {
+	r, err := buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(converseCountTokensRequest{
+		Messages:   r.Messages,
+		System:     r.System,
+		ToolConfig: r.ToolConfig,
+	})
 }
 
 // EncodeRequest implements codec.RequestEncoder. Converse and ConverseStream
