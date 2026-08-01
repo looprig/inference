@@ -21,12 +21,31 @@ type fakeClient struct {
 	name string
 }
 
+type exactResolverDouble struct {
+	target  gateway.Target
+	ingress model.APIFormat
+	alias   string
+}
+
+var _ gateway.ExactResolver = (*exactResolverDouble)(nil)
+
 func (f *fakeClient) Invoke(ctx context.Context, req inference.Request) (*inference.Response, error) {
 	return nil, errors.New("fakeClient.Invoke: not implemented")
 }
 
 func (f *fakeClient) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
 	return nil, errors.New("fakeClient.Stream: not implemented")
+}
+
+func (r *exactResolverDouble) Resolve(ctx context.Context, ingress model.APIFormat, requestedModel string) (gateway.Target, error) {
+	return r.target, nil
+}
+
+func (r *exactResolverDouble) ResolveExact(ctx context.Context, ingress model.APIFormat, requestedModel string) (gateway.Target, error) {
+	if ingress == r.ingress && requestedModel == r.alias {
+		return r.target, nil
+	}
+	return gateway.Target{}, &gateway.UnknownRouteError{Ingress: ingress, Alias: requestedModel}
 }
 
 func validModel(name string) model.Model {
@@ -201,10 +220,9 @@ func TestStrictUnknownRouteErrorBoundsLongAlias(t *testing.T) {
 	}
 }
 
-// TestStrictFixedResolverRejectsUnknownAlias verifies that Strict does not
-// inherit Fixed's wildcard behavior: the fixed target's model identity is its
-// one exact registration, and a different ingress or alias is rejected.
-func TestStrictFixedResolverRejectsUnknownAlias(t *testing.T) {
+// TestStrictFixedResolverWithoutRegistrationFailsClosed verifies that Strict
+// does not infer a harness route from Fixed's upstream model identity.
+func TestStrictFixedResolverWithoutRegistrationFailsClosed(t *testing.T) {
 	t.Parallel()
 	resolver, err := gateway.Fixed(&fakeClient{name: "fixed"}, validModel("kimi-k2"))
 	if err != nil {
@@ -212,18 +230,11 @@ func TestStrictFixedResolverRejectsUnknownAlias(t *testing.T) {
 	}
 	strict := gateway.Strict(resolver)
 
-	target, err := strict.Resolve(context.Background(), model.APIFormatAnthropic, "kimi-k2")
-	if err != nil {
-		t.Fatalf("Strict.Resolve exact Fixed registration: unexpected error: %v", err)
-	}
-	if target.Model.Name != "kimi-k2" {
-		t.Errorf("Strict.Resolve exact Fixed registration target.Model.Name = %q, want %q", target.Model.Name, "kimi-k2")
-	}
-
 	for _, tc := range []struct {
 		format model.APIFormat
 		alias  string
 	}{
+		{model.APIFormatAnthropic, "kimi-k2"},
 		{model.APIFormatAnthropic, "primary"},
 		{model.APIFormatOpenAI, "kimi-k2"},
 	} {
@@ -236,6 +247,80 @@ func TestStrictFixedResolverRejectsUnknownAlias(t *testing.T) {
 		if !errors.As(err, &unknown) {
 			t.Errorf("Strict.Resolve(%q, %q) error = %v (%T), want *gateway.UnknownRouteError", tc.format, tc.alias, err, err)
 		}
+	}
+}
+
+// TestStrictFixedForUsesExactHarnessRoute verifies that FixedFor records the
+// caller's ingress and alias independently from the upstream Model identity.
+func TestStrictFixedForUsesExactHarnessRoute(t *testing.T) {
+	t.Parallel()
+	targetModel := validModel("upstream-anthropic-model")
+	resolver, err := gateway.FixedFor(
+		&fakeClient{name: "fixed-cross-dialect"},
+		targetModel,
+		model.APIFormatOpenAIResponses,
+		"sonnet-5",
+	)
+	if err != nil {
+		t.Fatalf("FixedFor: unexpected error: %v", err)
+	}
+	strict := gateway.Strict(resolver)
+
+	target, err := strict.Resolve(context.Background(), model.APIFormatOpenAIResponses, "sonnet-5")
+	if err != nil {
+		t.Fatalf("Strict.Resolve registered FixedFor route: unexpected error: %v", err)
+	}
+	if target.Model.Name != targetModel.Name {
+		t.Errorf("Strict.Resolve registered FixedFor route target.Model.Name = %q, want %q", target.Model.Name, targetModel.Name)
+	}
+
+	for _, tc := range []struct {
+		format model.APIFormat
+		alias  string
+	}{
+		{model.APIFormatAnthropic, "sonnet-5"},
+		{model.APIFormatOpenAIResponses, "luna@max"},
+		{model.APIFormatOpenAI, "sonnet-5"},
+	} {
+		_, err := strict.Resolve(context.Background(), tc.format, tc.alias)
+		if err == nil {
+			t.Errorf("Strict.Resolve(%q, %q): expected unknown-route error", tc.format, tc.alias)
+			continue
+		}
+		var unknown *gateway.UnknownRouteError
+		if !errors.As(err, &unknown) {
+			t.Errorf("Strict.Resolve(%q, %q) error = %v (%T), want *gateway.UnknownRouteError", tc.format, tc.alias, err, err)
+		}
+	}
+
+	// FixedFor retains FixedResolver's direct wildcard behavior; only Strict
+	// consults the explicit exact registration metadata.
+	if _, err := resolver.Resolve(context.Background(), model.APIFormatAnthropic, "luna@max"); err != nil {
+		t.Fatalf("FixedFor direct Resolve: unexpected error: %v", err)
+	}
+}
+
+// TestStrictSupportsPublicExactResolver verifies that custom resolvers can
+// opt into strict exact resolution without exposing their wildcard Resolve.
+func TestStrictSupportsPublicExactResolver(t *testing.T) {
+	t.Parallel()
+	double := &exactResolverDouble{
+		target:  gateway.Target{Client: &fakeClient{name: "custom-exact"}, Model: validModel("custom-upstream")},
+		ingress: model.APIFormatOpenAIResponses,
+		alias:   "custom-alias",
+	}
+	strict := gateway.Strict(double)
+
+	if _, err := strict.Resolve(context.Background(), double.ingress, double.alias); err != nil {
+		t.Fatalf("Strict.Resolve custom exact route: unexpected error: %v", err)
+	}
+	_, err := strict.Resolve(context.Background(), double.ingress, "wrong-alias")
+	if err == nil {
+		t.Fatal("Strict.Resolve custom unknown alias: expected error, got nil")
+	}
+	var unknown *gateway.UnknownRouteError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Strict.Resolve custom unknown alias error = %v (%T), want *gateway.UnknownRouteError", err, err)
 	}
 }
 

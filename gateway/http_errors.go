@@ -162,6 +162,8 @@ func classifyStatus(err error) (int, bool) {
 		return http.StatusNotFound, true
 	case as[*RouteNotFoundError](err):
 		return http.StatusNotFound, true
+	case as[*UnknownRouteError](err):
+		return http.StatusNotFound, true
 	case as[*AmbiguousCodecMatchError](err):
 		return http.StatusInternalServerError, true
 	case as[*ConfigError](err):

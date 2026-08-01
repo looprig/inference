@@ -16,3 +16,13 @@ import (
 type Resolver interface {
 	Resolve(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, error)
 }
+
+// ExactResolver is the optional exact-registration contract consumed by
+// Strict. ResolveExact must return a Target only for the exact (ingress,
+// requestedModel) pair it registered, without applying wildcard or fallback
+// behavior. It must return an *UnknownRouteError for an unregistered pair.
+// Custom resolvers can implement this contract alongside Resolver to opt into
+// strict resolution.
+type ExactResolver interface {
+	ResolveExact(ctx context.Context, ingress model.APIFormat, requestedModel string) (Target, error)
+}

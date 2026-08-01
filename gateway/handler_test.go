@@ -436,6 +436,49 @@ func TestHandler_NoRouteForRequestedModel_404(t *testing.T) {
 	}
 }
 
+// TestHandler_StrictUnknownAlias_404 verifies that a typed strict-resolution
+// miss is classified by the gateway as not-found before the Anthropic codec
+// can apply its generic 500 fallback, without exposing the configured target.
+func TestHandler_StrictUnknownAlias_404(t *testing.T) {
+	t.Parallel()
+	targetModel := anthropicModel("upstream-kimi")
+	targetModel.Provider = model.ProviderName("provider-secret")
+	targetModel.BaseURL = "https://provider.example.test"
+	target := gateway.Target{ID: "strict-target", Client: &recordingClient{}, Model: targetModel}
+	resolver, err := gateway.NewMux(gateway.Mux{
+		Routes: map[gateway.RouteKey]gateway.Target{
+			{Ingress: model.APIFormatAnthropic, Model: "primary"}: target,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMux: %v", err)
+	}
+	h, err := gateway.New(gateway.Config{
+		Resolver:     gateway.Strict(resolver),
+		Codecs:       map[model.APIFormat]codec.ServerCodec{model.APIFormatAnthropic: anthropicapi.Codec{}},
+		Authenticate: gateway.StaticToken("test-token"),
+	})
+	if err != nil {
+		t.Fatalf("gateway.New: %v", err)
+	}
+
+	req := messagesRequest(t, "test-token", `{"model":"luna@max","max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d rather than codec fallback 500; body: %s", rr.Code, http.StatusNotFound, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "luna@max") {
+		t.Errorf("strict unknown-alias body = %q, want requested alias present", body)
+	}
+	for _, detail := range []string{"strict-target", "provider-secret", "https://provider.example.test"} {
+		if strings.Contains(body, detail) {
+			t.Errorf("strict unknown-alias body = %q leaks target detail %q", body, detail)
+		}
+	}
+}
+
 // TestHandler_UnsupportedFeature_400 sends a request whose feature set
 // (an image block) does not match the resolved Target.Model.Caps
 // (AcceptsImages == false), proving step 8's post-replacement validation.
