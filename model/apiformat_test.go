@@ -20,6 +20,7 @@ func TestAPIFormat_BuiltinConstants(t *testing.T) {
 		{name: "anthropic", f: model.APIFormatAnthropic, want: "anthropic"},
 		{name: "gemini", f: model.APIFormatGemini, want: "gemini"},
 		{name: "openai-responses", f: model.APIFormatOpenAIResponses, want: "openai-responses"},
+		{name: "bedrock-converse", f: model.APIFormatBedrockConverse, want: "bedrock-converse"},
 	}
 
 	for _, tc := range cases {
