@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
+	"unicode/utf8"
 
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/model"
@@ -168,7 +170,52 @@ type UnknownRouteError struct {
 }
 
 func (e *UnknownRouteError) Error() string {
-	return fmt.Sprintf("gateway: no route for ingress %q alias %q", e.Ingress, e.Alias)
+	return fmt.Sprintf("gateway: no route for ingress %s alias %s",
+		boundedUnknownRouteErrorField(string(e.Ingress)),
+		boundedUnknownRouteErrorField(e.Alias))
+}
+
+const maxUnknownRouteErrorFieldBytes = 96
+
+// boundedUnknownRouteErrorField returns a quoted, bounded rendering for one
+// untrusted UnknownRouteError field. It never changes the field stored on the
+// error, which remains available through errors.As.
+func boundedUnknownRouteErrorField(value string) string {
+	if !utf8.ValidString(value) {
+		return strconv.Quote("invalid-utf8")
+	}
+
+	const suffix = "..."
+	end := len(value)
+	truncated := false
+	if end > maxUnknownRouteErrorFieldBytes {
+		end = maxUnknownRouteErrorFieldBytes
+		truncated = true
+		for end > 0 && !utf8.RuneStart(value[end]) {
+			end--
+		}
+	}
+
+	for end >= 0 {
+		rendered := value[:end]
+		if truncated {
+			rendered += suffix
+		}
+		quoted := strconv.Quote(rendered)
+		if len(quoted) <= maxUnknownRouteErrorFieldBytes {
+			return quoted
+		}
+		if end == 0 {
+			return strconv.Quote(suffix)
+		}
+		end--
+		for end > 0 && !utf8.RuneStart(value[end]) {
+			end--
+		}
+		truncated = true
+	}
+
+	return strconv.Quote(suffix)
 }
 
 // Is lets callers match any UnknownRouteError with errors.Is while errors.As

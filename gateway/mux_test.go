@@ -164,6 +164,43 @@ func TestStrictMuxRejectsUnknownAlias(t *testing.T) {
 	assertUnknown(model.APIFormatOpenAIResponses, "sonnet-5")
 }
 
+// TestStrictUnknownRouteErrorBoundsLongAlias verifies that Error() renders a
+// bounded view of an untrusted alias while errors.As still exposes the exact
+// original value, and that a normal alias remains visible.
+func TestStrictUnknownRouteErrorBoundsLongAlias(t *testing.T) {
+	t.Parallel()
+	mux, err := gateway.NewMux(gateway.Mux{})
+	if err != nil {
+		t.Fatalf("NewMux: unexpected error: %v", err)
+	}
+	strict := gateway.Strict(mux)
+
+	const maxErrorBytes = 256
+	longAlias := strings.Repeat("alias-", 4096)
+	_, err = strict.Resolve(context.Background(), model.APIFormatOpenAIResponses, longAlias)
+	if err == nil {
+		t.Fatal("Strict.Resolve(long alias): expected error, got nil")
+	}
+	var unknown *gateway.UnknownRouteError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Strict.Resolve(long alias) error = %v (%T), want *gateway.UnknownRouteError", err, err)
+	}
+	if unknown.Alias != longAlias {
+		t.Fatalf("UnknownRouteError.Alias length = %d, want original length %d", len(unknown.Alias), len(longAlias))
+	}
+	if len(err.Error()) >= maxErrorBytes {
+		t.Fatalf("long-alias error length = %d, want < %d: %q", len(err.Error()), maxErrorBytes, err)
+	}
+
+	_, err = strict.Resolve(context.Background(), model.APIFormatOpenAIResponses, "luna@max")
+	if err == nil {
+		t.Fatal("Strict.Resolve(normal alias): expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "luna@max") {
+		t.Fatalf("normal-alias error = %q, want requested alias present", err)
+	}
+}
+
 // TestStrictFixedResolverRejectsUnknownAlias verifies that Strict does not
 // inherit Fixed's wildcard behavior: the fixed target's model identity is its
 // one exact registration, and a different ingress or alias is rejected.
