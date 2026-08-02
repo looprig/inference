@@ -244,6 +244,21 @@ func TestDecodeStream_InvalidOrderingAndDuplicateTerminal(t *testing.T) {
 			match: "only valid for tool use",
 		},
 		{
+			name:  "tool delta without start",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"toolUse":{"input":"{}"}}}`)),
+			match: "without contentBlockStart",
+		},
+		{
+			name:  "text block changes to reasoning",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hello"}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"bad"}}}`)),
+			match: "changes the content block variant",
+		},
+		{
+			name:  "tool block changes to text",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"id","name":"tool"}}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad"}}`)),
+			match: "changes the content block variant",
+		},
+		{
 			name:  "non-assistant message start",
 			body:  eventFrame("messageStart", `{"role":"user"}`),
 			match: "role is not assistant",

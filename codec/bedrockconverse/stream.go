@@ -28,7 +28,7 @@ func (Codec) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chu
 		return nil, err
 	}
 	collector := &streamResultCollector{
-		active: make(map[int]struct{}),
+		active: make(map[int]streamBlockKind),
 		closed: make(map[int]struct{}),
 	}
 	return stream.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
@@ -37,7 +37,7 @@ func (Codec) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chu
 type streamResultCollector struct {
 	started     bool
 	stopped     bool
-	active      map[int]struct{}
+	active      map[int]streamBlockKind
 	closed      map[int]struct{}
 	resultValue stream.StreamResult
 	usageSeen   bool
@@ -120,7 +120,7 @@ func (c *streamResultCollector) contentBlockStart(payload []byte) ([]content.Chu
 	if event.Start.ToolUse.ToolUseID == "" || event.Start.ToolUse.Name == "" {
 		return nil, &StreamDecodeError{Reason: "toolUse start is missing toolUseId or name"}
 	}
-	c.active[index] = struct{}{}
+	c.active[index] = streamBlockKindToolUse
 	return []content.Chunk{&content.ToolUseChunk{
 		Index: index,
 		ID:    event.Start.ToolUse.ToolUseID,
@@ -140,16 +140,23 @@ func (c *streamResultCollector) contentBlockDelta(payload []byte) ([]content.Chu
 		return nil, &StreamDecodeError{Reason: "contentBlockDelta is missing contentBlockIndex or delta"}
 	}
 	index := *event.Index
-	if _, exists := c.active[index]; !exists {
+	if variants := streamBlockDeltaVariantCount(*event.Delta); variants != 1 {
+		return nil, &StreamDecodeError{Reason: "content block delta must contain exactly one recognized variant"}
+	}
+	kind := event.Delta.kind()
+	activeKind, active := c.active[index]
+	if !active {
 		if _, closed := c.closed[index]; closed {
 			return nil, &StreamDecodeError{Reason: "contentBlockDelta received after stop"}
 		}
+		if kind == streamBlockKindToolUse {
+			return nil, &StreamDecodeError{Reason: "toolUse delta received without contentBlockStart"}
+		}
 		// Bedrock emits contentBlockStart only for tool-use blocks. Text and
 		// reasoning blocks become active with their first delta.
-		c.active[index] = struct{}{}
-	}
-	if variants := streamBlockDeltaVariantCount(*event.Delta); variants != 1 {
-		return nil, &StreamDecodeError{Reason: "content block delta must contain exactly one recognized variant"}
+		c.active[index] = kind
+	} else if activeKind != kind {
+		return nil, &StreamDecodeError{Reason: "contentBlockDelta changes the content block variant"}
 	}
 	if event.Delta.Text != nil {
 		return []content.Chunk{&content.TextChunk{Text: *event.Delta.Text}}, nil
@@ -315,6 +322,24 @@ type streamBlockDelta struct {
 	Text             *string               `json:"text"`
 	ReasoningContent *streamReasoningDelta `json:"reasoningContent"`
 	ToolUse          *streamToolUseDelta   `json:"toolUse"`
+}
+
+type streamBlockKind uint8
+
+const (
+	streamBlockKindText streamBlockKind = iota + 1
+	streamBlockKindReasoning
+	streamBlockKindToolUse
+)
+
+func (d streamBlockDelta) kind() streamBlockKind {
+	if d.Text != nil {
+		return streamBlockKindText
+	}
+	if d.ReasoningContent != nil {
+		return streamBlockKindReasoning
+	}
+	return streamBlockKindToolUse
 }
 
 type streamReasoningDelta struct {
