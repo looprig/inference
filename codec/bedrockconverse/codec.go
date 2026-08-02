@@ -38,9 +38,10 @@ func EncodeCountTokensInput(req inference.Request) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(converseCountTokensRequest{
-		Messages:   r.Messages,
-		System:     r.System,
-		ToolConfig: r.ToolConfig,
+		Messages:                     r.Messages,
+		System:                       r.System,
+		ToolConfig:                   r.ToolConfig,
+		AdditionalModelRequestFields: r.AdditionalModelRequestFields,
 	})
 }
 

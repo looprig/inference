@@ -35,13 +35,13 @@ func buildRequest(req inference.Request) (converseRequest, error) {
 			}
 			r.System = append(r.System, blocks...)
 		case *content.UserMessage:
-			blocks, err := encodeContentBlocks(message.Blocks)
+			blocks, err := encodeContentBlocks(message.Blocks, roleUser)
 			if err != nil {
 				return converseRequest{}, err
 			}
 			r.Messages = append(r.Messages, converseMessage{Role: roleUser, Content: blocks})
 		case *content.AIMessage:
-			blocks, err := encodeContentBlocks(message.Blocks)
+			blocks, err := encodeContentBlocks(message.Blocks, roleAssistant)
 			if err != nil {
 				return converseRequest{}, err
 			}
@@ -71,7 +71,7 @@ func buildRequest(req inference.Request) (converseRequest, error) {
 			tools = append(tools, toolDefinition{ToolSpec: toolSpec{
 				Name:        tool.Name,
 				Description: tool.Description,
-				InputSchema: append(json.RawMessage(nil), tool.Schema...),
+				InputSchema: toolInputSchema{JSON: append(json.RawMessage(nil), tool.Schema...)},
 			}})
 		}
 		r.ToolConfig = &toolConfig{Tools: tools}
@@ -114,16 +114,48 @@ func encodeSystemBlocks(blocks []content.Block) ([]systemContentBlock, error) {
 	return encoded, nil
 }
 
-func encodeContentBlocks(blocks []content.Block) ([]converseContentBlock, error) {
+func encodeContentBlocks(blocks []content.Block, role string) ([]converseContentBlock, error) {
 	encoded := make([]converseContentBlock, 0, len(blocks))
+	hasDocument := false
+	hasText := false
 	for _, block := range blocks {
+		if err := validateContentBlockRole(block, role); err != nil {
+			return nil, err
+		}
 		wireBlock, err := encodeContentBlock(block)
 		if err != nil {
 			return nil, err
 		}
+		if wireBlock.Text != nil {
+			hasText = true
+		}
+		if wireBlock.Document != nil {
+			hasDocument = true
+		}
 		encoded = append(encoded, wireBlock)
 	}
+	if hasDocument && !hasText {
+		return nil, &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "a document requires a text block in the same message"}
+	}
 	return encoded, nil
+}
+
+func validateContentBlockRole(block content.Block, role string) error {
+	switch block.(type) {
+	case *content.ImageBlock, *content.DocumentBlock:
+		if role != roleUser {
+			return unsupportedBlock(block, "image and document blocks are only valid in user messages")
+		}
+	case *content.ThinkingBlock, *content.ToolUseBlock:
+		if role != roleAssistant {
+			return unsupportedBlock(block, "reasoning and tool-use blocks are only valid in assistant messages")
+		}
+	case *content.ToolResultBlock:
+		if role != roleUser {
+			return unsupportedBlock(block, "tool-result blocks are only valid in user messages")
+		}
+	}
+	return nil
 }
 
 func encodeContentBlock(block content.Block) (converseContentBlock, error) {
@@ -132,7 +164,8 @@ func encodeContentBlock(block content.Block) (converseContentBlock, error) {
 		if block == nil {
 			return converseContentBlock{}, unsupportedBlock(block, "nil block")
 		}
-		return converseContentBlock{Text: block.Text}, nil
+		text := block.Text
+		return converseContentBlock{Text: &text}, nil
 	case *content.ImageBlock:
 		image, err := encodeImage(block)
 		if err != nil {
@@ -149,8 +182,9 @@ func encodeContentBlock(block content.Block) (converseContentBlock, error) {
 		if block == nil {
 			return converseContentBlock{}, unsupportedBlock(block, "nil block")
 		}
+		text := block.Thinking
 		return converseContentBlock{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{
-			Text:      block.Thinking,
+			Text:      &text,
 			Signature: block.Signature,
 		}}}, nil
 	case *content.ToolUseBlock:
@@ -199,12 +233,16 @@ func encodeDocument(document *content.DocumentBlock) (*documentContent, error) {
 	if name == "" {
 		name = "document"
 	}
+	if err := validateDocumentName(name); err != nil {
+		return nil, err
+	}
 	result := &documentContent{Format: format, Name: name}
 	switch {
 	case len(document.Data) > 0:
 		result.Source.Bytes = append([]byte(nil), document.Data...)
 	case document.Text != "":
-		result.Source.Text = document.Text
+		text := document.Text
+		result.Source.Text = &text
 	default:
 		return nil, unsupportedBlock(document, "document source is empty")
 	}
@@ -214,6 +252,9 @@ func encodeDocument(document *content.DocumentBlock) (*documentContent, error) {
 func encodeToolUse(toolUse *content.ToolUseBlock) (*toolUseContent, error) {
 	if toolUse == nil {
 		return nil, unsupportedBlock(toolUse, "nil block")
+	}
+	if toolUse.ID == "" || toolUse.Name == "" {
+		return nil, &ToolInputError{Tool: toolUse.Name, Reason: "tool-use id and name must not be empty"}
 	}
 	input, err := normalizedObject(toolUse.Input)
 	if err != nil {
@@ -225,6 +266,9 @@ func encodeToolUse(toolUse *content.ToolUseBlock) (*toolUseContent, error) {
 func encodeToolResultMessage(message *content.ToolResultMessage) (*toolResultContent, error) {
 	if message == nil {
 		return nil, &EncodeError{Reason: "nil tool result message"}
+	}
+	if message.ToolUseID == "" {
+		return nil, &EncodeError{Reason: "tool result is missing tool-use id"}
 	}
 	blocks, err := encodeToolResultBlocks(message.Blocks)
 	if err != nil {
@@ -241,6 +285,9 @@ func encodeToolResultBlock(block *content.ToolResultBlock) (*toolResultContent, 
 	if block == nil {
 		return nil, unsupportedBlock(block, "nil block")
 	}
+	if block.ToolUseID == "" {
+		return nil, &EncodeError{Reason: "tool result is missing tool-use id"}
+	}
 	blocks, err := encodeToolResultBlocks(block.Content)
 	if err != nil {
 		return nil, err
@@ -254,13 +301,17 @@ func encodeToolResultBlock(block *content.ToolResultBlock) (*toolResultContent, 
 
 func encodeToolResultBlocks(blocks []content.Block) ([]toolResultBlock, error) {
 	encoded := make([]toolResultBlock, 0, len(blocks))
+	hasDocument := false
+	hasText := false
 	for _, block := range blocks {
 		switch block := block.(type) {
 		case *content.TextBlock:
 			if block == nil {
 				return nil, unsupportedBlock(block, "nil block")
 			}
-			encoded = append(encoded, toolResultBlock{Text: block.Text})
+			text := block.Text
+			hasText = true
+			encoded = append(encoded, toolResultBlock{Text: &text})
 		case *content.ImageBlock:
 			image, err := encodeImage(block)
 			if err != nil {
@@ -272,10 +323,14 @@ func encodeToolResultBlocks(blocks []content.Block) ([]toolResultBlock, error) {
 			if err != nil {
 				return nil, err
 			}
+			hasDocument = true
 			encoded = append(encoded, toolResultBlock{Document: document})
 		default:
 			return nil, unsupportedBlock(block, "tool result content supports text, image, and document blocks")
 		}
+	}
+	if hasDocument && !hasText {
+		return nil, &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "a document requires a text block in the same tool result"}
 	}
 	return encoded, nil
 }
@@ -356,6 +411,10 @@ func documentFormat(mediaType content.MediaType, name string) string {
 		return "docx"
 	case string(content.MediaTypeDocumentXLSX):
 		return "xlsx"
+	case "application/msword":
+		return "doc"
+	case "application/vnd.ms-excel":
+		return "xls"
 	}
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 	switch ext {
@@ -364,6 +423,37 @@ func documentFormat(mediaType content.MediaType, name string) string {
 	default:
 		return ""
 	}
+}
+
+func validateDocumentName(name string) error {
+	if name == "" {
+		return &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "document name is empty"}
+	}
+	runes := []rune(name)
+	if len(runes) > 200 {
+		return &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "document name exceeds 200 characters"}
+	}
+	previousWhitespace := false
+	for _, r := range runes {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			previousWhitespace = false
+		case r == '-', r == '(', r == ')', r == '[', r == ']':
+			previousWhitespace = false
+		case isDocumentWhitespace(r):
+			if previousWhitespace {
+				return &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "document name contains consecutive whitespace"}
+			}
+			previousWhitespace = true
+		default:
+			return &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "document name contains unsupported characters"}
+		}
+	}
+	return nil
+}
+
+func isDocumentWhitespace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 }
 
 func unsupportedBlock(block content.Block, reason string) error {

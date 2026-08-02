@@ -113,8 +113,9 @@ func TestEncodeRequest_ImagesAndDocuments(t *testing.T) {
 		Model: m,
 		Messages: content.AgenticMessages{userMessage(
 			&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte{1, 2, 3}}},
-			&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "report.pdf", Data: []byte("pdf-bytes")},
-			&content.DocumentBlock{MediaType: content.MediaTypeDocumentMarkdown, Name: "notes.md", Text: "# Notes"},
+			&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "report-pdf", Data: []byte("pdf-bytes")},
+			&content.DocumentBlock{MediaType: content.MediaTypeDocumentMarkdown, Name: "notes-md", Text: "# Notes"},
+			&content.TextBlock{Text: "The attached documents contain the details."},
 		)},
 	}
 	raw, err := bedrockconverse.EncodeRequest(req)
@@ -145,8 +146,8 @@ func TestEncodeRequest_ImagesAndDocuments(t *testing.T) {
 	if got := asString(t, document["format"]); got != "pdf" {
 		t.Errorf("document.format = %q, want pdf", got)
 	}
-	if got := asString(t, document["name"]); got != "report.pdf" {
-		t.Errorf("document.name = %q, want report.pdf", got)
+	if got := asString(t, document["name"]); got != "report-pdf" {
+		t.Errorf("document.name = %q, want report-pdf", got)
 	}
 	var documentSource map[string]json.RawMessage
 	if err := json.Unmarshal(document["source"], &documentSource); err != nil {
@@ -236,6 +237,17 @@ func TestEncodeRequest_ReasoningToolsAndToolResult(t *testing.T) {
 	}
 	if got := asString(t, spec["name"]); got != "lookup" {
 		t.Errorf("toolSpec.name = %q, want lookup", got)
+	}
+	var inputSchema map[string]json.RawMessage
+	if err := json.Unmarshal(spec["inputSchema"], &inputSchema); err != nil {
+		t.Fatalf("toolSpec.inputSchema: %v", err)
+	}
+	var schema map[string]json.RawMessage
+	if err := json.Unmarshal(inputSchema["json"], &schema); err != nil {
+		t.Fatalf("toolSpec.inputSchema.json: %v", err)
+	}
+	if got := asString(t, schema["type"]); got != "object" {
+		t.Errorf("tool schema type = %q, want object", got)
 	}
 	var choice map[string]json.RawMessage
 	if err := json.Unmarshal(toolConfig["toolChoice"], &choice); err != nil {
@@ -427,6 +439,51 @@ func TestEncodeRequest_RejectsUnsupportedAndMalformedTools(t *testing.T) {
 				}
 			} else if !errors.As(err, &schemaErr) {
 				t.Fatalf("error = %T (%v), want ToolSchemaError", err, err)
+			}
+		})
+	}
+}
+
+func TestEncodeRequest_EnforcesBedrockMessageRolesAndDocumentRules(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.AcceptsImages = true
+	m.Caps.Thinking = true
+	m.Caps.Tools = true
+	cases := []struct {
+		name string
+		req  inference.Request
+	}{
+		{
+			name: "assistant image",
+			req:  inference.Request{Model: m, Messages: content.AgenticMessages{assistantMessage(&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte{1}}})}},
+		},
+		{
+			name: "user thinking",
+			req:  inference.Request{Model: m, Messages: content.AgenticMessages{userMessage(&content.ThinkingBlock{Thinking: "think"})}},
+		},
+		{
+			name: "assistant tool result",
+			req:  inference.Request{Model: m, Messages: content.AgenticMessages{assistantMessage(&content.ToolResultBlock{ToolUseID: "call", Content: []content.Block{&content.TextBlock{Text: "result"}}})}},
+		},
+		{
+			name: "document without text",
+			req:  inference.Request{Model: m, Messages: content.AgenticMessages{userMessage(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "report-pdf", Data: []byte("pdf")})}},
+		},
+		{
+			name: "document name with period",
+			req:  inference.Request{Model: m, Messages: content.AgenticMessages{userMessage(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "report.pdf", Data: []byte("pdf")}, &content.TextBlock{Text: "attached"})}},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := bedrockconverse.EncodeRequest(tc.req)
+			var unsupported *bedrockconverse.UnsupportedBlockError
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("EncodeRequest() error = %T (%v), want UnsupportedBlockError", err, err)
 			}
 		})
 	}

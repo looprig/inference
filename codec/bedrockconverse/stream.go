@@ -139,17 +139,34 @@ func (c *streamResultCollector) contentBlockDelta(payload []byte) ([]content.Chu
 	if _, exists := c.active[index]; !exists {
 		return nil, &StreamDecodeError{Reason: "contentBlockDelta received without start"}
 	}
+	if variants := streamBlockDeltaVariantCount(*event.Delta); variants != 1 {
+		return nil, &StreamDecodeError{Reason: "content block delta must contain exactly one recognized variant"}
+	}
 	if event.Delta.Text != nil {
-		if *event.Delta.Text == "" {
-			return nil, nil
-		}
 		return []content.Chunk{&content.TextChunk{Text: *event.Delta.Text}}, nil
 	}
 	if event.Delta.ReasoningContent != nil {
-		if event.Delta.ReasoningContent.Text == "" {
-			return nil, nil
+		reasoning := event.Delta.ReasoningContent
+		reasoningVariants := 0
+		if reasoning.Text != nil {
+			reasoningVariants++
 		}
-		return []content.Chunk{&content.ThinkingChunk{Thinking: event.Delta.ReasoningContent.Text}}, nil
+		if reasoning.Signature != nil {
+			reasoningVariants++
+		}
+		if len(reasoning.RedactedContent) > 0 {
+			reasoningVariants++
+		}
+		if reasoningVariants != 1 {
+			return nil, &StreamDecodeError{Reason: "reasoning content delta must contain exactly one recognized variant"}
+		}
+		if len(reasoning.RedactedContent) > 0 {
+			return nil, &StreamDecodeError{Reason: "redacted reasoning content has no shared representation"}
+		}
+		if reasoning.Text != nil {
+			return []content.Chunk{&content.ThinkingChunk{Thinking: *reasoning.Text}}, nil
+		}
+		return []content.Chunk{&content.ThinkingChunk{Signature: *reasoning.Signature}}, nil
 	}
 	if event.Delta.ToolUse != nil {
 		if event.Delta.ToolUse.Input == "" {
@@ -158,6 +175,20 @@ func (c *streamResultCollector) contentBlockDelta(payload []byte) ([]content.Chu
 		return []content.Chunk{&content.ToolUseChunk{Index: index, InputJSON: event.Delta.ToolUse.Input}}, nil
 	}
 	return nil, nil
+}
+
+func streamBlockDeltaVariantCount(delta streamBlockDelta) int {
+	count := 0
+	if delta.Text != nil {
+		count++
+	}
+	if delta.ReasoningContent != nil {
+		count++
+	}
+	if delta.ToolUse != nil {
+		count++
+	}
+	return count
 }
 
 func (c *streamResultCollector) contentBlockStop(payload []byte) error {
@@ -269,8 +300,9 @@ type streamBlockDelta struct {
 }
 
 type streamReasoningDelta struct {
-	Text      string `json:"text"`
-	Signature string `json:"signature"`
+	Text            *string `json:"text"`
+	Signature       *string `json:"signature"`
+	RedactedContent []byte  `json:"redactedContent"`
 }
 
 type streamToolUseDelta struct {

@@ -155,7 +155,7 @@ func TestDecodeResponse_ToolResultAndMultimodalBlocks(t *testing.T) {
 	body := []byte(`{"output":{"message":{"content":[
 		{"toolResult":{"toolUseId":"call-1","status":"error","content":[{"text":"failed"}]}},
 		{"image":{"format":"png","source":{"bytes":"AQI="}}},
-		{"document":{"format":"txt","name":"notes.txt","source":{"text":"notes"}}}
+		{"document":{"format":"txt","name":"notes-txt","source":{"text":"notes"}}}
 	]}},"stopReason":"end_turn"}`)
 	response, err := bedrockconverse.DecodeResponse(body)
 	if err != nil {
@@ -173,8 +173,32 @@ func TestDecodeResponse_ToolResultAndMultimodalBlocks(t *testing.T) {
 		t.Fatalf("image = %#v, want decoded PNG bytes", response.Message.Blocks[1])
 	}
 	document, ok := response.Message.Blocks[2].(*content.DocumentBlock)
-	if !ok || document.Text != "notes" || document.Name != "notes.txt" {
+	if !ok || document.Text != "notes" || document.Name != "notes-txt" {
 		t.Fatalf("document = %#v, want text document", response.Message.Blocks[2])
+	}
+}
+
+func TestDecodeResponse_RejectsMalformedContentUnions(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		`{"text":"one","image":{"format":"png","source":{"bytes":"AQI="}}}`,
+		`{"reasoningContent":{}}`,
+		`{"toolResult":{"toolUseId":"call","content":[{}]}}`,
+		`{"document":{"format":"txt","name":"notes-txt","source":{"text":"notes","bytes":"bm90ZXM="}}}`,
+		`{"document":{"format":"txt","name":"notes.txt","source":{"text":"notes"}}}`,
+	}
+	for _, block := range cases {
+		block := block
+		t.Run(block, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"output":{"message":{"content":[` + block + `]}},"stopReason":"end_turn"}`)
+			_, err := bedrockconverse.DecodeResponse(body)
+			var decodeErr *bedrockconverse.DecodeError
+			if !errors.As(err, &decodeErr) {
+				t.Fatalf("DecodeResponse() error = %T (%v), want DecodeError", err, err)
+			}
+		})
 	}
 }
 

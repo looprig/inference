@@ -2,7 +2,9 @@ module github.com/looprig/inference
 
 go 1.26.4
 
-require github.com/looprig/core v0.4.0
+require github.com/looprig/core v0.5.0
+
+replace github.com/looprig/core => ../core
 
 require (
 	cloud.google.com/go v0.123.0 // indirect

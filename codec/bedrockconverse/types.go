@@ -30,9 +30,10 @@ type converseRequest struct {
 }
 
 type converseCountTokensRequest struct {
-	Messages   []converseMessage    `json:"messages"`
-	System     []systemContentBlock `json:"system,omitempty"`
-	ToolConfig *toolConfig          `json:"toolConfig,omitempty"`
+	Messages                     []converseMessage    `json:"messages"`
+	System                       []systemContentBlock `json:"system,omitempty"`
+	ToolConfig                   *toolConfig          `json:"toolConfig,omitempty"`
+	AdditionalModelRequestFields json.RawMessage      `json:"additionalModelRequestFields,omitempty"`
 }
 
 type inferenceConfig struct {
@@ -51,10 +52,9 @@ type systemContentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
-// converseContentBlock is a tagged union. Exactly one pointer/string field is
-// populated by the encoder for each block.
+// converseContentBlock is a tagged union. Exactly one field must be present.
 type converseContentBlock struct {
-	Text             string             `json:"text,omitempty"`
+	Text             *string            `json:"text,omitempty"`
 	Image            *imageContent      `json:"image,omitempty"`
 	Document         *documentContent   `json:"document,omitempty"`
 	ReasoningContent *reasoningContent  `json:"reasoningContent,omitempty"`
@@ -78,17 +78,18 @@ type documentContent struct {
 }
 
 type documentSource struct {
-	Bytes []byte `json:"bytes,omitempty"`
-	Text  string `json:"text,omitempty"`
+	Bytes []byte  `json:"bytes,omitempty"`
+	Text  *string `json:"text,omitempty"`
 }
 
 type reasoningContent struct {
-	ReasoningText *reasoningText `json:"reasoningText,omitempty"`
+	ReasoningText   *reasoningText `json:"reasoningText,omitempty"`
+	RedactedContent []byte         `json:"redactedContent,omitempty"`
 }
 
 type reasoningText struct {
-	Text      string `json:"text"`
-	Signature string `json:"signature,omitempty"`
+	Text      *string `json:"text"`
+	Signature string  `json:"signature,omitempty"`
 }
 
 type toolUseContent struct {
@@ -104,7 +105,7 @@ type toolResultContent struct {
 }
 
 type toolResultBlock struct {
-	Text     string           `json:"text,omitempty"`
+	Text     *string          `json:"text,omitempty"`
 	Image    *imageContent    `json:"image,omitempty"`
 	Document *documentContent `json:"document,omitempty"`
 }
@@ -121,7 +122,11 @@ type toolDefinition struct {
 type toolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	InputSchema toolInputSchema `json:"inputSchema"`
+}
+
+type toolInputSchema struct {
+	JSON json.RawMessage `json:"json"`
 }
 
 type toolChoice struct {

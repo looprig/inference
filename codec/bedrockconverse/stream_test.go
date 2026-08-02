@@ -108,6 +108,7 @@ func TestDecodeStream_TextToolReasoningUsageAndTerminal(t *testing.T) {
 		eventFrame("contentBlockStop", `{"contentBlockIndex":1}`),
 		eventFrame("contentBlockStart", `{"contentBlockIndex":2,"start":{}}`),
 		eventFrame("contentBlockDelta", `{"contentBlockIndex":2,"delta":{"reasoningContent":{"text":"think"}}}`),
+		eventFrame("contentBlockDelta", `{"contentBlockIndex":2,"delta":{"reasoningContent":{"signature":"sig"}}}`),
 		eventFrame("contentBlockStop", `{"contentBlockIndex":2}`),
 		eventFrame("messageStop", `{"stopReason":"tool_use"}`),
 		eventFrame("metadata", `{"usage":{"inputTokens":11,"outputTokens":7,"cacheReadInputTokens":2,"cacheWriteInputTokens":1}}`),
@@ -119,8 +120,8 @@ func TestDecodeStream_TextToolReasoningUsageAndTerminal(t *testing.T) {
 	if !ok {
 		t.Fatal("Result() unavailable after clean stream")
 	}
-	if len(chunks) != 4 {
-		t.Fatalf("chunks = %#v, want text/tool/input/reasoning", chunks)
+	if len(chunks) != 5 {
+		t.Fatalf("chunks = %#v, want text/tool/input/reasoning/signature", chunks)
 	}
 	if got := chunks[0].(*content.TextChunk).Text; got != "hello" {
 		t.Errorf("text chunk = %q, want hello", got)
@@ -134,6 +135,9 @@ func TestDecodeStream_TextToolReasoningUsageAndTerminal(t *testing.T) {
 	}
 	if got := chunks[3].(*content.ThinkingChunk).Thinking; got != "think" {
 		t.Errorf("thinking chunk = %q, want think", got)
+	}
+	if got := chunks[4].(*content.ThinkingChunk).Signature; got != "sig" {
+		t.Errorf("thinking signature chunk = %q, want sig", got)
 	}
 	if result.FinishReason != stream.FinishReasonToolUse {
 		t.Errorf("FinishReason = %q, want tool_use", result.FinishReason)
@@ -207,6 +211,16 @@ func TestDecodeStream_InvalidOrderingAndDuplicateTerminal(t *testing.T) {
 			name:  "duplicate message stop",
 			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("messageStop", `{"stopReason":"end_turn"}`), eventFrame("messageStop", `{"stopReason":"end_turn"}`)),
 			match: "duplicate messageStop",
+		},
+		{
+			name:  "multiple delta variants",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad","toolUse":{"input":"{}"}}}`)),
+			match: "exactly one recognized variant",
+		},
+		{
+			name:  "multiple reasoning delta variants",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"bad","signature":"sig"}}}`)),
+			match: "reasoning content delta must contain exactly one",
 		},
 	}
 	for _, tc := range cases {
