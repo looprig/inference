@@ -4,8 +4,6 @@ go 1.26.4
 
 require github.com/looprig/core v0.5.0
 
-replace github.com/looprig/core => ../core
-
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.21.0 // indirect
