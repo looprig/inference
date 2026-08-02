@@ -40,7 +40,13 @@ type Client struct {
 	dec    codec.ResponseDecoder
 	stream codec.StreamDecoder // nil ⇒ streaming unsupported
 	auth   auth.Authenticator
-	hc     *http.Client
+	// hcInvoke and hcStream are deliberately separate http.Clients: Invoke's
+	// response is atomic (read whole via io.ReadAll, nothing partial to protect),
+	// so it is safe to bound with a real whole-request Timeout. Stream must never
+	// carry a whole-request Timeout — that would abort a long-lived body
+	// mid-flight — so it keeps only the connect/TLS/response-header budget below.
+	hcInvoke *http.Client
+	hcStream *http.Client
 }
 
 // Compile-time proof that Client honors the inference.Client contract.
@@ -70,16 +76,27 @@ func (e *UnsupportedStreamingError) Error() string {
 	return fmt.Sprintf("transport: streaming unsupported for API format %q: no StreamDecoder (codec is not a StreamingCodec and none was injected)", e.APIFormat)
 }
 
-// Timeout budget for the risky phases of a request. These bound connection setup and
-// header reception WITHOUT a whole-request http.Client.Timeout, which would abort a
-// long-lived streaming body mid-flight. The per-request deadline for the body is the
-// caller's context (every I/O call takes ctx).
+// Timeout budget for the risky connection-setup phases of a request, shared by
+// both Invoke and Stream. The per-request deadline for the body is the caller's
+// context (every I/O call takes ctx) on top of whichever budget below applies.
 const (
 	dialTimeout           = 10 * time.Second
 	tlsHandshakeTimeout   = 10 * time.Second
-	responseHeaderTimeout = 60 * time.Second
 	expectContinueTimeout = 1 * time.Second
 	idleConnTimeout       = 90 * time.Second
+
+	// streamResponseHeaderTimeout bounds only time-to-first-byte for Stream: a
+	// stream should start promptly even under load, and once headers arrive the
+	// body is free to run long — there is no whole-request Timeout to fight with.
+	streamResponseHeaderTimeout = 60 * time.Second
+
+	// defaultInvokeTimeout is Invoke's whole-request ceiling. Unlike Stream,
+	// Invoke's response is atomic (read in full before it is usable), so bounding
+	// the entire call — not just the header wait — is safe and correct: there is
+	// no partial progress a longer wait would risk losing. 60s (Stream's header-only
+	// budget) is too short for a loaded local model or a slow cloud minute; this is
+	// deliberately more generous, and overridable per Client via WithInvokeTimeout.
+	defaultInvokeTimeout = 5 * time.Minute
 )
 
 // Option customizes a Client at construction.
@@ -90,6 +107,21 @@ type Option func(*Client)
 // (e.g. an NDJSON- or custom-framer-backed decoder) different from the codec's own.
 func WithStreamDecoder(sd codec.StreamDecoder) Option {
 	return func(c *Client) { c.stream = sd }
+}
+
+// WithInvokeTimeout overrides Invoke's whole-request timeout (default
+// defaultInvokeTimeout). It has no effect on Stream, which never carries a
+// whole-request timeout. A non-positive d is a no-op — the default (or a prior
+// WithInvokeTimeout) is left in place — since a zero or negative timeout would
+// mean "never time out" or "always time out", neither of which this option is
+// meant to express.
+func WithInvokeTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d <= 0 {
+			return
+		}
+		c.hcInvoke = newInvokeHTTPClient(d)
+	}
 }
 
 // New constructs a Client bound to ep, routing with router, encoding/decoding with
@@ -110,12 +142,13 @@ func New(ep Endpoint, router route.Router, cdc codec.Codec, authenticator auth.A
 		panic("transport.New: auth must not be nil; pass auth.None() for no credentials")
 	}
 	c := &Client{
-		ep:     ep,
-		router: router,
-		enc:    cdc,
-		dec:    cdc,
-		auth:   authenticator,
-		hc:     newHTTPClient(),
+		ep:       ep,
+		router:   router,
+		enc:      cdc,
+		dec:      cdc,
+		auth:     authenticator,
+		hcInvoke: newInvokeHTTPClient(defaultInvokeTimeout),
+		hcStream: newStreamHTTPClient(),
 	}
 	// Optional streaming: a StreamingCodec is its own StreamDecoder.
 	if sd, ok := cdc.(codec.StreamDecoder); ok {
@@ -127,33 +160,59 @@ func New(ep Endpoint, router route.Router, cdc codec.Codec, authenticator auth.A
 	return c
 }
 
-// newHTTPClient builds the http.Client with the connect/TLS/header timeout budget and a
-// TLS 1.2 floor, no whole-request timeout, and no redirect-following. Not following
-// redirects is deliberate: a 3xx would replay the single-shot EncodedRequest.Body, and
-// the transport must never retry or replay a body — a redirect is surfaced as its 3xx
-// response (mapped to *failure.APIError) instead.
-func newHTTPClient() *http.Client {
+// baseTransport builds the http.Transport settings shared by both the Invoke and
+// Stream clients: connect/TLS timeout budget, a TLS 1.2 floor, and connection
+// pooling. responseHeaderTimeout is the one setting callers vary between the two
+// use cases.
+func baseTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		// Default TLS with an explicit floor of 1.2 and no InsecureSkipVerify —
+		// server certificates are verified.
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		ExpectContinueTimeout: expectContinueTimeout,
+		IdleConnTimeout:       idleConnTimeout,
+		ForceAttemptHTTP2:     true,
+	}
+}
+
+// noRedirect is shared by both clients: a 3xx would replay the single-shot
+// EncodedRequest.Body, and the transport must never retry or replay a body — a
+// redirect is surfaced as its 3xx response (mapped to *failure.APIError) instead.
+func noRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+// newStreamHTTPClient builds the http.Client used by Stream: no whole-request
+// Timeout (it would abort a long-lived streaming body mid-flight), just the
+// connect/TLS/header timeout budget on the Transport. The body itself is bounded
+// only by the caller's context.
+func newStreamHTTPClient() *http.Client {
 	return &http.Client{
-		// No whole-request Timeout: it would kill streaming. The connect/TLS/header
-		// phases are bounded on the Transport; the body is bounded by the request ctx.
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   dialTimeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			// Default TLS with an explicit floor of 1.2 and no InsecureSkipVerify —
-			// server certificates are verified.
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout:   tlsHandshakeTimeout,
-			ResponseHeaderTimeout: responseHeaderTimeout,
-			ExpectContinueTimeout: expectContinueTimeout,
-			IdleConnTimeout:       idleConnTimeout,
-			ForceAttemptHTTP2:     true,
-		},
+		CheckRedirect: noRedirect,
+		Transport:     baseTransport(streamResponseHeaderTimeout),
+	}
+}
+
+// newInvokeHTTPClient builds the http.Client used by Invoke, bounded by a real
+// whole-request Timeout of d. This is safe (unlike for Stream) because Invoke's
+// response is atomic: it is read in full via io.ReadAll before it is usable, so
+// there is no partial progress a longer wait could risk losing — a flat deadline
+// on the entire call is the correct tool, not just a header-arrival guard.
+// ResponseHeaderTimeout is left at 0 (unbounded) on this Transport: the outer
+// Client.Timeout already covers header wait plus body read, so a second,
+// shorter-or-equal timer here would be redundant.
+func newInvokeHTTPClient(d time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       d,
+		CheckRedirect: noRedirect,
+		Transport:     baseTransport(0),
 	}
 }
 
@@ -174,7 +233,7 @@ func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.
 	if err := c.auth.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	httpResp, err := c.hc.Do(httpReq)
+	httpResp, err := c.hcInvoke.Do(httpReq)
 	if err != nil {
 		return nil, &failure.NetworkError{Err: err}
 	}
@@ -213,7 +272,7 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 	if err := c.auth.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	httpResp, err := c.hc.Do(httpReq)
+	httpResp, err := c.hcStream.Do(httpReq)
 	if err != nil {
 		return nil, &failure.NetworkError{Err: err}
 	}
