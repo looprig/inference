@@ -66,6 +66,30 @@ func exceptionFrame(exceptionType, message string) []byte {
 	return frame
 }
 
+func errorFrame(errorCode, message string) []byte {
+	headers := bytes.NewBuffer(nil)
+	writeHeader := func(name, value string) {
+		headers.WriteByte(byte(len(name)))
+		headers.WriteString(name)
+		headers.WriteByte(7)
+		var length [2]byte
+		binary.BigEndian.PutUint16(length[:], uint16(len(value)))
+		headers.Write(length[:])
+		headers.WriteString(value)
+	}
+	writeHeader(":message-type", "error")
+	writeHeader(":error-code", errorCode)
+	writeHeader(":error-message", message)
+	total := 16 + headers.Len()
+	frame := make([]byte, total)
+	binary.BigEndian.PutUint32(frame[:4], uint32(total))
+	binary.BigEndian.PutUint32(frame[4:8], uint32(headers.Len()))
+	binary.BigEndian.PutUint32(frame[8:12], crc32.ChecksumIEEE(frame[:8]))
+	copy(frame[12:], headers.Bytes())
+	binary.BigEndian.PutUint32(frame[total-4:], crc32.ChecksumIEEE(frame[:total-4]))
+	return frame
+}
+
 func appendFrames(frames ...[]byte) []byte {
 	var body []byte
 	for _, frame := range frames {
@@ -100,13 +124,11 @@ func TestDecodeStream_TextToolReasoningUsageAndTerminal(t *testing.T) {
 
 	body := appendFrames(
 		eventFrame("messageStart", `{"role":"assistant"}`),
-		eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`),
 		eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hello"}}`),
 		eventFrame("contentBlockStop", `{"contentBlockIndex":0}`),
 		eventFrame("contentBlockStart", `{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"call-1","name":"lookup"}}}`),
 		eventFrame("contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"q\":\"go\"}"}}}`),
 		eventFrame("contentBlockStop", `{"contentBlockIndex":1}`),
-		eventFrame("contentBlockStart", `{"contentBlockIndex":2,"start":{}}`),
 		eventFrame("contentBlockDelta", `{"contentBlockIndex":2,"delta":{"reasoningContent":{"text":"think"}}}`),
 		eventFrame("contentBlockDelta", `{"contentBlockIndex":2,"delta":{"reasoningContent":{"signature":"sig"}}}`),
 		eventFrame("contentBlockStop", `{"contentBlockIndex":2}`),
@@ -182,6 +204,10 @@ func TestDecodeStream_ExceptionAndMalformedPayload(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.Type != "modelStreamErrorException" {
 		t.Fatalf("exception error = %T (%v), want StreamAPIError", err, err)
 	}
+	_, _, _, err = drainStream(t, errorFrame("InternalError", "unmodeled provider failure"))
+	if !errors.As(err, &apiErr) || apiErr.Type != "InternalError" || apiErr.Message != "unmodeled provider failure" {
+		t.Fatalf("unmodeled error = %T (%v), want typed error frame", err, err)
+	}
 
 	body := appendFrames(
 		eventFrame("messageStart", `{"role":"assistant"}`),
@@ -203,9 +229,9 @@ func TestDecodeStream_InvalidOrderingAndDuplicateTerminal(t *testing.T) {
 		match string
 	}{
 		{
-			name:  "delta before block start",
-			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad"}}`)),
-			match: "without start",
+			name:  "delta after block stop",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad"}}`), eventFrame("contentBlockStop", `{"contentBlockIndex":0}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"late"}}`)),
+			match: "after stop",
 		},
 		{
 			name:  "duplicate message stop",
@@ -213,13 +239,23 @@ func TestDecodeStream_InvalidOrderingAndDuplicateTerminal(t *testing.T) {
 			match: "duplicate messageStop",
 		},
 		{
+			name:  "non-tool content block start",
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`)),
+			match: "only valid for tool use",
+		},
+		{
+			name:  "non-assistant message start",
+			body:  eventFrame("messageStart", `{"role":"user"}`),
+			match: "role is not assistant",
+		},
+		{
 			name:  "multiple delta variants",
-			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad","toolUse":{"input":"{}"}}}`)),
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"bad","toolUse":{"input":"{}"}}}`)),
 			match: "exactly one recognized variant",
 		},
 		{
 			name:  "multiple reasoning delta variants",
-			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"bad","signature":"sig"}}}`)),
+			body:  appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"bad","signature":"sig"}}}`)),
 			match: "reasoning content delta must contain exactly one",
 		},
 	}
@@ -239,7 +275,7 @@ func TestDecodeStream_InvalidOrderingAndDuplicateTerminal(t *testing.T) {
 func TestDecodeStream_MissingMessageStopAndMissingMetadata(t *testing.T) {
 	t.Parallel()
 
-	missingStop := appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockStart", `{"contentBlockIndex":0,"start":{}}`), eventFrame("contentBlockStop", `{"contentBlockIndex":0}`))
+	missingStop := appendFrames(eventFrame("messageStart", `{"role":"assistant"}`), eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"partial"}}`))
 	_, _, _, err := drainStream(t, missingStop)
 	var decodeErr *bedrockconverse.StreamDecodeError
 	if !errors.As(err, &decodeErr) || !strings.Contains(err.Error(), "messageStop") {

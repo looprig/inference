@@ -18,7 +18,10 @@ const (
 	preludeBytes    = 12 // total length, headers length, and prelude CRC
 	messageCRCBytes = 4
 	minFrameBytes   = preludeBytes + messageCRCBytes
-	maxFrameBytes   = 16 << 20
+	// A service-side event-stream message may contain a 24 MiB payload and
+	// 128 KiB of encoded headers. Keep the local allocation guard above that
+	// complete service envelope so valid maximum-size frames are accepted.
+	maxFrameBytes = (24 << 20) + (128 << 10) + minFrameBytes
 
 	headerTypeString = 7
 )

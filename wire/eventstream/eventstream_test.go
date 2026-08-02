@@ -216,7 +216,7 @@ func TestDecodeStreamFrames_InvalidAndTruncated(t *testing.T) {
 	binary.BigEndian.PutUint32(impossibleHeaders[12:], crc32.ChecksumIEEE(impossibleHeaders[:12]))
 
 	overSize := make([]byte, 12)
-	binary.BigEndian.PutUint32(overSize[:4], 17<<20)
+	binary.BigEndian.PutUint32(overSize[:4], 25<<20)
 	binary.BigEndian.PutUint32(overSize[4:8], 0)
 	binary.BigEndian.PutUint32(overSize[8:12], crc32.ChecksumIEEE(overSize[:8]))
 

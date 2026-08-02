@@ -88,10 +88,27 @@ func TestDecodeResponse_FinishReasons(t *testing.T) {
 	}
 }
 
+func TestDecodeResponse_RejectsNonAssistantOutputRole(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"", "user", "tool"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"output":{"message":{"role":"` + role + `","content":[]}},"stopReason":"end_turn"}`)
+			_, err := bedrockconverse.DecodeResponse(body)
+			var decodeErr *bedrockconverse.DecodeError
+			if !errors.As(err, &decodeErr) {
+				t.Fatalf("DecodeResponse() error = %T (%v), want DecodeError", err, err)
+			}
+		})
+	}
+}
+
 func TestDecodeResponse_UsageOptionalAndAdditionalFieldsIgnored(t *testing.T) {
 	t.Parallel()
 
-	response, err := bedrockconverse.DecodeResponse([]byte(`{"output":{"message":{"content":[{"text":"ok"}]}},"stopReason":"end_turn","additionalModelResponseFields":{"vendor":{"value":1}}}`))
+	response, err := bedrockconverse.DecodeResponse([]byte(`{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn","additionalModelResponseFields":{"vendor":{"value":1}}}`))
 	if err != nil {
 		t.Fatalf("DecodeResponse() error = %v", err)
 	}
@@ -110,7 +127,8 @@ func TestDecodeResponse_MalformedAndMissingFields(t *testing.T) {
 		{name: "malformed JSON", body: `{"output":`},
 		{name: "missing output", body: `{"stopReason":"end_turn"}`},
 		{name: "missing message", body: `{"output":{},"stopReason":"end_turn"}`},
-		{name: "invalid tool input", body: `{"output":{"message":{"content":[{"toolUse":{"toolUseId":"id","name":"tool","input":[]}}]}},"stopReason":"tool_use"}`},
+		{name: "invalid tool input", body: `{"output":{"message":{"role":"assistant","content":[{"toolUse":{"toolUseId":"id","name":"tool","input":[]}}]}},"stopReason":"tool_use"}`},
+		{name: "empty tool result", body: `{"output":{"message":{"role":"assistant","content":[{"toolResult":{"toolUseId":"id","content":[]}}]}},"stopReason":"end_turn"}`},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -136,7 +154,7 @@ func TestDecodeResponse_InvalidUsageCounts(t *testing.T) {
 		raw := raw
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
-			body := []byte(`{"output":{"message":{"content":[]}},"usage":{"inputTokens":` + raw + `}}`)
+			body := []byte(`{"output":{"message":{"role":"assistant","content":[]}},"usage":{"inputTokens":` + raw + `}}`)
 			_, err := bedrockconverse.DecodeResponse(body)
 			if err == nil {
 				t.Fatal("DecodeResponse() error = nil, want usage normalization error")
@@ -152,7 +170,7 @@ func TestDecodeResponse_InvalidUsageCounts(t *testing.T) {
 func TestDecodeResponse_ToolResultAndMultimodalBlocks(t *testing.T) {
 	t.Parallel()
 
-	body := []byte(`{"output":{"message":{"content":[
+	body := []byte(`{"output":{"message":{"role":"assistant","content":[
 		{"toolResult":{"toolUseId":"call-1","status":"error","content":[{"text":"failed"}]}},
 		{"image":{"format":"png","source":{"bytes":"AQI="}}},
 		{"document":{"format":"txt","name":"notes-txt","source":{"text":"notes"}}}
@@ -204,7 +222,7 @@ func TestDecodeResponse_RejectsMalformedContentUnions(t *testing.T) {
 
 func TestCodecDecodeResponseDelegates(t *testing.T) {
 	t.Parallel()
-	response, err := (bedrockconverse.Codec{}).DecodeResponse([]byte(`{"output":{"message":{"content":[]}},"stopReason":"end_turn"}`))
+	response, err := (bedrockconverse.Codec{}).DecodeResponse([]byte(`{"output":{"message":{"role":"assistant","content":[]}},"stopReason":"end_turn"}`))
 	if err != nil {
 		t.Fatalf("Codec.DecodeResponse() error = %v", err)
 	}

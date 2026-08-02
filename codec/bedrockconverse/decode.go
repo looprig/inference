@@ -24,6 +24,9 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	if wire.Output == nil || wire.Output.Message == nil {
 		return nil, &DecodeError{Reason: "response is missing output.message"}
 	}
+	if wire.Output.Message.Role != roleAssistant {
+		return nil, &DecodeError{Reason: "output.message role is not assistant"}
+	}
 
 	blocks, err := decodeContentBlocks(wire.Output.Message.Content)
 	if err != nil {
@@ -214,6 +217,9 @@ func decodeDocument(document *documentContent) (*content.DocumentBlock, error) {
 func decodeToolResult(result *toolResultContent) (*content.ToolResultBlock, error) {
 	if result.ToolUseID == "" {
 		return nil, &DecodeError{Reason: "toolResult is missing toolUseId"}
+	}
+	if len(result.Content) == 0 {
+		return nil, &DecodeError{Reason: "toolResult content must not be empty"}
 	}
 	status := result.Status
 	if status != "" && status != toolResultStatusSuccess && status != toolResultStatusError {

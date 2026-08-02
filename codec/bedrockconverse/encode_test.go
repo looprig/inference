@@ -258,6 +258,51 @@ func TestEncodeRequest_ReasoningToolsAndToolResult(t *testing.T) {
 	}
 }
 
+func TestEncodeRequest_ToolResultStatusAndContentRules(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	cases := []struct {
+		name       string
+		blocks     []content.Block
+		wantStatus string
+		wantError  bool
+	}{
+		{name: "successful status omitted", blocks: []content.Block{&content.TextBlock{Text: "ok"}}},
+		{name: "document-only result accepted", blocks: []content.Block{&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "result-pdf", Data: []byte("pdf")}}},
+		{name: "empty content rejected", wantError: true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := inference.Request{Model: m, Messages: content.AgenticMessages{toolResultMessage("call-1", false, tc.blocks...)}}
+			raw, err := bedrockconverse.EncodeRequest(req)
+			if tc.wantError {
+				var encodeErr *bedrockconverse.EncodeError
+				if !errors.As(err, &encodeErr) {
+					t.Fatalf("EncodeRequest() error = %T (%v), want EncodeError", err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			body := decodeObject(t, raw)
+			messages := decodeArray(t, body["messages"])
+			blocks := decodeArray(t, messages[0]["content"])
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal(blocks[0]["toolResult"], &result); err != nil {
+				t.Fatalf("toolResult = %v", err)
+			}
+			if _, ok := result["status"]; ok {
+				t.Fatalf("successful toolResult has status = %#v, want status omitted", result["status"])
+			}
+		})
+	}
+}
+
 func TestEncodeRequest_SamplingAndStructuredOutput(t *testing.T) {
 	t.Parallel()
 

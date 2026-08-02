@@ -274,11 +274,11 @@ func encodeToolResultMessage(message *content.ToolResultMessage) (*toolResultCon
 	if err != nil {
 		return nil, err
 	}
-	status := toolResultStatusSuccess
+	result := &toolResultContent{ToolUseID: message.ToolUseID, Content: blocks}
 	if message.IsError {
-		status = toolResultStatusError
+		result.Status = toolResultStatusError
 	}
-	return &toolResultContent{ToolUseID: message.ToolUseID, Content: blocks, Status: status}, nil
+	return result, nil
 }
 
 func encodeToolResultBlock(block *content.ToolResultBlock) (*toolResultContent, error) {
@@ -292,17 +292,18 @@ func encodeToolResultBlock(block *content.ToolResultBlock) (*toolResultContent, 
 	if err != nil {
 		return nil, err
 	}
-	status := toolResultStatusSuccess
+	result := &toolResultContent{ToolUseID: block.ToolUseID, Content: blocks}
 	if block.IsError {
-		status = toolResultStatusError
+		result.Status = toolResultStatusError
 	}
-	return &toolResultContent{ToolUseID: block.ToolUseID, Content: blocks, Status: status}, nil
+	return result, nil
 }
 
 func encodeToolResultBlocks(blocks []content.Block) ([]toolResultBlock, error) {
+	if len(blocks) == 0 {
+		return nil, &EncodeError{Reason: "tool result content must not be empty"}
+	}
 	encoded := make([]toolResultBlock, 0, len(blocks))
-	hasDocument := false
-	hasText := false
 	for _, block := range blocks {
 		switch block := block.(type) {
 		case *content.TextBlock:
@@ -310,7 +311,6 @@ func encodeToolResultBlocks(blocks []content.Block) ([]toolResultBlock, error) {
 				return nil, unsupportedBlock(block, "nil block")
 			}
 			text := block.Text
-			hasText = true
 			encoded = append(encoded, toolResultBlock{Text: &text})
 		case *content.ImageBlock:
 			image, err := encodeImage(block)
@@ -323,14 +323,10 @@ func encodeToolResultBlocks(blocks []content.Block) ([]toolResultBlock, error) {
 			if err != nil {
 				return nil, err
 			}
-			hasDocument = true
 			encoded = append(encoded, toolResultBlock{Document: document})
 		default:
 			return nil, unsupportedBlock(block, "tool result content supports text, image, and document blocks")
 		}
-	}
-	if hasDocument && !hasText {
-		return nil, &UnsupportedBlockError{Block: "*content.DocumentBlock", Reason: "a document requires a text block in the same tool result"}
 	}
 	return encoded, nil
 }

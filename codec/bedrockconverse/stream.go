@@ -1,6 +1,7 @@
 package bedrockconverse
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -44,7 +45,7 @@ type streamResultCollector struct {
 
 func (c *streamResultCollector) mapFrame(frame stream.StreamFrame) ([]content.Chunk, error) {
 	messageType := frame.Metadata[":message-type"]
-	if messageType == "exception" {
+	if messageType == "exception" || messageType == "error" {
 		return nil, c.decodeException(frame)
 	}
 	eventName := frame.Name
@@ -88,6 +89,9 @@ func (c *streamResultCollector) messageStart(payload []byte) error {
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return &StreamDecodeError{Reason: "decode messageStart", Err: err}
 	}
+	if event.Role != roleAssistant {
+		return &StreamDecodeError{Reason: "messageStart role is not assistant"}
+	}
 	c.started = true
 	return nil
 }
@@ -110,13 +114,13 @@ func (c *streamResultCollector) contentBlockStart(payload []byte) ([]content.Chu
 	if _, exists := c.closed[index]; exists {
 		return nil, &StreamDecodeError{Reason: "contentBlockStart reuses a closed index"}
 	}
-	c.active[index] = struct{}{}
 	if event.Start.ToolUse == nil {
-		return nil, nil
+		return nil, &StreamDecodeError{Reason: "contentBlockStart is only valid for tool use"}
 	}
 	if event.Start.ToolUse.ToolUseID == "" || event.Start.ToolUse.Name == "" {
 		return nil, &StreamDecodeError{Reason: "toolUse start is missing toolUseId or name"}
 	}
+	c.active[index] = struct{}{}
 	return []content.Chunk{&content.ToolUseChunk{
 		Index: index,
 		ID:    event.Start.ToolUse.ToolUseID,
@@ -137,7 +141,12 @@ func (c *streamResultCollector) contentBlockDelta(payload []byte) ([]content.Chu
 	}
 	index := *event.Index
 	if _, exists := c.active[index]; !exists {
-		return nil, &StreamDecodeError{Reason: "contentBlockDelta received without start"}
+		if _, closed := c.closed[index]; closed {
+			return nil, &StreamDecodeError{Reason: "contentBlockDelta received after stop"}
+		}
+		// Bedrock emits contentBlockStart only for tool-use blocks. Text and
+		// reasoning blocks become active with their first delta.
+		c.active[index] = struct{}{}
 	}
 	if variants := streamBlockDeltaVariantCount(*event.Delta); variants != 1 {
 		return nil, &StreamDecodeError{Reason: "content block delta must contain exactly one recognized variant"}
@@ -254,14 +263,23 @@ func (c *streamResultCollector) decodeException(frame stream.StreamFrame) error 
 	var event struct {
 		Message string `json:"message"`
 	}
-	if err := json.Unmarshal(frame.Data, &event); err != nil {
-		return &StreamDecodeError{Reason: "decode exception event", Err: err}
+	if len(bytes.TrimSpace(frame.Data)) > 0 {
+		if err := json.Unmarshal(frame.Data, &event); err != nil {
+			return &StreamDecodeError{Reason: "decode exception event", Err: err}
+		}
 	}
-	message := event.Message
+	message := frame.Metadata[":error-message"]
+	if message == "" {
+		message = event.Message
+	}
 	if len(message) > 512 {
 		message = message[:512]
 	}
-	return &StreamAPIError{Type: frame.Metadata[":exception-type"], Message: message}
+	typ := frame.Metadata[":exception-type"]
+	if typ == "" {
+		typ = frame.Metadata[":error-code"]
+	}
+	return &StreamAPIError{Type: typ, Message: message}
 }
 
 func (c *streamResultCollector) result() (stream.StreamResult, bool, error) {

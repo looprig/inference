@@ -101,7 +101,7 @@ type toolUseContent struct {
 type toolResultContent struct {
 	ToolUseID string            `json:"toolUseId"`
 	Content   []toolResultBlock `json:"content,omitempty"`
-	Status    string            `json:"status"`
+	Status    string            `json:"status,omitempty"`
 }
 
 type toolResultBlock struct {
