@@ -15,6 +15,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/looprig/core/content"
@@ -189,6 +191,16 @@ func noRedirect(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// parseRetryAfter reads Retry-After's integer-seconds form. The HTTP-date
+// form is deliberately unsupported (needs a clock; no provider we bind uses it).
+func parseRetryAfter(h http.Header) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
 // newStreamHTTPClient builds the http.Client used by Stream: no whole-request
 // Timeout (it would abort a long-lived streaming body mid-flight), just the
 // connect/TLS/header timeout budget on the Transport. The body itself is bounded
@@ -245,7 +257,7 @@ func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.
 	// Non-2xx is mapped to an APIError BEFORE the decoder is invoked; the body is
 	// drained and closed (deferred) here because it is normal JSON/text, not a stream.
 	if httpResp.StatusCode/100 != 2 {
-		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body}
+		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body, RetryAfter: parseRetryAfter(httpResp.Header)}
 	}
 	return c.dec.DecodeResponse(body)
 }
@@ -282,7 +294,7 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 		if readErr != nil {
 			return nil, &failure.NetworkError{Err: fmt.Errorf("transport: reading error body (status %d): %w", httpResp.StatusCode, readErr)}
 		}
-		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body}
+		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body, RetryAfter: parseRetryAfter(httpResp.Header)}
 	}
 	reader, err := c.stream.DecodeStream(httpResp)
 	if err != nil {
