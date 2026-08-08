@@ -83,13 +83,20 @@ func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil {
+		return nil, &InvalidResponseError{}
+	}
 	resp.Attempts = attempts
 	return resp, nil
 }
 
 func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
 	inner, attempts, err := attemptLoop[*stream.StreamReader[content.Chunk]](ctx, c, func() (*stream.StreamReader[content.Chunk], error) {
-		return c.inner.Stream(ctx, req)
+		reader, err := c.inner.Stream(ctx, req)
+		if err != nil && reader != nil {
+			_ = reader.Close()
+		}
+		return reader, err
 	})
 	if err != nil {
 		return nil, err

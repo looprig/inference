@@ -16,6 +16,10 @@ func Retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	var exhausted *ExhaustedError
+	if errors.As(err, &exhausted) {
+		return false
+	}
 	var netErr *failure.NetworkError
 	if errors.As(err, &netErr) {
 		return true

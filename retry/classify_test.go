@@ -29,6 +29,7 @@ func TestRetryable(t *testing.T) {
 		{"ctx canceled", context.Canceled, false},
 		{"ctx deadline", context.DeadlineExceeded, false},
 		{"canceled wrapping network", fmt.Errorf("%w: %w", context.Canceled, &failure.NetworkError{Err: errors.New("d")}), false},
+		{"exhausted wrapping api", &ExhaustedError{Attempts: 6, Cause: &failure.APIError{Status: 429}}, false},
 		{"other", errors.New("boom"), false},
 	}
 	for _, tc := range cases {

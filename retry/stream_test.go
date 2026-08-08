@@ -211,3 +211,29 @@ func TestStream_Exhaustion(t *testing.T) {
 		t.Fatalf("Stream calls = %d, want 6", streamCalls)
 	}
 }
+
+func TestStream_ClosesReaderReturnedWithError(t *testing.T) {
+	closed := 0
+	readerWithError := stream.NewStreamReader(func() (content.Chunk, error) {
+		return nil, io.EOF
+	}, func() error {
+		closed++
+		return nil
+	})
+	inner := &scriptedClient{streamOutcomes: []outcome{
+		{reader: readerWithError, err: &failure.APIError{Status: 429}},
+		{reader: scriptedStream(nil, stream.StreamResult{Model: "model"})},
+	}}
+	c, _ := newTestClient(t, inner)
+
+	reader, err := c.Stream(context.Background(), inference.Request{})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("errored reader close count = %d, want 1", closed)
+	}
+}

@@ -261,3 +261,19 @@ func TestInvoke_ContextCancelDuringWait(t *testing.T) {
 		t.Fatalf("Invoke calls = %d, want 1", calls)
 	}
 }
+
+func TestInvoke_NilResponseFailsWithTypedError(t *testing.T) {
+	inner := &scriptedClient{invokeOutcomes: []outcome{{resp: nil, err: nil}}}
+	c, _ := newTestClient(t, inner)
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Invoke panicked on nil response: %v", recovered)
+		}
+	}()
+	_, err := c.Invoke(context.Background(), inference.Request{})
+	var invalid *InvalidResponseError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("error = %T, want *InvalidResponseError", err)
+	}
+}
