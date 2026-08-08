@@ -1,7 +1,7 @@
 # Retry client design
 
 Date: 2026-08-08
-Status: agreed in discussion; scope deliberately cut to basic retry
+Status: agreed in discussion; production retry budget revised to ten attempts
 
 ## Problem
 
@@ -49,20 +49,22 @@ func New(inner inference.Client, policy Policy) (inference.Client, error)
 The returned value implements `inference.Client` unchanged. Harness binding
 is untouched: `loop.WithInference(retryClient, model)`.
 
-### Policy — agreed schedule: 3 stable retries of 2s, then exponential
+### Policy — production schedule: 3 stable retries of 2s, then exponential
 
 ```go
 type Policy struct {
     StableRetries int           // retries at fixed StableDelay first (agreed: 3)
     StableDelay   time.Duration // agreed: 2s
-    MaxAttempts   int           // total attempts incl. the first (agreed: 6)
-    MaxDelay      time.Duration // cap on the exponential leg (e.g. 30s)
+    MaxAttempts   int           // total attempts incl. the first (production: 10)
+    MaxDelay      time.Duration // cap on the exponential leg (production: 256s)
 }
 ```
 
-Timeline with the agreed values: attempt → 2s → attempt → 2s → attempt → 2s
-→ attempt → 4s → attempt → 8s → attempt → give up. The exponential leg
-starts at `StableDelay * 2` and doubles, capped at `MaxDelay`.
+Timeline with the production values: attempt → 2s → attempt → 2s → attempt
+→ 2s → attempt → 4s → attempt → 8s → attempt → 16s → attempt → 32s
+→ attempt → 64s → attempt → 128s → attempt → give up. The exponential leg
+starts at `StableDelay * 2` and doubles, capped at `MaxDelay`. Ten total
+attempts reach a 128s wait; 256s is the cap if the attempt budget grows.
 
 - **Jitter**: ±10–20% on every delay so parallel loops/subagents don't
   re-slam a provider in lockstep.
@@ -123,7 +125,8 @@ gets from `auto.New` with `retry.New(client, defaultPolicy)`. No
   context-cancel during sleep, exhaustion error unwrapping, Attempts fields.
 - A `Stream` test proving establishment retries are invisible and that a
   post-establishment `Next()` error is not retried.
-- coderig: loader test that constructed clients are wrapped.
+- coderig: loader test that constructed clients are wrapped and the production
+  policy remains at ten total attempts with a 256s cap.
 
 ## Future work (recorded, not planned)
 
