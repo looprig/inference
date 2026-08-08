@@ -500,7 +500,7 @@ func TestNewStream_EmptyChoices(t *testing.T) {
 	}
 }
 
-func TestOpenAIStreamResult(t *testing.T) {
+func TestStreamUsageResult(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -521,6 +521,12 @@ func TestOpenAIStreamResult(t *testing.T) {
 			wantUsage:  &content.Usage{InputTokens: 7, OutputTokens: 4, CacheReadTokens: 2, ReasoningTokens: 1},
 			wantModel:  "gpt-test",
 			wantReason: stream.FinishReasonStop,
+		},
+		{
+			name: "null cache-write token in terminal usage is unreported",
+			body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"prompt_tokens_details\":{\"cached_tokens\":3,\"cache_write_tokens\":null},\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n" +
+				"data: [DONE]\n\n",
+			wantUsage: &content.Usage{InputTokens: 7, OutputTokens: 6, CacheReadTokens: 3, ReasoningTokens: 2},
 		},
 		{
 			name:       "missing usage trailer remains a clean result",
