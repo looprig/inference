@@ -19,10 +19,10 @@ import (
 // StableDelay, then exponential doubling (starting at 2*StableDelay)
 // capped at MaxDelay, until MaxAttempts total attempts have been made.
 type Policy struct {
-	StableRetries int           // retries at fixed StableDelay (agreed: 3)
-	StableDelay   time.Duration // agreed: 2s
-	MaxAttempts   int           // total attempts including the first (agreed: 6)
-	MaxDelay      time.Duration // cap on the exponential leg (agreed: 30s)
+	StableRetries int           // retries at fixed StableDelay
+	StableDelay   time.Duration // delay for the stable retry leg
+	MaxAttempts   int           // total attempts including the first
+	MaxDelay      time.Duration // cap on the exponential retry leg
 }
 
 // Validate reports the first structural defect. The zero value is invalid:
