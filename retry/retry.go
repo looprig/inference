@@ -76,12 +76,43 @@ func New(inner inference.Client, policy Policy) (*Client, error) {
 	return &Client{inner: inner, policy: policy, after: time.After, randFloat: rand.Float64}, nil
 }
 
-// Invoke delegates to the inner client until the retry loop is added.
 func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.Response, error) {
-	return c.inner.Invoke(ctx, req)
+	resp, attempts, err := attemptLoop[*inference.Response](ctx, c, func() (*inference.Response, error) {
+		return c.inner.Invoke(ctx, req)
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp.Attempts = attempts
+	return resp, nil
 }
 
-// Stream delegates to the inner client until the retry loop is added.
+// Stream delegates to the inner client until the establishment retry loop is added.
 func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
 	return c.inner.Stream(ctx, req)
+}
+
+// attemptLoop drives the shared retry ladder for both entry points. T is the
+// per-attempt success value (*inference.Response, or the stream reader).
+func attemptLoop[T any](ctx context.Context, c *Client, call func() (T, error)) (T, int, error) {
+	var zero T
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		value, err := call()
+		if err == nil {
+			return value, attempt, nil
+		}
+		lastErr = err
+		if !Retryable(err) {
+			return zero, attempt, err
+		}
+		if attempt >= c.policy.MaxAttempts {
+			return zero, attempt, &ExhaustedError{Attempts: attempt, Cause: lastErr}
+		}
+		select {
+		case <-c.after(nextDelay(c.policy, attempt, err, c.randFloat())):
+		case <-ctx.Done():
+			return zero, attempt, ctx.Err()
+		}
+	}
 }
