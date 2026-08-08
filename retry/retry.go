@@ -1,0 +1,87 @@
+// Package retry decorates an inference.Client with bounded, classified
+// retry and exponential backoff. It retries Invoke calls and Stream
+// establishment only; once a StreamReader is handed out, a mid-stream
+// failure is terminal for the wrapper exactly as for the inner client.
+package retry
+
+import (
+	"context"
+	"fmt"
+	"math/rand"
+	"time"
+
+	"github.com/looprig/core/content"
+	"github.com/looprig/inference"
+	"github.com/looprig/inference/stream"
+)
+
+// Policy is the immutable retry schedule: StableRetries retries at
+// StableDelay, then exponential doubling (starting at 2*StableDelay)
+// capped at MaxDelay, until MaxAttempts total attempts have been made.
+type Policy struct {
+	StableRetries int           // retries at fixed StableDelay (agreed: 3)
+	StableDelay   time.Duration // agreed: 2s
+	MaxAttempts   int           // total attempts including the first (agreed: 6)
+	MaxDelay      time.Duration // cap on the exponential leg (agreed: 30s)
+}
+
+// Validate reports the first structural defect. The zero value is invalid:
+// this package never invents a schedule the caller did not state.
+func (p Policy) Validate() error {
+	switch {
+	case p.MaxAttempts < 1:
+		return &ConfigError{Field: "MaxAttempts", Reason: "must be at least 1"}
+	case p.StableRetries < 0:
+		return &ConfigError{Field: "StableRetries", Reason: "must not be negative"}
+	case p.StableRetries >= p.MaxAttempts:
+		return &ConfigError{Field: "StableRetries", Reason: "must be less than MaxAttempts (attempt 1 is not a retry)"}
+	case p.StableDelay <= 0:
+		return &ConfigError{Field: "StableDelay", Reason: "must be positive"}
+	case p.MaxDelay < p.StableDelay:
+		return &ConfigError{Field: "MaxDelay", Reason: "must be at least StableDelay"}
+	}
+	return nil
+}
+
+// ConfigError reports an invalid retry configuration at construction.
+type ConfigError struct {
+	Field  string
+	Reason string
+}
+
+func (e *ConfigError) Error() string {
+	return fmt.Sprintf("retry: invalid config: %s %s", e.Field, e.Reason)
+}
+
+// Client decorates an inner inference.Client with the Policy's schedule.
+type Client struct {
+	inner  inference.Client
+	policy Policy
+
+	// Test seams; production values set by New.
+	after     func(time.Duration) <-chan time.Time
+	randFloat func() float64
+}
+
+var _ inference.Client = (*Client)(nil)
+
+// New validates policy and returns the decorated client.
+func New(inner inference.Client, policy Policy) (*Client, error) {
+	if inner == nil {
+		return nil, &ConfigError{Field: "inner", Reason: "client must not be nil"}
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	return &Client{inner: inner, policy: policy, after: time.After, randFloat: rand.Float64}, nil
+}
+
+// Invoke delegates to the inner client until the retry loop is added.
+func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.Response, error) {
+	return c.inner.Invoke(ctx, req)
+}
+
+// Stream delegates to the inner client until the retry loop is added.
+func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
+	return c.inner.Stream(ctx, req)
+}
