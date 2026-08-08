@@ -87,9 +87,23 @@ func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.
 	return resp, nil
 }
 
-// Stream delegates to the inner client until the establishment retry loop is added.
 func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
-	return c.inner.Stream(ctx, req)
+	inner, attempts, err := attemptLoop[*stream.StreamReader[content.Chunk]](ctx, c, func() (*stream.StreamReader[content.Chunk], error) {
+		return c.inner.Stream(ctx, req)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Rewrap only to stamp Attempts into the terminal result; Next/Close
+	// delegate, so mid-stream semantics are byte-identical to the inner reader.
+	return stream.NewStreamReaderWithResult(inner.Next, inner.Close, func() (stream.StreamResult, bool, error) {
+		result, ok := inner.Result()
+		if !ok {
+			return stream.StreamResult{}, false, nil
+		}
+		result.Attempts = attempts
+		return result, true, nil
+	}), nil
 }
 
 // attemptLoop drives the shared retry ladder for both entry points. T is the
