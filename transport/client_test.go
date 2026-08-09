@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,6 +154,20 @@ type staticRouter struct {
 	method string
 	path   string
 	header http.Header
+}
+
+type dualPathRouter struct{}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func (dualPathRouter) BuildRoute(base string, _ inference.Request, mode codec.RequestMode) (route.Route, error) {
+	path := "/invoke"
+	if mode == codec.RequestModeStream {
+		path = "/stream"
+	}
+	return route.Route{Method: http.MethodPost, URL: strings.TrimRight(base, "/") + path}, nil
 }
 
 func (r staticRouter) BuildRoute(base string, _ inference.Request, _ codec.RequestMode) (route.Route, error) {
@@ -548,6 +563,67 @@ func TestNoReplay_BodyConsumedOnce(t *testing.T) {
 	}
 }
 
+func TestWithRoundTripper_TLSInvokeAndStream(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/invoke":
+			_, _ = io.WriteString(w, `{"answer":"secure"}`)
+		case "/stream":
+			_, _ = io.WriteString(w, `{"text":"secure-stream"}`+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var calls atomic.Int32
+	base := srv.Client().Transport
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return base.RoundTrip(req)
+	})
+	client := transport.New(
+		transport.Endpoint{BaseURL: srv.URL},
+		dualPathRouter{},
+		customCodec{body: `{}`},
+		auth.None(),
+		transport.WithRoundTripper(rt),
+		transport.WithStreamDecoder(ndjsonTextDecoder{}),
+	)
+	if _, err := client.Invoke(context.Background(), req("secure")); err != nil {
+		t.Fatalf("Invoke error: %v", err)
+	}
+	reader, err := client.Stream(context.Background(), req("secure"))
+	if err != nil {
+		t.Fatalf("Stream error: %v", err)
+	}
+	defer reader.Close()
+	if _, err := reader.Next(); err != nil {
+		t.Fatalf("Stream.Next error: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("custom RoundTripper calls = %d, want 2", got)
+	}
+}
+
+func TestWithRoundTripperNilPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithRoundTripper(nil) did not panic")
+		}
+	}()
+	transport.New(
+		transport.Endpoint{BaseURL: "https://provider.invalid"},
+		staticRouter{method: http.MethodPost, path: "/invoke"},
+		customCodec{body: `{}`},
+		auth.None(),
+		transport.WithRoundTripper(nil),
+	)
+}
+
 // TestNoReplay_RedirectNotFollowed proves the transport does not follow a redirect (which
 // would replay the body): a 307 is surfaced as its 3xx APIError and the redirect target
 // is never hit.
@@ -565,7 +641,7 @@ func TestNoReplay_RedirectNotFollowed(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None())
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None(), transport.WithRoundTripper(http.DefaultTransport))
 	_, err := c.Invoke(context.Background(), req("m"))
 	var apiErr *failure.APIError
 	if !errors.As(err, &apiErr) {

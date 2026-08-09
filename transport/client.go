@@ -38,11 +38,12 @@ import (
 // routes, encodes, authorizes, and executes, mapping transport failures to
 // *failure.NetworkError and non-2xx responses to *failure.APIError.
 type Client struct {
-	ep     Endpoint
-	router route.Router
-	enc    codec.RequestEncoder
-	dec    codec.ResponseDecoder
-	stream codec.StreamDecoder // nil ⇒ streaming unsupported
+	ep           Endpoint
+	router       route.Router
+	enc          codec.RequestEncoder
+	dec          codec.ResponseDecoder
+	stream       codec.StreamDecoder // nil ⇒ streaming unsupported
+	roundTripper http.RoundTripper
 	// auth is the legacy constructor default. Call-scoped callers use
 	// InvokeWithAuth/StreamWithAuth and supply a fresh authorizer per concrete
 	// wire attempt.
@@ -128,6 +129,28 @@ func WithInvokeTimeout(d time.Duration) Option {
 			return
 		}
 		c.hcInvoke = newInvokeHTTPClient(d)
+		if c.roundTripper != nil {
+			c.hcInvoke.Transport = c.roundTripper
+		}
+	}
+}
+
+// WithRoundTripper installs a verified caller-supplied RoundTripper on both
+// invoke and stream HTTP clients. The clients retain their no-redirect policy
+// and invoke/stream timeout behavior. The RoundTripper must perform normal
+// HTTPS certificate verification and be safe for concurrent use by both
+// clients; the transport does not wrap or synchronize it.
+//
+// Passing nil panics during construction so a client cannot silently fall back
+// to the process-wide default transport.
+func WithRoundTripper(rt http.RoundTripper) Option {
+	if rt == nil {
+		panic("transport.WithRoundTripper: round tripper must not be nil")
+	}
+	return func(c *Client) {
+		c.roundTripper = rt
+		c.hcInvoke.Transport = rt
+		c.hcStream.Transport = rt
 	}
 }
 
