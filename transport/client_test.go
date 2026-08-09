@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/credentials/httpauth"
@@ -74,6 +75,76 @@ func firstText(t *testing.T, resp *inference.Response) string {
 	}
 	t.Fatalf("no text block in response: %+v", resp.Message.Blocks)
 	return ""
+}
+
+func TestLegacyInvokeMapsAuthorizationCancellationToNetworkError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		ctx   func() context.Context
+		cause error
+	}{
+		{
+			name: "canceled",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			cause: context.Canceled,
+		},
+		{
+			name: "deadline",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				cancel()
+				return ctx
+			},
+			cause: context.DeadlineExceeded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := transport.New(
+				transport.Endpoint{BaseURL: "https://provider.invalid"},
+				staticRouter{method: http.MethodPost, path: "/invoke"},
+				customCodec{body: `{}`},
+				auth.None(),
+			)
+
+			_, err := client.Invoke(tt.ctx(), req("model"))
+			var networkErr *failure.NetworkError
+			if !errors.As(err, &networkErr) {
+				t.Fatalf("error = %T, want *failure.NetworkError", err)
+			}
+			if !errors.Is(err, tt.cause) {
+				t.Fatalf("error = %v, want cause %v", err, tt.cause)
+			}
+		})
+	}
+}
+
+func TestCallScopedInvokePreservesAuthorizationCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := transport.NewWithAuth(
+		transport.Endpoint{BaseURL: "https://provider.invalid"},
+		staticRouter{method: http.MethodPost, path: "/invoke"},
+		customCodec{body: `{}`},
+	)
+
+	_, err := client.InvokeWithAuth(ctx, req("model"), httpauth.None())
+	var networkErr *failure.NetworkError
+	if errors.As(err, &networkErr) {
+		t.Fatalf("error = %T, want typed authorization cancellation", err)
+	}
+	if !errors.Is(err, httpauth.ErrCanceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want httpauth and context cancellation", err)
+	}
 }
 
 // staticRouter is a caller-supplied Router returning a fixed method/path plus optional

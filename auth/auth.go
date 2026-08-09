@@ -32,28 +32,22 @@ func Header(k APIKey, name string) Authenticator {
 }
 
 // None returns an explicit no-credentials authorizer. Unlike a nil
-// authorizer, it is safe to pass through a call-scoped transport path.
-func None() Authenticator { return httpauth.None() }
+// authorizer, it is safe to pass through the legacy transport path.
+func None() Authenticator { return legacyNoneAuth{} }
 
 // staticHeader delegates valid values to credentials/httpauth. Empty values
 // were accepted by the legacy constructors, so that one compatibility corner
 // retains the old header-setting behavior. Invalid or oversized values produce
 // a redaction-safe authorizer error instead of retaining untrusted material.
 func staticHeader(name, value string) Authenticator {
-	secret, err := secrets.New([]byte(value))
-	if err == nil {
-		authorizer, authErr := httpauth.Header(name, secret)
-		if authErr == nil {
-			return authorizer
-		}
-		return failedAuthorizer{err: authErr}
+	if _, err := secrets.New([]byte(value)); err != nil && !errors.Is(err, secrets.ErrEmptySecret) {
+		return failedAuthorizer{err: err}
 	}
-	if errors.Is(err, secrets.ErrEmptySecret) {
-		// Keep the old observable behavior for an empty API key while still
-		// replacing case-insensitive stale header keys on every request.
-		return legacyHeaderAuth{name: name, value: value}
-	}
-	return failedAuthorizer{err: err}
+	// Legacy static authenticators intentionally do not inspect context. The
+	// net/http boundary reports a canceled request as NetworkError, preserving
+	// the historical inference/provider behavior. Call-scoped callers should
+	// use credentials/httpauth directly for typed authorization cancellation.
+	return legacyHeaderAuth{name: name, value: value}
 }
 
 type failedAuthorizer struct{ err error }
@@ -73,12 +67,7 @@ func (a legacyHeaderAuth) Authorize(ctx context.Context, request *http.Request) 
 	if request == nil {
 		return httpauth.ErrNilRequest
 	}
-	if ctx == nil {
-		return httpauth.ErrNilContext
-	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("%w: %v", httpauth.ErrCanceled, err)
-	}
+	_ = ctx
 	if a.name == "" {
 		return httpauth.ErrInvalidHeaderName
 	}
@@ -93,6 +82,10 @@ func (a legacyHeaderAuth) Authorize(ctx context.Context, request *http.Request) 
 	request.Header.Set(a.name, a.value)
 	return nil
 }
+
+type legacyNoneAuth struct{}
+
+func (legacyNoneAuth) Authorize(context.Context, *http.Request) error { return nil }
 
 func (a legacyHeaderAuth) String() string                 { return "auth.header(REDACTED)" }
 func (a legacyHeaderAuth) GoString() string               { return a.String() }

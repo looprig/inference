@@ -11,6 +11,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -283,7 +284,8 @@ func newInvokeHTTPClient(d time.Duration) *http.Client {
 // authorizer. New credential-backed callers should use InvokeWithAuth so a
 // lease is applied to this concrete request attempt.
 func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.Response, error) {
-	return c.InvokeWithAuth(ctx, req, c.auth)
+	resp, err := c.InvokeWithAuth(ctx, req, c.auth)
+	return resp, legacyAuthorizationError(err)
 }
 
 // InvokeWithAuth sends one non-streaming request with a call-scoped
@@ -333,7 +335,26 @@ func (c *Client) InvokeWithAuth(ctx context.Context, req inference.Request, auth
 // Stream sends a streaming request using the legacy constructor's default
 // authorizer. New credential-backed callers should use StreamWithAuth.
 func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
-	return c.StreamWithAuth(ctx, req, c.auth)
+	reader, err := c.StreamWithAuth(ctx, req, c.auth)
+	return reader, legacyAuthorizationError(err)
+}
+
+// legacyAuthorizationError preserves the old inference transport contract at
+// the legacy Client methods. Before call-scoped authorization, cancellation
+// during authorization was reported as a transport failure. New call-scoped
+// methods deliberately return httpauth's typed cancellation directly.
+func legacyAuthorizationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var networkErr *failure.NetworkError
+	if errors.As(err, &networkErr) {
+		return err
+	}
+	if errors.Is(err, httpauth.ErrCanceled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &failure.NetworkError{Err: err}
+	}
+	return err
 }
 
 // StreamWithAuth sends one streaming request with a call-scoped authorizer.
