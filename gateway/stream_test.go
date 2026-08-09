@@ -322,7 +322,6 @@ func eventNames(events []sseEvent) []string {
 // tool call.
 func TestServeStreaming_ChunkOrderAndToolIndexesPreserved(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, _ := newStreamHandler(t, client, 0)
 
@@ -442,7 +441,6 @@ func equalStrings(a, b []string) bool {
 // closed exactly once.
 func TestServeStreaming_CleanEOF_FinishReceivesAliasModel(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, spy := newStreamHandler(t, client, 0)
 
@@ -499,7 +497,6 @@ func TestServeStreaming_CleanEOF_FinishReceivesAliasModel(t *testing.T) {
 // only the harness alias as Model.
 func TestServeStreaming_DefensiveNoResult_StillFinishes(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, spy := newStreamHandler(t, client, 0)
 
@@ -543,7 +540,6 @@ func TestServeStreaming_DefensiveNoResult_StillFinishes(t *testing.T) {
 // written through WriteError.
 func TestServeStreaming_UpstreamNextError_CallsFailNotFinish(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, spy := newStreamHandler(t, client, 0)
 
@@ -598,7 +594,6 @@ func TestServeStreaming_UpstreamNextError_CallsFailNotFinish(t *testing.T) {
 // Invoke path uses), not a native in-stream error event.
 func TestServeStreaming_PreHeaderStreamError_UsesWriteErrorNotOpenStream(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	client.streamErr = errors.New("upstream: connection refused")
 	h, spy := newStreamHandler(t, client, 0)
@@ -632,7 +627,6 @@ func TestServeStreaming_PreHeaderStreamError_UsesWriteErrorNotOpenStream(t *test
 // TestHandler_UpstreamDeadlineExceeded_504.
 func TestServeStreaming_PreHeaderDeadlineExceeded_504(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	client.blockStream = make(chan struct{}) // never closed: Stream blocks until ctx times out
 	h, spy := newStreamHandler(t, client, 0)
@@ -661,7 +655,6 @@ func TestServeStreaming_PreHeaderDeadlineExceeded_504(t *testing.T) {
 // TestHandler_ConcurrencyAdmission_429 in handler_test.go.
 func TestServeStreaming_AdmissionReleasedAfterCompletion(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, _ := newStreamHandler(t, client, 1)
 
@@ -720,7 +713,6 @@ func TestServeStreaming_AdmissionReleasedAfterCompletion(t *testing.T) {
 // same-goroutine sequencing, not cross-process wire visibility.)
 func TestServeStreaming_FlushBeforeNextChunkReleased(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, _ := newStreamHandler(t, client, 0)
 

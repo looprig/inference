@@ -195,7 +195,6 @@ func TestServer_Binding_NotReadyAfterClose(t *testing.T) {
 
 func TestServer_StartBindingAndGeneratedTokenAuth(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srv := newTestServer(t, okHandler())
 	mustStart(t, srv)
@@ -226,7 +225,6 @@ func TestServer_StartBindingAndGeneratedTokenAuth(t *testing.T) {
 
 func TestServer_TwoServers_UniqueURLsTokensAndIsolation(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srvA := newTestServer(t, okHandler())
 	srvB := newTestServer(t, okHandler())
@@ -276,7 +274,6 @@ func TestServer_TwoServers_UniqueURLsTokensAndIsolation(t *testing.T) {
 
 func TestServer_DistinctModelRouting_TwoGatewayHandlers(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	clientA := &recordingClient{}
 	clientB := &recordingClient{}
@@ -312,7 +309,6 @@ func TestServer_DistinctModelRouting_TwoGatewayHandlers(t *testing.T) {
 
 func TestServer_SharedHandler_MultipleServersWrapOneInnerHandler(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	var calls int32
 	shared := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -349,7 +345,6 @@ func TestServer_SharedHandler_MultipleServersWrapOneInnerHandler(t *testing.T) {
 
 func TestServer_Close_Idempotent(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srv := newTestServer(t, okHandler())
 	mustStart(t, srv)

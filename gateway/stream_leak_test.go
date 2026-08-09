@@ -18,13 +18,11 @@ import (
 // ServeHTTP call returning) for the count to fall back to that baseline,
 // failing the test if it never does.
 //
-// This is shared across stream_test.go, cancel_test.go, and this file (the
-// three test files this task adds), called at the top of every streaming
-// test, per the task's "no goroutine remains after the test" requirement.
-// It is a delta check, not an absolute one: unrelated background goroutines
-// (GC workers, other parallel tests' teardown) may be present in both the
-// baseline and the final count, so this only catches growth introduced by
-// the test itself.
+// This is shared across the gateway tests that exercise streaming and server
+// lifecycle teardown. Callers must remain sequential (they must not call
+// t.Parallel): runtime.NumGoroutine is process-wide, so sibling parallel tests
+// would make this per-test baseline/final delta meaningless and create false
+// leak failures.
 func assertNoGoroutineLeak(t *testing.T) {
 	t.Helper()
 	runtime.GC()
@@ -56,7 +54,6 @@ func assertNoGoroutineLeak(t *testing.T) {
 // for the remaining lifetime of that parent context.
 func TestServeStreaming_NoLeak_FastNonCanceledRequest(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	// A context that will not be canceled for the lifetime of this test
 	// process, standing in for a long-lived server/session-scoped parent.
@@ -93,7 +90,6 @@ func TestServeStreaming_NoLeak_FastNonCanceledRequest(t *testing.T) {
 // per-scenario leak checks in stream_test.go and cancel_test.go.
 func TestServeStreaming_NoLeak_ManySequentialRequests(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	for i := 0; i < 20; i++ {
 		client := newControlledStreamClient()
