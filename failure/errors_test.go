@@ -1,8 +1,12 @@
 package failure_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -137,41 +141,21 @@ func TestAPIError(t *testing.T) {
 		err          *failure.APIError
 		wantContains []string
 	}{
+		{name: "status 200 uses status text", err: &failure.APIError{Status: 200}, wantContains: []string{"200", "OK"}},
+		{name: "status 429 uses status text", err: &failure.APIError{Status: 429}, wantContains: []string{"429", "Too Many Requests"}},
+		{name: "status 500 uses status text", err: &failure.APIError{Status: 500}, wantContains: []string{"500", "Internal Server Error"}},
 		{
-			name:         "status 200 with message",
-			err:          &failure.APIError{Status: 200, Message: "ok"},
-			wantContains: []string{"200", "ok"},
-		},
-		{
-			name:         "status 429 rate limited",
-			err:          &failure.APIError{Status: 429, Message: "rate limited"},
-			wantContains: []string{"429", "rate limited"},
-		},
-		{
-			name:         "status 500 server error",
-			err:          &failure.APIError{Status: 500, Message: "internal server error"},
-			wantContains: []string{"500", "internal server error"},
-		},
-		{
-			name:         "empty message boundary",
-			err:          &failure.APIError{Status: 503, Message: ""},
+			name:         "empty status text boundary",
+			err:          &failure.APIError{Status: 503},
 			wantContains: []string{"503"},
 		},
 		{
 			name:         "error string has inference prefix",
-			err:          &failure.APIError{Status: 400, Message: "bad request"},
+			err:          &failure.APIError{Status: 400},
 			wantContains: []string{"inference:"},
 		},
-		{
-			name:         "nil body is accepted without panic",
-			err:          &failure.APIError{Status: 404, Message: "not found", Body: nil},
-			wantContains: []string{"404", "not found"},
-		},
-		{
-			name:         "non-nil body does not affect Error() output",
-			err:          &failure.APIError{Status: 401, Message: "unauthorized", Body: []byte(`{"error":"auth"}`)},
-			wantContains: []string{"401", "unauthorized"},
-		},
+		{name: "status 404 uses status text", err: &failure.APIError{Status: 404}, wantContains: []string{"404", "Not Found"}},
+		{name: "status 401 uses status text", err: &failure.APIError{Status: 401}, wantContains: []string{"401", "Unauthorized"}},
 	}
 
 	for _, tt := range tests {
@@ -188,6 +172,86 @@ func TestAPIError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPIErrorHasNoRawProviderStorage(t *testing.T) {
+	t.Parallel()
+
+	typ := reflect.TypeOf(failure.APIError{})
+	for _, name := range []string{"Body", "Message", "Headers"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Fatalf("APIError retains unsafe exported field %q", name)
+		}
+	}
+	err := failure.APIErrorFromResponse(500, []byte(`{"error":{"message":"provider-secret-value"}}`), nil, 0)
+	encoded, errJSON := json.Marshal(err)
+	if errJSON != nil {
+		t.Fatal(errJSON)
+	}
+	if strings.Contains(string(encoded), "provider-secret-value") {
+		t.Fatalf("JSON retained provider response text: %s", encoded)
+	}
+}
+
+func TestAPIErrorRedactsRawProviderBodyAndHeaders(t *testing.T) {
+	t.Parallel()
+	const secretBody = `{"error":{"message":"provider-token-should-not-escape","code":"not-an-allowlisted-code"}}`
+	err := failure.NewAPIError(500, "not-an-allowlisted-code", "request-safe-123", 0)
+	for _, format := range []string{"%s", "%v", "%+v", "%#v", "%q"} {
+		got := fmt.Sprintf(format, err)
+		if strings.Contains(got, "provider-token-should-not-escape") || strings.Contains(got, secretBody) {
+			t.Errorf("format %q leaked provider body: %q", format, got)
+		}
+	}
+	valueFormat := fmt.Sprintf("%#v", *err)
+	if strings.Contains(valueFormat, "provider-token-should-not-escape") || strings.Contains(valueFormat, secretBody) {
+		t.Fatalf("value formatting leaked provider body: %q", valueFormat)
+	}
+	var logs bytes.Buffer
+	slog.New(slog.NewTextHandler(&logs, nil)).Info("failure", "error", err)
+	if strings.Contains(logs.String(), "provider-token-should-not-escape") || strings.Contains(logs.String(), secretBody) {
+		t.Fatalf("slog leaked provider body: %q", logs.String())
+	}
+}
+
+func TestAPIErrorFromResponseNormalizesSnowflakeConversationComplete(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "nested error message", body: `{"error":{"message":"conversation complete"}}`, want: "conversation_complete"},
+		{name: "top level message", body: `{"message":"conversation complete"}`, want: "conversation_complete"},
+		{name: "case near match rejected", body: `{"message":"Conversation complete"}`},
+		{name: "whitespace near match rejected", body: `{"message":"conversation complete "}`},
+		{name: "malformed rejected", body: `{"message":"conversation complete"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := failure.APIErrorFromResponse(400, []byte(tt.body), nil, 0)
+			if err.Code != tt.want || err.ProviderCode != tt.want {
+				t.Fatalf("APIError codes = %q/%q, want %q", err.Code, err.ProviderCode, tt.want)
+			}
+			if tt.want == "" && strings.Contains(err.Error(), "conversation complete") {
+				t.Fatalf("APIError formatting retained raw message: %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestAPIErrorFromResponseConversationCompleteBounded(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"message":"conversation complete"}` + strings.Repeat("x", failure.MaxErrorBodyBytes))
+	err := failure.APIErrorFromResponse(400, body, nil, 0)
+	if err.Code != "" || err.ProviderCode != "" {
+		t.Fatalf("oversized/malformed response was classified or retained: %#v", err)
+	}
+	if strings.Contains(err.Error(), "conversation complete") || strings.Contains(err.Error(), "xxxx") {
+		t.Fatalf("oversized response leaked through formatting: %q", err.Error())
 	}
 }
 

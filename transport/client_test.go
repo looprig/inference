@@ -2,16 +2,20 @@ package transport_test
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/credentials/httpauth"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/auth"
 	failure "github.com/looprig/inference/failure"
@@ -74,12 +78,92 @@ func firstText(t *testing.T, resp *inference.Response) string {
 	return ""
 }
 
+func TestLegacyInvokeMapsAuthorizationCancellationToNetworkError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		ctx   func() context.Context
+		cause error
+	}{
+		{
+			name: "canceled",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			cause: context.Canceled,
+		},
+		{
+			name: "deadline",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				cancel()
+				return ctx
+			},
+			cause: context.DeadlineExceeded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := transport.New(
+				transport.Endpoint{BaseURL: "https://provider.invalid"},
+				staticRouter{method: http.MethodPost, path: "/invoke"},
+				customCodec{body: `{}`},
+				auth.None(),
+			)
+
+			_, err := client.Invoke(tt.ctx(), req("model"))
+			var networkErr *failure.NetworkError
+			if !errors.As(err, &networkErr) {
+				t.Fatalf("error = %T, want *failure.NetworkError", err)
+			}
+			if !errors.Is(err, tt.cause) {
+				t.Fatalf("error = %v, want cause %v", err, tt.cause)
+			}
+		})
+	}
+}
+
+func TestCallScopedInvokePreservesAuthorizationCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := transport.NewWithAuth(
+		transport.Endpoint{BaseURL: "https://provider.invalid"},
+		staticRouter{method: http.MethodPost, path: "/invoke"},
+		customCodec{body: `{}`},
+	)
+
+	_, err := client.InvokeWithAuth(ctx, req("model"), httpauth.None())
+	var networkErr *failure.NetworkError
+	if errors.As(err, &networkErr) {
+		t.Fatalf("error = %T, want typed authorization cancellation", err)
+	}
+	if !errors.Is(err, httpauth.ErrCanceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want httpauth and context cancellation", err)
+	}
+}
+
 // staticRouter is a caller-supplied Router returning a fixed method/path plus optional
 // route headers — proves the transport routes only via the injected Router.
 type staticRouter struct {
 	method string
 	path   string
 	header http.Header
+}
+
+type dualPathRouter struct{}
+
+func (dualPathRouter) BuildRoute(base string, _ inference.Request, mode codec.RequestMode) (route.Route, error) {
+	path := "/invoke"
+	if mode == codec.RequestModeStream {
+		path = "/stream"
+	}
+	return route.Route{Method: http.MethodPost, URL: strings.TrimRight(base, "/") + path}, nil
 }
 
 func (r staticRouter) BuildRoute(base string, _ inference.Request, _ codec.RequestMode) (route.Route, error) {
@@ -286,17 +370,47 @@ func TestHeaderPrecedence(t *testing.T) {
 	}
 }
 
+func TestCallScopedAuthorizationUsesFreshAuthorizerPerRequest(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	c := transport.NewWithAuth(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/x"}, customCodec{body: `{}`})
+	first := setHeaderAuth{name: "Authorization", value: "Bearer first"}
+	second := setHeaderAuth{name: "Authorization", value: "Bearer second"}
+	var _ httpauth.Authorizer = first
+	if _, err := c.InvokeWithAuth(context.Background(), req("m"), first); err != nil {
+		t.Fatalf("first InvokeWithAuth: %v", err)
+	}
+	if _, err := c.InvokeWithAuth(context.Background(), req("m"), second); err != nil {
+		t.Fatalf("second InvokeWithAuth: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"Bearer first", "Bearer second"}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("authorization values = %#v, want %#v", seen, want)
+	}
+}
+
 // ---- 3. Non-2xx mapped before decode -----------------------------------------
 
 // TestNon2xxBeforeDecode proves a 500 JSON error body maps to *failure.APIError BEFORE
-// the response/stream decoder is invoked, for both Invoke and Stream, and the error body
-// is drained (available on APIError.Body).
+// the response/stream decoder is invoked, for both Invoke and Stream. The bounded body is
+// parsed transiently and is never retained in APIError.
 func TestNon2xxBeforeDecode(t *testing.T) {
 	t.Parallel()
 
-	const errBody = `{"error":{"message":"boom"}}`
+	const errBody = `{"error":{"type":"invalid_request_error","message":"provider-secret-boom"}}`
 	newSrv := func() *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Request-ID", "req-safe-123")
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, errBody)
 		}))
@@ -320,8 +434,14 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 		if apiErr.Status != http.StatusInternalServerError {
 			t.Errorf("APIError.Status = %d, want 500", apiErr.Status)
 		}
-		if string(apiErr.Body) != errBody {
-			t.Errorf("APIError.Body = %q, want %q (drained)", apiErr.Body, errBody)
+		if apiErr.Code != "invalid_request_error" {
+			t.Errorf("APIError.Code = %q, want invalid_request_error", apiErr.Code)
+		}
+		if apiErr.RequestID != "req-safe-123" {
+			t.Errorf("APIError.RequestID = %q, want req-safe-123", apiErr.RequestID)
+		}
+		if strings.Contains(apiErr.Error(), errBody) {
+			t.Errorf("APIError.Error retained raw provider body: %q", apiErr.Error())
 		}
 		if decodeCalled {
 			t.Error("DecodeResponse must NOT be called on a non-2xx response")
@@ -343,8 +463,14 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 		if apiErr.Status != http.StatusInternalServerError {
 			t.Errorf("APIError.Status = %d, want 500", apiErr.Status)
 		}
-		if string(apiErr.Body) != errBody {
-			t.Errorf("APIError.Body = %q, want %q (drained)", apiErr.Body, errBody)
+		if apiErr.Code != "invalid_request_error" {
+			t.Errorf("APIError.Code = %q, want invalid_request_error", apiErr.Code)
+		}
+		if apiErr.RequestID != "req-safe-123" {
+			t.Errorf("APIError.RequestID = %q, want req-safe-123", apiErr.RequestID)
+		}
+		if strings.Contains(apiErr.Error(), errBody) {
+			t.Errorf("APIError.Error retained raw provider body: %q", apiErr.Error())
 		}
 		if streamCalled {
 			t.Error("StreamDecoder must NOT be called on a non-2xx response")
@@ -430,6 +556,85 @@ func TestNoReplay_BodyConsumedOnce(t *testing.T) {
 	}
 	if eofs != 1 {
 		t.Errorf("request body consumed %d times, want exactly 1 (no replay)", eofs)
+	}
+}
+
+func TestWithTLSRootCAs_TLSInvokeAndStream(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/invoke":
+			_, _ = io.WriteString(w, `{"answer":"secure"}`)
+		case "/stream":
+			_, _ = io.WriteString(w, `{"text":"secure-stream"}`+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	client := transport.New(
+		transport.Endpoint{BaseURL: srv.URL},
+		dualPathRouter{},
+		customCodec{body: `{}`},
+		auth.None(),
+		transport.WithTLSRootCAs(roots),
+		transport.WithStreamDecoder(ndjsonTextDecoder{}),
+	)
+	if _, err := client.Invoke(context.Background(), req("secure")); err != nil {
+		t.Fatalf("Invoke error: %v", err)
+	}
+	reader, err := client.Stream(context.Background(), req("secure"))
+	if err != nil {
+		t.Fatalf("Stream error: %v", err)
+	}
+	defer reader.Close()
+	if _, err := reader.Next(); err != nil {
+		t.Fatalf("Stream.Next error: %v", err)
+	}
+}
+
+func TestWithTLSRootCAsRejectsNilAndEmpty(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"nil", "empty"} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("WithTLSRootCAs(%s) did not panic", name)
+				}
+			}()
+			var roots *x509.CertPool
+			if name == "empty" {
+				roots = x509.NewCertPool()
+			}
+			transport.WithTLSRootCAs(roots)
+		})
+	}
+}
+
+func TestWithTLSRootCAsRejectsUntrustedCertificate(t *testing.T) {
+	t.Parallel()
+
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"answer":"should-not-trust"}`)
+	}))
+	defer other.Close()
+
+	roots := x509.NewCertPool()
+	// A non-empty but unrelated root must not make the server certificate pass.
+	roots.AddCert(&x509.Certificate{Raw: []byte{1}, RawSubject: []byte{1}})
+	client := transport.New(
+		transport.Endpoint{BaseURL: other.URL},
+		staticRouter{method: http.MethodPost, path: "/invoke"},
+		customCodec{body: `{}`},
+		auth.None(),
+		transport.WithTLSRootCAs(roots),
+	)
+	if _, err := client.Invoke(context.Background(), req("untrusted")); err == nil {
+		t.Fatal("Invoke unexpectedly trusted a certificate outside the supplied root pool")
 	}
 }
 

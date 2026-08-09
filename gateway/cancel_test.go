@@ -27,7 +27,6 @@ import (
 // Fail, never fall back to sc.WriteError.
 func TestServeStreaming_ContextCanceled_InterruptsBlockingNext(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, spy := newStreamHandler(t, client, 0)
 
@@ -86,7 +85,6 @@ func TestServeStreaming_ContextCanceled_InterruptsBlockingNext(t *testing.T) {
 // interrupt.
 func TestServeStreaming_ContextCanceledAfterCleanCompletion_NoDoubleClose(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 	client := newControlledStreamClient()
 	h, spy := newStreamHandler(t, client, 0)
 

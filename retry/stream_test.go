@@ -183,7 +183,7 @@ func TestStream_NonRetryableFailsFast(t *testing.T) {
 }
 
 func TestStream_Exhaustion(t *testing.T) {
-	lastErr := &failure.APIError{Status: 503, Message: "last"}
+	lastErr := &failure.APIError{Status: 503}
 	inner := &scriptedClient{streamOutcomes: []outcome{
 		{err: &failure.APIError{Status: 503}},
 		{err: &failure.APIError{Status: 503}},

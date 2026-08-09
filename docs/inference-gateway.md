@@ -12,7 +12,7 @@ are arbitrary caller-supplied `inference.Client`/`model.Model` pairs, already
 bound to their own credentials and connection policy. This package never
 sees a provider API key.
 
-See `docs/plans/2026-07-31-inference-gateway-design.md` for the full design
+See `../../docs/plans/2026-07-31-inference-gateway-design.md` for the full design
 rationale. This document is the practical "how do I use it" reference for the
 implemented API.
 
@@ -65,10 +65,13 @@ if err != nil {
 	return err
 }
 
-// Config.Authenticate needs *some* token, but Server (below) generates and
-// enforces its own independent one — see "Authentication: two independent
-// layers". A caller that only ever talks to the gateway through Server can
-// use any non-empty value here; it is never handed to a harness.
+// Server (below) generates and enforces the one harness-facing token. The
+// inner Handler still requires an Authenticator, so a server-owned composition
+// supplies a deliberately non-authorizing internal authenticator; Handler is
+// never exposed without Server's bearer check.
+type internalAuthenticator struct{}
+func (internalAuthenticator) Authenticate(*http.Request) error { return nil }
+
 handler, err := gateway.New(gateway.Config{
 	Resolver: targets,
 	Codecs: map[model.APIFormat]codec.ServerCodec{
@@ -77,7 +80,7 @@ handler, err := gateway.New(gateway.Config{
 		model.APIFormatOpenAI:          openaiapi.Codec{},
 		model.APIFormatGemini:          geminiapi.Codec{},
 	},
-	Authenticate:   gateway.StaticToken(internalOnlyToken),
+	Authenticate:   internalAuthenticator{},
 	ContextCounter: contextcount.NewEstimator(), // optional; omit to leave count_tokens unavailable
 })
 if err != nil {
@@ -112,6 +115,99 @@ A single `Handler` (and the `Server` that generated its own token wrapping
 it) may also be shared: multiple `Server`s can wrap one already-built
 `Handler`, or multiple ACP clients can borrow one running `Server`'s binding.
 
+## Credential-backed targets
+
+The gateway consumes an already-constructed `inference.Client`; it does not
+look up, refresh, or select credentials. Keep the package boundary explicit:
+
+| Package | Owns | Does not own |
+|---|---|---|
+| `secrets` | opaque secret values, references, and local secret storage | provider identity, OAuth policy, or model selection |
+| `credentials` | safe descriptors/references, sources, leases, refresh state, and HTTP authorizers | login UI, provider transports, or inference codecs |
+| `inference` | neutral requests/results, codecs, transports, retry boundaries, and this gateway | provider credentials, account catalogs, or provider policy |
+| `llm` | provider/API-format policy, concrete transports, and credential-backed client adapters | account lifecycle UI and harness child process policy |
+| CodeRig | model catalog/configuration, explicit list/login/logout lifecycle, and child composition | raw provider credentials in a child environment |
+
+The canonical construction path is `llm/auto.NewWithAuth(model, source)`. The
+`source` is bound to one exact provider, transport, scheme, and usage class;
+each call acquires a lease and the adapter authorizes only that call. The
+legacy `llm/auto.New(model, inference/auth.APIKey("..."))` wrapper remains
+available for an API key supplied directly by the caller. It is a compatibility
+path, not environment discovery. The `inference/auth` package is likewise a
+legacy facade for static keys and explicit unauthenticated requests;
+call-scoped sources use `credentials/httpauth` through the `llm` adapter.
+
+For example, a caller may provide an API key explicitly (the value is never
+part of `model.Model`):
+
+```go
+client, err := auto.New(selectedModel, auth.APIKey(apiKey))
+```
+
+Or CodeRig can resolve a safe reference such as
+`credential://openai/personal` from its explicit catalog/store and pass the
+resulting source to `auto.NewWithAuth`. The reference identifies an account;
+it is not a URL, a filesystem path, an access token, or a routing rule.
+
+### Local stores and platform limits
+
+`secrets/local.New` and `credentials/catalog.New` require an explicit,
+absolute, clean root. They do not consult `HOME`, ambient provider variables,
+or a default profile. On Darwin and Linux they use owner-only directories and
+files, descriptor-relative no-follow access, bounded records, atomic rename,
+and directory synchronization. A `secrets.Secret` is limited to 1 MiB;
+credential references and descriptors are separately bounded. Other operating
+systems return the package's typed unsupported-platform error. These stores
+are not an OS keychain, cloud vault, account pool, backup service, or cross-host
+sync mechanism; an integrator must provide that boundary explicitly.
+
+### Authorization, recovery, and failure propagation
+
+For each wire attempt, the credential adapter clones the request body, acquires
+one lease, and applies its authorizer. Only an explicitly classified,
+recoverable authentication rejection may invalidate that generation and cause
+one additional acquire/send attempt. Quota, rate, permission, malformed
+request, and transport failures are not reclassified as authentication and do
+not trigger refresh. The adapter never resets an outer inference retry budget.
+Cancellation is passed through acquire, refresh, transport, and stream reader
+closure. A gateway quota/error response therefore propagates to the harness;
+it does not select another credential, account, model, or route.
+
+### Model identity and capabilities
+
+`gateway.Target.Model` is the real deployment-specific `model.Model` used by
+the client. The ingress alias is only a harness-facing route key and is never
+sent upstream as the deployment name. Capabilities (tools, thinking, images,
+structured output, and streaming) come from that target model and are checked
+before invocation. A credential does not add capabilities, normalize a model
+name, or authorize a different deployment. Phase-one composition has no
+automatic provider selection, account routing, quota failover, or model-name
+normalization; configure one explicit route and one explicit credential
+reference per target.
+
+### Harness child isolation
+
+When CodeRig starts Claude Code, Codex, or another ACP child through this
+gateway, the child receives only the loopback gateway base URL and a unique
+gateway bearer token returned by `Server.Binding()`. Provider API keys,
+OAuth access/refresh tokens, credential-store roots, and account state remain
+with the parent process and are not copied into child environment variables,
+arguments, logs, or errors. A child deliberately using its native provider
+login is a separate mode: it receives its own explicitly configured native
+auth boundary and does not silently borrow the parent's gateway credential.
+
+OpenAI and Anthropic subscription registration is a provider policy boundary,
+not something the gateway fabricates. If the sanctioned registration adapter
+is unavailable, construction fails closed with its typed gate error; tests may
+skip that provider case with the error type and reason. No browser flow,
+native client ID, or undocumented token exchange is invented by `inference`.
+For current vendor terminology, see the [OpenAI authentication
+documentation](https://learn.chatgpt.com/docs/auth), [OpenAI Codex plan
+documentation](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan),
+[OpenAI API quickstart](https://platform.openai.com/docs/quickstart/make-your-first-api-request),
+[Claude Code overview](https://code.claude.com/docs/en/overview), and
+[Anthropic API overview](https://platform.claude.com/docs/en/api/overview).
+
 ## Authentication: two independent layers
 
 There are two distinct, independently-enforced bearer-token checks in this
@@ -132,14 +228,13 @@ directly rather than through `Server`:
   and `Server` is meant to be usable in front of any `http.Handler`, not only
   one built via `gateway.New`.
 
-In the common case (build a `Handler` via `gateway.New`, wrap it in a
-`Server`, hand `Server.Binding()`'s token to a harness), a caller only ever
-needs to think about `Server`'s token — `Config.Authenticate` still runs too,
-as defense in depth, but as long as it's given a valid `Authenticator` (even
-`gateway.StaticToken` with a throwaway token nothing outside this process
-ever sees), it never becomes the caller's problem. If you need `Handler`
-standalone (for `httptest`, or an application-owned server), you own
-`Config.Authenticate`'s token yourself.
+In the server-owned composition above, the generated `Server.Binding()` token
+is the only harness-facing check: the inner authenticator is intentionally
+permissive and the `Handler` is not exposed directly. If you embed a
+`Handler` standalone (for `httptest`, or behind an application-owned server),
+use `gateway.StaticToken` or another real authenticator and treat that handler
+token as a separate boundary. Do not put an arbitrary second bearer token in a
+server-owned child contract.
 
 **Known documentation gap, not a code defect:** the design doc's own worked
 composition example omits `Authenticate` from its `gateway.Config` literal
@@ -154,8 +249,11 @@ should be read as illustrative, not copy-pasteable.
 ## Security posture
 
 - Loopback-only listener (`127.0.0.1:0`), ephemeral port, not configurable.
-- Independent per-server cryptographically random token; constant-time
-  comparison (`crypto/subtle.ConstantTimeCompare`) in both auth layers above.
+- Independent per-server cryptographically random token with constant-time
+  comparison (`crypto/subtle.ConstantTimeCompare`). A standalone `Handler`
+  may add a second application-owned authenticator; the server-owned example
+  uses the permissive internal authenticator so the generated token is checked
+  exactly once.
 - Finite, conservative default body (`DefaultMaxRequestBody`, 10 MiB) and
   concurrency (`DefaultMaxConcurrent`, 64) limits; both are configurable and
   admission is reject-on-full, never queued.

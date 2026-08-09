@@ -20,7 +20,6 @@ import (
 // rather than hanging until the handler chooses to return.
 func TestServer_Close_BoundedForcedShutdown_SlowInFlightRequest(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	const shutdownTimeout = 150 * time.Millisecond
 
@@ -93,7 +92,6 @@ func TestServer_Close_BoundedForcedShutdown_SlowInFlightRequest(t *testing.T) {
 
 func TestServer_ConcurrentStartCalls_OnlyOneSucceeds(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srv := newTestServer(t, okHandler())
 
@@ -130,7 +128,6 @@ func TestServer_ConcurrentStartCalls_OnlyOneSucceeds(t *testing.T) {
 
 func TestServer_ConcurrentClose_AllCallsReturnSameOutcome(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srv := newTestServer(t, okHandler())
 	mustStart(t, srv)
@@ -163,7 +160,6 @@ func TestServer_ConcurrentClose_AllCallsReturnSameOutcome(t *testing.T) {
 // race" -- its entire purpose is to be run under `go test -race`.
 func TestServer_ConcurrentBindingDuringStartAndClose_NoRace(t *testing.T) {
 	assertNoGoroutineLeak(t)
-	t.Parallel()
 
 	srv := newTestServer(t, okHandler())
 

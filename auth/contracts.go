@@ -1,13 +1,13 @@
 package auth
 
-import (
-	"context"
-	"net/http"
-)
+import "github.com/looprig/credentials/httpauth"
 
-// Authenticator mutates an outbound request to carry credentials. Orthogonal to dialect.
-// Generic implementations (Key/Header/None) live in inference/auth; provider-specific
-// authenticators (e.g. request-signing schemes) live in the llm module.
-type Authenticator interface {
-	Authorize(ctx context.Context, r *http.Request) error
-}
+// Authorizer is the call-scoped HTTP authorization seam. It is an alias rather
+// than a new interface so a credentials lease can be passed directly to
+// inference transports.
+type Authorizer = httpauth.Authorizer
+
+// Authenticator is retained as the source-compatible name for Authorizer.
+// New code should prefer Authorizer or credentials/httpauth.Authorizer when it
+// supplies a fresh lease for a concrete request attempt.
+type Authenticator = httpauth.Authorizer
