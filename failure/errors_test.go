@@ -1,8 +1,10 @@
 package failure_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -188,6 +190,33 @@ func TestAPIError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPIErrorRedactsRawProviderBodyAndHeaders(t *testing.T) {
+	t.Parallel()
+	const secretBody = `{"error":{"message":"provider-token-should-not-escape","code":"not-an-allowlisted-code"}}`
+	err := &failure.APIError{
+		Status:    500,
+		Message:   secretBody,
+		Body:      []byte(secretBody),
+		Code:      "not-an-allowlisted-code",
+		RequestID: "request-safe-123",
+	}
+	for _, format := range []string{"%s", "%v", "%+v", "%#v", "%q"} {
+		got := fmt.Sprintf(format, err)
+		if strings.Contains(got, "provider-token-should-not-escape") || strings.Contains(got, secretBody) {
+			t.Errorf("format %q leaked provider body: %q", format, got)
+		}
+	}
+	valueFormat := fmt.Sprintf("%#v", *err)
+	if strings.Contains(valueFormat, "provider-token-should-not-escape") || strings.Contains(valueFormat, secretBody) {
+		t.Fatalf("value formatting leaked provider body: %q", valueFormat)
+	}
+	var logs bytes.Buffer
+	slog.New(slog.NewTextHandler(&logs, nil)).Info("failure", "error", err)
+	if strings.Contains(logs.String(), "provider-token-should-not-escape") || strings.Contains(logs.String(), secretBody) {
+		t.Fatalf("slog leaked provider body: %q", logs.String())
 	}
 }
 

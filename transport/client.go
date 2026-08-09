@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/credentials/httpauth"
 	"github.com/looprig/inference"
 	auth "github.com/looprig/inference/auth"
 	codec "github.com/looprig/inference/codec"
@@ -41,9 +42,12 @@ type Client struct {
 	enc    codec.RequestEncoder
 	dec    codec.ResponseDecoder
 	stream codec.StreamDecoder // nil ⇒ streaming unsupported
-	auth   auth.Authenticator
+	// auth is the legacy constructor default. Call-scoped callers use
+	// InvokeWithAuth/StreamWithAuth and supply a fresh authorizer per concrete
+	// wire attempt.
+	auth httpauth.Authorizer
 	// hcInvoke and hcStream are deliberately separate http.Clients: Invoke's
-	// response is atomic (read whole via io.ReadAll, nothing partial to protect),
+	// response is atomic (read whole via a bounded reader, nothing partial to protect),
 	// so it is safe to bound with a real whole-request Timeout. Stream must never
 	// carry a whole-request Timeout — that would abort a long-lived body
 	// mid-flight — so it keeps only the connect/TLS/response-header budget below.
@@ -127,37 +131,84 @@ func WithInvokeTimeout(d time.Duration) Option {
 }
 
 // New constructs a Client bound to ep, routing with router, encoding/decoding with
-// codec, authenticating with auth. If codec also satisfies codec.StreamDecoder
+// codec, authenticating with auth. It is the source-compatible wrapper around
+// NewWithAuth. If codec also satisfies codec.StreamDecoder
 // (i.e. is a StreamingCodec), it becomes the stream decoder automatically; otherwise
 // streaming fails before I/O with *UnsupportedStreamingError unless WithStreamDecoder
 // supplies one. router, codec, and auth are required: a nil is a programmer error (the
 // explicit "no credentials" value is auth.None()), so New panics rather than sending
 // unrouted, unencoded, or silently unauthenticated requests.
 func New(ep Endpoint, router route.Router, cdc codec.Codec, authenticator auth.Authenticator, opts ...Option) *Client {
+	if authenticator == nil {
+		panic("transport.New: auth must not be nil; pass auth.None() for no credentials")
+	}
+	c := newClient(ep, router, cdc)
+	c.auth = authenticator
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// NewWithAuth constructs a connection-bound client for call-scoped
+// authorization. The optional arguments may contain a default
+// httpauth.Authorizer (for compatibility with callers that still invoke
+// Invoke/Stream directly) and/or Option values. With no default authorizer,
+// use InvokeWithAuth or StreamWithAuth for every request. The variadic shape
+// keeps this additive constructor compatible with both forms during the
+// migration; invalid arguments panic like the legacy constructor's nil checks.
+func NewWithAuth(ep Endpoint, router route.Router, cdc codec.Codec, args ...any) *Client {
+	c := newClient(ep, router, cdc)
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case Option:
+			value(c)
+		case httpauth.Authorizer:
+			if value == nil {
+				panic("transport.NewWithAuth: auth must not be nil; pass httpauth.None() for no credentials")
+			}
+			c.auth = value
+		case nil:
+			panic("transport.NewWithAuth: nil option or auth")
+		default:
+			panic("transport.NewWithAuth: unsupported argument")
+		}
+	}
+	return c
+}
+
+// NewWithAuthorizer is the typed constructor spelling for new code that wants
+// a legacy default in addition to call-scoped methods.
+func NewWithAuthorizer(ep Endpoint, router route.Router, cdc codec.Codec, authorizer httpauth.Authorizer, opts ...Option) *Client {
+	if authorizer == nil {
+		panic("transport.NewWithAuthorizer: auth must not be nil; pass httpauth.None() for no credentials")
+	}
+	c := newClient(ep, router, cdc)
+	c.auth = authorizer
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+func newClient(ep Endpoint, router route.Router, cdc codec.Codec) *Client {
 	if router == nil {
 		panic("transport.New: router must not be nil")
 	}
 	if cdc == nil {
 		panic("transport.New: codec must not be nil")
 	}
-	if authenticator == nil {
-		panic("transport.New: auth must not be nil; pass auth.None() for no credentials")
-	}
 	c := &Client{
 		ep:       ep,
 		router:   router,
 		enc:      cdc,
 		dec:      cdc,
-		auth:     authenticator,
 		hcInvoke: newInvokeHTTPClient(defaultInvokeTimeout),
 		hcStream: newStreamHTTPClient(),
 	}
 	// Optional streaming: a StreamingCodec is its own StreamDecoder.
 	if sd, ok := cdc.(codec.StreamDecoder); ok {
 		c.stream = sd
-	}
-	for _, opt := range opts {
-		opt(c)
 	}
 	return c
 }
@@ -218,7 +269,7 @@ func newStreamHTTPClient() *http.Client {
 // there is no partial progress a longer wait could risk losing — a flat deadline
 // on the entire call is the correct tool, not just a header-arrival guard.
 // ResponseHeaderTimeout is left at 0 (unbounded) on this Transport: the outer
-// Client.Timeout already covers header wait plus body read, so a second,
+// Client.Timeout already covers header wait plus bounded body read, so a second,
 // shorter-or-equal timer here would be redundant.
 func newInvokeHTTPClient(d time.Duration) *http.Client {
 	return &http.Client{
@@ -228,21 +279,31 @@ func newInvokeHTTPClient(d time.Duration) *http.Client {
 	}
 }
 
-// Invoke sends a non-streaming request and returns the complete response. Ordered, all
-// pre-I/O guards first: (1) binding check, (2) Model.Validate, (3) route + encode +
-// build, (4) authorize, (5) do + map errors, (6) decode.
+// Invoke sends a non-streaming request using the legacy constructor's default
+// authorizer. New credential-backed callers should use InvokeWithAuth so a
+// lease is applied to this concrete request attempt.
 func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.Response, error) {
+	return c.InvokeWithAuth(ctx, req, c.auth)
+}
+
+// InvokeWithAuth sends one non-streaming request with a call-scoped
+// authorizer. The request is built from scratch before authorization, so no
+// header or body from a previous attempt can accumulate on this attempt.
+func (c *Client) InvokeWithAuth(ctx context.Context, req inference.Request, authorizer httpauth.Authorizer) (*inference.Response, error) {
 	if err := c.checkBinding(req.Model); err != nil {
 		return nil, err
 	}
 	if err := req.Model.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireAuthorizer(authorizer); err != nil {
+		return nil, err
+	}
 	httpReq, err := c.buildRequest(ctx, req, codec.RequestModeInvoke)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.auth.Authorize(ctx, httpReq); err != nil {
+	if err := authorizer.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
 	httpResp, err := c.hcInvoke.Do(httpReq)
@@ -250,24 +311,34 @@ func (c *Client) Invoke(ctx context.Context, req inference.Request) (*inference.
 		return nil, &failure.NetworkError{Err: err}
 	}
 	defer httpResp.Body.Close()
-	body, err := io.ReadAll(httpResp.Body)
+	limit := MaxResponseBodyBytes
+	if httpResp.StatusCode/100 != 2 {
+		limit = MaxErrorResponseBodyBytes
+	}
+	body, tooLarge, err := readBoundedBody(httpResp.Body, limit)
 	if err != nil {
 		return nil, &failure.NetworkError{Err: err}
 	}
-	// Non-2xx is mapped to an APIError BEFORE the decoder is invoked; the body is
-	// drained and closed (deferred) here because it is normal JSON/text, not a stream.
+	if tooLarge && httpResp.StatusCode/100 == 2 {
+		return nil, &failure.ResponseBodyTooLargeError{Limit: MaxResponseBodyBytes}
+	}
+	// Non-2xx is mapped to an APIError BEFORE the decoder is invoked; a bounded
+	// prefix is parsed transiently and the body is closed (deferred).
 	if httpResp.StatusCode/100 != 2 {
-		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body, RetryAfter: parseRetryAfter(httpResp.Header)}
+		return nil, failure.APIErrorFromResponse(httpResp.StatusCode, body, httpResp.Header, parseRetryAfter(httpResp.Header))
 	}
 	return c.dec.DecodeResponse(body)
 }
 
-// Stream sends a streaming request and returns a StreamReader over the decoded chunks.
-// Same ordered guards as Invoke, plus: if there is no StreamDecoder it fails before any
-// I/O with *UnsupportedStreamingError. On a 2xx it hands the still-open response to the
-// StreamDecoder (which owns resp.Body); on a non-2xx it drains and closes the error body
-// (error bodies are normal JSON, not a stream) and returns *failure.APIError.
+// Stream sends a streaming request using the legacy constructor's default
+// authorizer. New credential-backed callers should use StreamWithAuth.
 func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.StreamReader[content.Chunk], error) {
+	return c.StreamWithAuth(ctx, req, c.auth)
+}
+
+// StreamWithAuth sends one streaming request with a call-scoped authorizer.
+// Error responses are bounded and sanitized before returning.
+func (c *Client) StreamWithAuth(ctx context.Context, req inference.Request, authorizer httpauth.Authorizer) (*stream.StreamReader[content.Chunk], error) {
 	if err := c.checkBinding(req.Model); err != nil {
 		return nil, err
 	}
@@ -277,11 +348,14 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 	if c.stream == nil {
 		return nil, &UnsupportedStreamingError{APIFormat: c.ep.APIFormat}
 	}
+	if err := requireAuthorizer(authorizer); err != nil {
+		return nil, err
+	}
 	httpReq, err := c.buildRequest(ctx, req, codec.RequestModeStream)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.auth.Authorize(ctx, httpReq); err != nil {
+	if err := authorizer.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
 	httpResp, err := c.hcStream.Do(httpReq)
@@ -290,11 +364,11 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 	}
 	if httpResp.StatusCode/100 != 2 {
 		defer httpResp.Body.Close()
-		body, readErr := io.ReadAll(httpResp.Body)
+		body, _, readErr := readBoundedBody(httpResp.Body, MaxErrorResponseBodyBytes)
 		if readErr != nil {
 			return nil, &failure.NetworkError{Err: fmt.Errorf("transport: reading error body (status %d): %w", httpResp.StatusCode, readErr)}
 		}
-		return nil, &failure.APIError{Status: httpResp.StatusCode, Message: string(body), Body: body, RetryAfter: parseRetryAfter(httpResp.Header)}
+		return nil, failure.APIErrorFromResponse(httpResp.StatusCode, body, httpResp.Header, parseRetryAfter(httpResp.Header))
 	}
 	reader, err := c.stream.DecodeStream(httpResp)
 	if err != nil {
@@ -306,6 +380,43 @@ func (c *Client) Stream(ctx context.Context, req inference.Request) (*stream.Str
 		return nil, err
 	}
 	return reader, nil
+}
+
+// InvokeWithAuthorizer is a descriptive alias for InvokeWithAuth.
+func (c *Client) InvokeWithAuthorizer(ctx context.Context, req inference.Request, authorizer httpauth.Authorizer) (*inference.Response, error) {
+	return c.InvokeWithAuth(ctx, req, authorizer)
+}
+
+// StreamWithAuthorizer is a descriptive alias for StreamWithAuth.
+func (c *Client) StreamWithAuthorizer(ctx context.Context, req inference.Request, authorizer httpauth.Authorizer) (*stream.StreamReader[content.Chunk], error) {
+	return c.StreamWithAuth(ctx, req, authorizer)
+}
+
+const (
+	// MaxResponseBodyBytes bounds an atomic successful Invoke response before
+	// handing it to a codec. Streaming bodies remain owned by their decoder.
+	MaxResponseBodyBytes = 16 << 20
+	// MaxErrorResponseBodyBytes bounds transient non-2xx parsing. The body is
+	// never retained by failure.APIError.
+	MaxErrorResponseBodyBytes = 64 << 10
+)
+
+func requireAuthorizer(authorizer httpauth.Authorizer) error {
+	if authorizer == nil {
+		return &auth.MissingCredentialsError{Credential: "authorizer"}
+	}
+	return nil
+}
+
+func readBoundedBody(body io.Reader, limit int) ([]byte, bool, error) {
+	data, err := io.ReadAll(io.LimitReader(body, int64(limit)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) > limit {
+		return data[:limit], true, nil
+	}
+	return data, false, nil
 }
 
 // checkBinding fails closed when the request's Model names a provider, endpoint, or API

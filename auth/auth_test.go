@@ -4,17 +4,21 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/looprig/credentials/httpauth"
 	"github.com/looprig/inference/auth"
 )
 
 // Compile-time proof the constructors yield auth.Authenticator values.
 var (
-	_ auth.Authenticator = auth.Key("k")
-	_ auth.Authenticator = auth.Header("k", "x-api-key")
-	_ auth.Authenticator = auth.None()
+	_ auth.Authenticator  = auth.Key("k")
+	_ auth.Authenticator  = auth.Header("k", "x-api-key")
+	_ auth.Authenticator  = auth.None()
+	_ auth.Authorizer     = auth.Key("k")
+	_ httpauth.Authorizer = auth.Key("k")
 )
 
 func TestKeySetsBearer(t *testing.T) {
@@ -39,6 +43,24 @@ func TestHeaderSetsCustom(t *testing.T) {
 	}
 	if req.Header.Get("Authorization") != "" {
 		t.Errorf("Header must not set Authorization")
+	}
+}
+
+func TestHeaderReplacesCaseInsensitiveStaleValues(t *testing.T) {
+	t.Parallel()
+	req, _ := http.NewRequest(http.MethodPost, "https://x.test", nil)
+	req.Header["X-Api-Key"] = []string{"stale"}
+	req.Header["x-api-key"] = []string{"older"}
+	if err := auth.Header("current", "X-API-KEY").Authorize(context.Background(), req); err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if got, want := req.Header.Values("X-Api-Key"), []string{"current"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("header values = %#v, want %#v", got, want)
+	}
+	for key, values := range req.Header {
+		if strings.EqualFold(key, "X-Api-Key") && !reflect.DeepEqual(values, []string{"current"}) {
+			t.Fatalf("stale key %q remained: %#v", key, values)
+		}
 	}
 }
 
