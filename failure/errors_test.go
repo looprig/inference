@@ -220,6 +220,49 @@ func TestAPIErrorRedactsRawProviderBodyAndHeaders(t *testing.T) {
 	}
 }
 
+func TestAPIErrorFromResponseNormalizesSnowflakeConversationComplete(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "nested error message", body: `{"error":{"message":"conversation complete"}}`, want: "conversation_complete"},
+		{name: "top level message", body: `{"message":"conversation complete"}`, want: "conversation_complete"},
+		{name: "case near match rejected", body: `{"message":"Conversation complete"}`},
+		{name: "whitespace near match rejected", body: `{"message":"conversation complete "}`},
+		{name: "malformed rejected", body: `{"message":"conversation complete"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := failure.APIErrorFromResponse(400, []byte(tt.body), nil, 0)
+			if err.Code != tt.want || err.ProviderCode != tt.want {
+				t.Fatalf("APIError codes = %q/%q, want %q", err.Code, err.ProviderCode, tt.want)
+			}
+			if err.Message != "" || err.Body != nil {
+				t.Fatalf("APIError retained response data: message=%q body=%v", err.Message, err.Body)
+			}
+			if tt.want == "" && strings.Contains(err.Error(), "conversation complete") {
+				t.Fatalf("APIError formatting retained raw message: %q", err.Error())
+			}
+		})
+	}
+}
+
+func TestAPIErrorFromResponseConversationCompleteBounded(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"message":"conversation complete"}` + strings.Repeat("x", failure.MaxErrorBodyBytes))
+	err := failure.APIErrorFromResponse(400, body, nil, 0)
+	if err.Code != "" || err.ProviderCode != "" || err.Message != "" || err.Body != nil {
+		t.Fatalf("oversized/malformed response was classified or retained: %#v", err)
+	}
+	if strings.Contains(err.Error(), "conversation complete") || strings.Contains(err.Error(), "xxxx") {
+		t.Fatalf("oversized response leaked through formatting: %q", err.Error())
+	}
+}
+
 func TestValidationError(t *testing.T) {
 	t.Parallel()
 

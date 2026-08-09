@@ -134,6 +134,7 @@ const maxErrorBodyBytes = MaxErrorBodyBytes
 var providerCodeAllowlist = map[string]struct{}{
 	"aborted": {}, "api_error": {}, "authentication_error": {}, "bad_request": {},
 	"billing_hard_limit_reached": {}, "content_policy_violation": {},
+	"conversation_complete":   {},
 	"context_length_exceeded": {}, "deadline_exceeded": {}, "forbidden": {},
 	"insufficient_quota": {}, "internal_server_error": {}, "invalid_argument": {},
 	"invalid_api_key": {}, "invalid_request_error": {}, "model_not_found": {},
@@ -210,6 +211,9 @@ func providerCodeFromBody(body []byte) string {
 			}
 		}
 	}
+	if code := conversationCompleteCode(stringField(root["message"])); code != "" {
+		return code
+	}
 	if raw := root["error"]; len(raw) > 0 {
 		var nested map[string]json.RawMessage
 		if json.Unmarshal(raw, &nested) == nil {
@@ -220,7 +224,21 @@ func providerCodeFromBody(body []byte) string {
 					}
 				}
 			}
+			if code := conversationCompleteCode(stringField(nested["message"])); code != "" {
+				return code
+			}
 		}
+	}
+	return ""
+}
+
+// conversationCompleteCode recognizes only Snowflake's exact terminal
+// message. It intentionally does not trim or fold case: provider response
+// text is not generally safe to classify, and this narrow exception must not
+// turn near-matches into an allowlisted code.
+func conversationCompleteCode(value string) string {
+	if value == "conversation complete" {
+		return "conversation_complete"
 	}
 	return ""
 }
