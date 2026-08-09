@@ -65,10 +65,13 @@ if err != nil {
 	return err
 }
 
-// Config.Authenticate needs *some* token, but Server (below) generates and
-// enforces its own independent one — see "Authentication: two independent
-// layers". A caller that only ever talks to the gateway through Server can
-// use any non-empty value here; it is never handed to a harness.
+// Server (below) generates and enforces the one harness-facing token. The
+// inner Handler still requires an Authenticator, so a server-owned composition
+// supplies a deliberately non-authorizing internal authenticator; Handler is
+// never exposed without Server's bearer check.
+type internalAuthenticator struct{}
+func (internalAuthenticator) Authenticate(*http.Request) error { return nil }
+
 handler, err := gateway.New(gateway.Config{
 	Resolver: targets,
 	Codecs: map[model.APIFormat]codec.ServerCodec{
@@ -77,7 +80,7 @@ handler, err := gateway.New(gateway.Config{
 		model.APIFormatOpenAI:          openaiapi.Codec{},
 		model.APIFormatGemini:          geminiapi.Codec{},
 	},
-	Authenticate:   gateway.StaticToken(internalOnlyToken),
+	Authenticate:   internalAuthenticator{},
 	ContextCounter: contextcount.NewEstimator(), // optional; omit to leave count_tokens unavailable
 })
 if err != nil {
@@ -225,14 +228,13 @@ directly rather than through `Server`:
   and `Server` is meant to be usable in front of any `http.Handler`, not only
   one built via `gateway.New`.
 
-In the common case (build a `Handler` via `gateway.New`, wrap it in a
-`Server`, hand `Server.Binding()`'s token to a harness), a caller only ever
-needs to think about `Server`'s token — `Config.Authenticate` still runs too,
-as defense in depth, but as long as it's given a valid `Authenticator` (even
-`gateway.StaticToken` with a throwaway token nothing outside this process
-ever sees), it never becomes the caller's problem. If you need `Handler`
-standalone (for `httptest`, or an application-owned server), you own
-`Config.Authenticate`'s token yourself.
+In the server-owned composition above, the generated `Server.Binding()` token
+is the only harness-facing check: the inner authenticator is intentionally
+permissive and the `Handler` is not exposed directly. If you embed a
+`Handler` standalone (for `httptest`, or behind an application-owned server),
+use `gateway.StaticToken` or another real authenticator and treat that handler
+token as a separate boundary. Do not put an arbitrary second bearer token in a
+server-owned child contract.
 
 **Known documentation gap, not a code defect:** the design doc's own worked
 composition example omits `Authenticate` from its `gateway.Config` literal
@@ -247,8 +249,11 @@ should be read as illustrative, not copy-pasteable.
 ## Security posture
 
 - Loopback-only listener (`127.0.0.1:0`), ephemeral port, not configurable.
-- Independent per-server cryptographically random token; constant-time
-  comparison (`crypto/subtle.ConstantTimeCompare`) in both auth layers above.
+- Independent per-server cryptographically random token with constant-time
+  comparison (`crypto/subtle.ConstantTimeCompare`). A standalone `Handler`
+  may add a second application-owned authenticator; the server-owned example
+  uses the permissive internal authenticator so the generated token is checked
+  exactly once.
 - Finite, conservative default body (`DefaultMaxRequestBody`, 10 MiB) and
   concurrency (`DefaultMaxConcurrent`, 64) limits; both are configurable and
   admission is reject-on-full, never queued.
