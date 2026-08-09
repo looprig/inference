@@ -204,14 +204,14 @@ func as[T error](err error) bool {
 	return errors.As(err, &target)
 }
 
-// apiError wraps err as a *failure.APIError carrying status -- the
+// apiError creates a *failure.APIError carrying status -- the
 // mechanism an already-committed codec's WriteError/classifyError already
 // consults (see the file doc comment above). Every gateway-recognized error
 // type's Error() string is deliberately free of secret material (bearer
 // tokens, upstream credentials), so using it verbatim as the wrapped
 // message is safe.
 func apiError(status int, err error) error {
-	return &failure.APIError{Status: status, Message: err.Error()}
+	return failure.NewAPIErrorWithStatusText(status, "", "", 0, err.Error())
 }
 
 // classifyUpstreamStatus maps an *UpstreamInvocationError to the specific

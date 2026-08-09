@@ -22,8 +22,8 @@ func (e *NetworkError) Error() string { return "inference: network error: " + e.
 func (e *NetworkError) Unwrap() error { return e.Err }
 
 type APIError struct {
-	Status  int
-	Message string
+	Status     int
+	statusText string
 	// Code is a provider error code from the closed allowlist below. It is
 	// intentionally not a free-form provider message.
 	Code string
@@ -33,10 +33,6 @@ type APIError struct {
 	// RequestID is copied only from known request-ID headers and only when it
 	// is bounded and printable. Raw response headers are never retained.
 	RequestID string
-	// Body is retained as a deprecated source-compatibility field for callers
-	// that still compile struct literals. Transport-created APIErrors leave it
-	// nil; formatting and logging never include it.
-	Body []byte
 	// RetryAfter is the server-advertised wait from a Retry-After header,
 	// integer-seconds form only. Zero means absent or unparseable.
 	RetryAfter time.Duration
@@ -46,7 +42,7 @@ func (e *APIError) Error() string {
 	if e == nil {
 		return "inference: api error"
 	}
-	message := safeAPIMessage(e.Message)
+	message := e.statusText
 	code := e.safeCode()
 	if code != "" {
 		message = code
@@ -97,8 +93,8 @@ func (e *APIError) safeCode() string {
 	return safeProviderCode(e.ProviderCode)
 }
 
-// NewAPIError constructs an APIError from already-sanitized fields. It is
-// useful to provider integrations that classify a response themselves.
+// NewAPIError constructs an APIError from already-sanitized fields. Raw
+// provider messages, bodies, and headers have no representation in APIError.
 func NewAPIError(status int, code, requestID string, retryAfter time.Duration) *APIError {
 	return &APIError{
 		Status:       status,
@@ -109,8 +105,24 @@ func NewAPIError(status int, code, requestID string, retryAfter time.Duration) *
 	}
 }
 
+// NewAPIErrorWithStatusText constructs an APIError with a bounded, gateway-owned
+// status text. Provider response messages must use APIErrorFromResponse instead;
+// arbitrary text is rejected and never stored.
+func NewAPIErrorWithStatusText(status int, code, requestID string, retryAfter time.Duration, statusText string) *APIError {
+	err := NewAPIError(status, code, requestID, retryAfter)
+	err.statusText = safeStatusText(statusText)
+	return err
+}
+
 const maxProviderCodeLength = 128
 const maxRequestIDLength = 256
+
+func safeStatusText(value string) string {
+	if len(value) == 0 || len(value) > 512 || !strings.HasPrefix(value, "gateway:") || strings.ContainsAny(value, "\r\n\t") {
+		return ""
+	}
+	return value
+}
 
 // APIErrorFromResponse extracts only allowlisted provider codes and request
 // IDs. The body is parsed transiently and is never copied into the returned
@@ -170,30 +182,6 @@ func safeRequestID(value string) string {
 		}
 	}
 	return value
-}
-
-func safeAPIMessage(value string) string {
-	// Message is a legacy field. Only retain a small, provider-neutral set of
-	// diagnostics that existing callers used; arbitrary response text is not a
-	// safe API error message. Gateway-owned messages are already bounded and
-	// intentionally carry the requested alias, so retain that package-owned
-	// prefix for compatibility with gateway error responses.
-	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, "gateway:") {
-		if len(value) <= 512 && !strings.ContainsAny(value, "\r\n\t") {
-			return value
-		}
-		return ""
-	}
-	if len(value) > 128 || strings.ContainsAny(value, "{}[]\r\n\t") {
-		return ""
-	}
-	switch strings.ToLower(value) {
-	case "ok", "rate limited", "internal server error", "bad request", "not found", "unauthorized":
-		return value
-	default:
-		return ""
-	}
 }
 
 func providerCodeFromBody(body []byte) string {

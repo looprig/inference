@@ -180,7 +180,7 @@ func TestInvoke_NonRetryableFailsFast(t *testing.T) {
 }
 
 func TestInvoke_Exhaustion(t *testing.T) {
-	lastErr := &failure.APIError{Status: 429, Message: "last"}
+	lastErr := &failure.APIError{Status: 429}
 	inner := &scriptedClient{invokeOutcomes: []outcome{
 		{err: &failure.APIError{Status: 429}},
 		{err: &failure.APIError{Status: 429}},

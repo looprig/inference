@@ -429,9 +429,6 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 		if apiErr.RequestID != "req-safe-123" {
 			t.Errorf("APIError.RequestID = %q, want req-safe-123", apiErr.RequestID)
 		}
-		if len(apiErr.Body) != 0 {
-			t.Errorf("APIError.Body = %q, want nil (provider body must not be retained)", apiErr.Body)
-		}
 		if strings.Contains(apiErr.Error(), errBody) {
 			t.Errorf("APIError.Error retained raw provider body: %q", apiErr.Error())
 		}
@@ -460,9 +457,6 @@ func TestNon2xxBeforeDecode(t *testing.T) {
 		}
 		if apiErr.RequestID != "req-safe-123" {
 			t.Errorf("APIError.RequestID = %q, want req-safe-123", apiErr.RequestID)
-		}
-		if len(apiErr.Body) != 0 {
-			t.Errorf("APIError.Body = %q, want nil (provider body must not be retained)", apiErr.Body)
 		}
 		if strings.Contains(apiErr.Error(), errBody) {
 			t.Errorf("APIError.Error retained raw provider body: %q", apiErr.Error())

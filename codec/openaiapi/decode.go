@@ -19,7 +19,7 @@ func DecodeResponse(body []byte) (*inference.Response, error) {
 	}
 
 	if len(wire.Choices) == 0 {
-		return nil, &failure.APIError{Status: 0, Message: "response contains no choices", Body: body}
+		return nil, failure.NewAPIError(0, "", "", 0)
 	}
 
 	msg := wire.Choices[0].Message
