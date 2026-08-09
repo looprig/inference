@@ -12,7 +12,7 @@ are arbitrary caller-supplied `inference.Client`/`model.Model` pairs, already
 bound to their own credentials and connection policy. This package never
 sees a provider API key.
 
-See `docs/plans/2026-07-31-inference-gateway-design.md` for the full design
+See `../../docs/plans/2026-07-31-inference-gateway-design.md` for the full design
 rationale. This document is the practical "how do I use it" reference for the
 implemented API.
 
@@ -111,6 +111,99 @@ _ = serverB.Start(ctx)
 A single `Handler` (and the `Server` that generated its own token wrapping
 it) may also be shared: multiple `Server`s can wrap one already-built
 `Handler`, or multiple ACP clients can borrow one running `Server`'s binding.
+
+## Credential-backed targets
+
+The gateway consumes an already-constructed `inference.Client`; it does not
+look up, refresh, or select credentials. Keep the package boundary explicit:
+
+| Package | Owns | Does not own |
+|---|---|---|
+| `secrets` | opaque secret values, references, and local secret storage | provider identity, OAuth policy, or model selection |
+| `credentials` | safe descriptors/references, sources, leases, refresh state, and HTTP authorizers | login UI, provider transports, or inference codecs |
+| `inference` | neutral requests/results, codecs, transports, retry boundaries, and this gateway | provider credentials, account catalogs, or provider policy |
+| `llm` | provider/API-format policy, concrete transports, and credential-backed client adapters | account lifecycle UI and harness child process policy |
+| CodeRig | model catalog/configuration, explicit list/login/logout lifecycle, and child composition | raw provider credentials in a child environment |
+
+The canonical construction path is `llm/auto.NewWithAuth(model, source)`. The
+`source` is bound to one exact provider, transport, scheme, and usage class;
+each call acquires a lease and the adapter authorizes only that call. The
+legacy `llm/auto.New(model, inference/auth.APIKey("..."))` wrapper remains
+available for an API key supplied directly by the caller. It is a compatibility
+path, not environment discovery. The `inference/auth` package is likewise a
+legacy facade for static keys and explicit unauthenticated requests;
+call-scoped sources use `credentials/httpauth` through the `llm` adapter.
+
+For example, a caller may provide an API key explicitly (the value is never
+part of `model.Model`):
+
+```go
+client, err := auto.New(selectedModel, auth.APIKey(apiKey))
+```
+
+Or CodeRig can resolve a safe reference such as
+`credential://openai/personal` from its explicit catalog/store and pass the
+resulting source to `auto.NewWithAuth`. The reference identifies an account;
+it is not a URL, a filesystem path, an access token, or a routing rule.
+
+### Local stores and platform limits
+
+`secrets/local.New` and `credentials/catalog.New` require an explicit,
+absolute, clean root. They do not consult `HOME`, ambient provider variables,
+or a default profile. On Darwin and Linux they use owner-only directories and
+files, descriptor-relative no-follow access, bounded records, atomic rename,
+and directory synchronization. A `secrets.Secret` is limited to 1 MiB;
+credential references and descriptors are separately bounded. Other operating
+systems return the package's typed unsupported-platform error. These stores
+are not an OS keychain, cloud vault, account pool, backup service, or cross-host
+sync mechanism; an integrator must provide that boundary explicitly.
+
+### Authorization, recovery, and failure propagation
+
+For each wire attempt, the credential adapter clones the request body, acquires
+one lease, and applies its authorizer. Only an explicitly classified,
+recoverable authentication rejection may invalidate that generation and cause
+one additional acquire/send attempt. Quota, rate, permission, malformed
+request, and transport failures are not reclassified as authentication and do
+not trigger refresh. The adapter never resets an outer inference retry budget.
+Cancellation is passed through acquire, refresh, transport, and stream reader
+closure. A gateway quota/error response therefore propagates to the harness;
+it does not select another credential, account, model, or route.
+
+### Model identity and capabilities
+
+`gateway.Target.Model` is the real deployment-specific `model.Model` used by
+the client. The ingress alias is only a harness-facing route key and is never
+sent upstream as the deployment name. Capabilities (tools, thinking, images,
+structured output, and streaming) come from that target model and are checked
+before invocation. A credential does not add capabilities, normalize a model
+name, or authorize a different deployment. Phase-one composition has no
+automatic provider selection, account routing, quota failover, or model-name
+normalization; configure one explicit route and one explicit credential
+reference per target.
+
+### Harness child isolation
+
+When CodeRig starts Claude Code, Codex, or another ACP child through this
+gateway, the child receives only the loopback gateway base URL and a unique
+gateway bearer token returned by `Server.Binding()`. Provider API keys,
+OAuth access/refresh tokens, credential-store roots, and account state remain
+with the parent process and are not copied into child environment variables,
+arguments, logs, or errors. A child deliberately using its native provider
+login is a separate mode: it receives its own explicitly configured native
+auth boundary and does not silently borrow the parent's gateway credential.
+
+OpenAI and Anthropic subscription registration is a provider policy boundary,
+not something the gateway fabricates. If the sanctioned registration adapter
+is unavailable, construction fails closed with its typed gate error; tests may
+skip that provider case with the error type and reason. No browser flow,
+native client ID, or undocumented token exchange is invented by `inference`.
+For current vendor terminology, see the [OpenAI authentication
+documentation](https://learn.chatgpt.com/docs/auth), [OpenAI Codex plan
+documentation](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan),
+[OpenAI API quickstart](https://platform.openai.com/docs/quickstart/make-your-first-api-request),
+[Claude Code overview](https://code.claude.com/docs/en/overview), and
+[Anthropic API overview](https://platform.claude.com/docs/en/api/overview).
 
 ## Authentication: two independent layers
 
