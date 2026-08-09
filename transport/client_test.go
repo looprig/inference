@@ -2,6 +2,7 @@ package transport_test
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,10 +157,6 @@ type staticRouter struct {
 }
 
 type dualPathRouter struct{}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (dualPathRouter) BuildRoute(base string, _ inference.Request, mode codec.RequestMode) (route.Route, error) {
 	path := "/invoke"
@@ -563,7 +559,7 @@ func TestNoReplay_BodyConsumedOnce(t *testing.T) {
 	}
 }
 
-func TestWithRoundTripper_TLSInvokeAndStream(t *testing.T) {
+func TestWithTLSRootCAs_TLSInvokeAndStream(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -578,18 +574,14 @@ func TestWithRoundTripper_TLSInvokeAndStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var calls atomic.Int32
-	base := srv.Client().Transport
-	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		calls.Add(1)
-		return base.RoundTrip(req)
-	})
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
 	client := transport.New(
 		transport.Endpoint{BaseURL: srv.URL},
 		dualPathRouter{},
 		customCodec{body: `{}`},
 		auth.None(),
-		transport.WithRoundTripper(rt),
+		transport.WithTLSRootCAs(roots),
 		transport.WithStreamDecoder(ndjsonTextDecoder{}),
 	)
 	if _, err := client.Invoke(context.Background(), req("secure")); err != nil {
@@ -603,25 +595,47 @@ func TestWithRoundTripper_TLSInvokeAndStream(t *testing.T) {
 	if _, err := reader.Next(); err != nil {
 		t.Fatalf("Stream.Next error: %v", err)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("custom RoundTripper calls = %d, want 2", got)
+}
+
+func TestWithTLSRootCAsRejectsNilAndEmpty(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"nil", "empty"} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("WithTLSRootCAs(%s) did not panic", name)
+				}
+			}()
+			var roots *x509.CertPool
+			if name == "empty" {
+				roots = x509.NewCertPool()
+			}
+			transport.WithTLSRootCAs(roots)
+		})
 	}
 }
 
-func TestWithRoundTripperNilPanics(t *testing.T) {
+func TestWithTLSRootCAsRejectsUntrustedCertificate(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		if recover() == nil {
-			t.Fatal("WithRoundTripper(nil) did not panic")
-		}
-	}()
-	transport.New(
-		transport.Endpoint{BaseURL: "https://provider.invalid"},
+
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"answer":"should-not-trust"}`)
+	}))
+	defer other.Close()
+
+	roots := x509.NewCertPool()
+	// A non-empty but unrelated root must not make the server certificate pass.
+	roots.AddCert(&x509.Certificate{Raw: []byte{1}, RawSubject: []byte{1}})
+	client := transport.New(
+		transport.Endpoint{BaseURL: other.URL},
 		staticRouter{method: http.MethodPost, path: "/invoke"},
 		customCodec{body: `{}`},
 		auth.None(),
-		transport.WithRoundTripper(nil),
+		transport.WithTLSRootCAs(roots),
 	)
+	if _, err := client.Invoke(context.Background(), req("untrusted")); err == nil {
+		t.Fatal("Invoke unexpectedly trusted a certificate outside the supplied root pool")
+	}
 }
 
 // TestNoReplay_RedirectNotFollowed proves the transport does not follow a redirect (which
@@ -641,7 +655,7 @@ func TestNoReplay_RedirectNotFollowed(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None(), transport.WithRoundTripper(http.DefaultTransport))
+	c := transport.New(transport.Endpoint{BaseURL: srv.URL}, staticRouter{method: http.MethodPost, path: "/start"}, customCodec{body: "{}"}, auth.None())
 	_, err := c.Invoke(context.Background(), req("m"))
 	var apiErr *failure.APIError
 	if !errors.As(err, &apiErr) {

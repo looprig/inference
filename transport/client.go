@@ -11,6 +11,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -38,12 +39,13 @@ import (
 // routes, encodes, authorizes, and executes, mapping transport failures to
 // *failure.NetworkError and non-2xx responses to *failure.APIError.
 type Client struct {
-	ep           Endpoint
-	router       route.Router
-	enc          codec.RequestEncoder
-	dec          codec.ResponseDecoder
-	stream       codec.StreamDecoder // nil ⇒ streaming unsupported
-	roundTripper http.RoundTripper
+	ep            Endpoint
+	router        route.Router
+	enc           codec.RequestEncoder
+	dec           codec.ResponseDecoder
+	stream        codec.StreamDecoder // nil ⇒ streaming unsupported
+	tlsRootCAs    *x509.CertPool
+	invokeTimeout time.Duration
 	// auth is the legacy constructor default. Call-scoped callers use
 	// InvokeWithAuth/StreamWithAuth and supply a fresh authorizer per concrete
 	// wire attempt.
@@ -128,29 +130,24 @@ func WithInvokeTimeout(d time.Duration) Option {
 		if d <= 0 {
 			return
 		}
-		c.hcInvoke = newInvokeHTTPClient(d)
-		if c.roundTripper != nil {
-			c.hcInvoke.Transport = c.roundTripper
-		}
+		c.invokeTimeout = d
+		c.hcInvoke = newInvokeHTTPClient(d, c.tlsRootCAs)
 	}
 }
 
-// WithRoundTripper installs a verified caller-supplied RoundTripper on both
-// invoke and stream HTTP clients. The clients retain their no-redirect policy
-// and invoke/stream timeout behavior. The RoundTripper must perform normal
-// HTTPS certificate verification and be safe for concurrent use by both
-// clients; the transport does not wrap or synchronize it.
-//
-// Passing nil panics during construction so a client cannot silently fall back
-// to the process-wide default transport.
-func WithRoundTripper(rt http.RoundTripper) Option {
-	if rt == nil {
-		panic("transport.WithRoundTripper: round tripper must not be nil")
+// WithTLSRootCAs installs a cloned, non-empty trust pool on the library-owned
+// invoke and stream transports. It does not replace dialing, proxy, TLS
+// minimum-version, pooling, timeout, or redirect policy. The caller must
+// populate the pool with the roots it intends to trust before construction.
+func WithTLSRootCAs(roots *x509.CertPool) Option {
+	if roots == nil || len(roots.Subjects()) == 0 {
+		panic("transport.WithTLSRootCAs: root pool must be non-empty")
 	}
+	cloned := roots.Clone()
 	return func(c *Client) {
-		c.roundTripper = rt
-		c.hcInvoke.Transport = rt
-		c.hcStream.Transport = rt
+		c.tlsRootCAs = cloned.Clone()
+		c.hcInvoke = newInvokeHTTPClient(c.invokeTimeout, c.tlsRootCAs)
+		c.hcStream = newStreamHTTPClient(c.tlsRootCAs)
 	}
 }
 
@@ -223,12 +220,13 @@ func newClient(ep Endpoint, router route.Router, cdc codec.Codec) *Client {
 		panic("transport.New: codec must not be nil")
 	}
 	c := &Client{
-		ep:       ep,
-		router:   router,
-		enc:      cdc,
-		dec:      cdc,
-		hcInvoke: newInvokeHTTPClient(defaultInvokeTimeout),
-		hcStream: newStreamHTTPClient(),
+		ep:            ep,
+		router:        router,
+		enc:           cdc,
+		dec:           cdc,
+		invokeTimeout: defaultInvokeTimeout,
+		hcInvoke:      newInvokeHTTPClient(defaultInvokeTimeout, nil),
+		hcStream:      newStreamHTTPClient(nil),
 	}
 	// Optional streaming: a StreamingCodec is its own StreamDecoder.
 	if sd, ok := cdc.(codec.StreamDecoder); ok {
@@ -241,7 +239,11 @@ func newClient(ep Endpoint, router route.Router, cdc codec.Codec) *Client {
 // Stream clients: connect/TLS timeout budget, a TLS 1.2 floor, and connection
 // pooling. responseHeaderTimeout is the one setting callers vary between the two
 // use cases.
-func baseTransport(responseHeaderTimeout time.Duration) *http.Transport {
+func baseTransport(responseHeaderTimeout time.Duration, roots *x509.CertPool) *http.Transport {
+	var rootCAs *x509.CertPool
+	if roots != nil {
+		rootCAs = roots.Clone()
+	}
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -250,7 +252,7 @@ func baseTransport(responseHeaderTimeout time.Duration) *http.Transport {
 		}).DialContext,
 		// Default TLS with an explicit floor of 1.2 and no InsecureSkipVerify —
 		// server certificates are verified.
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: rootCAs},
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 		ExpectContinueTimeout: expectContinueTimeout,
@@ -280,10 +282,10 @@ func parseRetryAfter(h http.Header) time.Duration {
 // Timeout (it would abort a long-lived streaming body mid-flight), just the
 // connect/TLS/header timeout budget on the Transport. The body itself is bounded
 // only by the caller's context.
-func newStreamHTTPClient() *http.Client {
+func newStreamHTTPClient(roots *x509.CertPool) *http.Client {
 	return &http.Client{
 		CheckRedirect: noRedirect,
-		Transport:     baseTransport(streamResponseHeaderTimeout),
+		Transport:     baseTransport(streamResponseHeaderTimeout, roots),
 	}
 }
 
@@ -295,11 +297,11 @@ func newStreamHTTPClient() *http.Client {
 // ResponseHeaderTimeout is left at 0 (unbounded) on this Transport: the outer
 // Client.Timeout already covers header wait plus bounded body read, so a second,
 // shorter-or-equal timer here would be redundant.
-func newInvokeHTTPClient(d time.Duration) *http.Client {
+func newInvokeHTTPClient(d time.Duration, roots *x509.CertPool) *http.Client {
 	return &http.Client{
 		Timeout:       d,
 		CheckRedirect: noRedirect,
-		Transport:     baseTransport(0),
+		Transport:     baseTransport(0, roots),
 	}
 }
 
