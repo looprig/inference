@@ -39,11 +39,14 @@ import (
 // routes, encodes, authorizes, and executes, mapping transport failures to
 // *failure.NetworkError and non-2xx responses to *failure.APIError.
 type Client struct {
-	ep            Endpoint
-	router        route.Router
-	enc           codec.RequestEncoder
-	dec           codec.ResponseDecoder
-	stream        codec.StreamDecoder // nil ⇒ streaming unsupported
+	ep     Endpoint
+	router route.Router
+	enc    codec.RequestEncoder
+	dec    codec.ResponseDecoder
+	stream codec.StreamDecoder // nil ⇒ streaming unsupported
+	// roundTripper is caller-owned. When set, it is installed as-is on both
+	// HTTP clients; the transport never clones, closes, or synchronizes it.
+	roundTripper  http.RoundTripper
 	tlsRootCAs    *x509.CertPool
 	invokeTimeout time.Duration
 	// auth is the legacy constructor default. Call-scoped callers use
@@ -132,13 +135,36 @@ func WithInvokeTimeout(d time.Duration) Option {
 		}
 		c.invokeTimeout = d
 		c.hcInvoke = newInvokeHTTPClient(d, c.tlsRootCAs)
+		c.applyRoundTripper()
+	}
+}
+
+// WithRoundTripper installs the exact caller-supplied RoundTripper on both the
+// invoke and stream HTTP clients. The caller retains ownership: this option
+// neither clones nor closes the RoundTripper, and the value must be safe for
+// concurrent use by both clients. It must also enforce the caller's desired
+// TLS verification policy itself; supplying this option replaces the
+// library-created transport (and therefore its dialing, pooling, and TLS
+// defaults) rather than wrapping it.
+//
+// A nil RoundTripper panics during option construction so a caller cannot
+// silently fall back to the process-wide default transport.
+func WithRoundTripper(rt http.RoundTripper) Option {
+	if rt == nil {
+		panic("transport.WithRoundTripper: round tripper must not be nil")
+	}
+	return func(c *Client) {
+		c.roundTripper = rt
+		c.applyRoundTripper()
 	}
 }
 
 // WithTLSRootCAs installs a cloned, non-empty trust pool on the library-owned
 // invoke and stream transports. It does not replace dialing, proxy, TLS
 // minimum-version, pooling, timeout, or redirect policy. The caller must
-// populate the pool with the roots it intends to trust before construction.
+// populate the pool with the roots it intends to trust before construction. If
+// WithRoundTripper is also supplied, that caller-owned transport remains in
+// use and is responsible for its own TLS verification policy.
 func WithTLSRootCAs(roots *x509.CertPool) Option {
 	if roots == nil || len(roots.Subjects()) == 0 {
 		panic("transport.WithTLSRootCAs: root pool must be non-empty")
@@ -148,6 +174,7 @@ func WithTLSRootCAs(roots *x509.CertPool) Option {
 		c.tlsRootCAs = cloned.Clone()
 		c.hcInvoke = newInvokeHTTPClient(c.invokeTimeout, c.tlsRootCAs)
 		c.hcStream = newStreamHTTPClient(c.tlsRootCAs)
+		c.applyRoundTripper()
 	}
 }
 
@@ -233,6 +260,17 @@ func newClient(ep Endpoint, router route.Router, cdc codec.Codec) *Client {
 		c.stream = sd
 	}
 	return c
+}
+
+// applyRoundTripper reapplies a caller-owned transport after an option rebuilds
+// one or both library-owned HTTP clients. A nil value leaves the secure,
+// library-created transport in place.
+func (c *Client) applyRoundTripper() {
+	if c.roundTripper == nil {
+		return
+	}
+	c.hcInvoke.Transport = c.roundTripper
+	c.hcStream.Transport = c.roundTripper
 }
 
 // baseTransport builds the http.Transport settings shared by both the Invoke and
