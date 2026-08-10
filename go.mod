@@ -4,13 +4,9 @@ go 1.26.4
 
 require (
 	github.com/looprig/core v0.5.0
-	github.com/looprig/credentials v0.0.0
-	github.com/looprig/secrets v0.0.0
+	github.com/looprig/credentials v0.1.0
+	github.com/looprig/secrets v0.1.0
 )
-
-replace github.com/looprig/credentials => ../credentials
-
-replace github.com/looprig/secrets => ../secrets
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
