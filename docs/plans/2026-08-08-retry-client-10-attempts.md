@@ -2,18 +2,18 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Extend carbon's production inference retry policy to ten total attempts with a 256-second exponential-delay cap.
+**Goal:** Extend coderig's production inference retry policy to ten total attempts with a 256-second exponential-delay cap.
 
-**Architecture:** Keep `inference/retry.Policy` and the retry decorator unchanged; only update the production policy at carbon's model-loader boundary. Keep the existing three stable 2-second retries, retry classification, jitter, cancellation, and stream-establishment behavior.
+**Architecture:** Keep `inference/retry.Policy` and the retry decorator unchanged; only update the production policy at coderig's model-loader boundary. Keep the existing three stable 2-second retries, retry classification, jitter, cancellation, and stream-establishment behavior.
 
-**Tech Stack:** Go 1.26, `inference/retry`, carbon internal app tests, Go test/vet/build.
+**Tech Stack:** Go 1.26, `inference/retry`, coderig internal app tests, Go test/vet/build.
 
 ---
 
 ### Task 1: Lock the new production policy in a failing test
 
 **Files:**
-- Modify: `carbon/internal/app/model_retry_test.go`
+- Modify: `coderig/internal/app/model_retry_test.go`
 
 **Step 1: Write the failing test**
 
@@ -21,7 +21,7 @@ Extend `TestDefaultRetryPolicy_Valid` to assert `defaultRetryPolicy.MaxAttempts 
 
 **Step 2: Run test to verify it fails**
 
-Run from the carbon worktree:
+Run from the coderig worktree:
 
 ```bash
 GOWORK=/private/tmp/looprig-retry-10-attempts.work go test ./internal/app -run TestDefaultRetryPolicy_Valid -count=1
@@ -32,7 +32,7 @@ Expected: FAIL because the current production policy still has six total attempt
 ### Task 2: Update the production retry policy
 
 **Files:**
-- Modify: `carbon/internal/app/model.go`
+- Modify: `coderig/internal/app/model.go`
 
 **Step 1: Write minimal implementation**
 
@@ -84,7 +84,7 @@ GOWORK=/private/tmp/looprig-retry-10-attempts.work go vet ./...
 GOWORK=/private/tmp/looprig-retry-10-attempts.work go build ./...
 ```
 
-Expected: all commands pass for the merged inference and carbon worktrees.
+Expected: all commands pass for the merged inference and coderig worktrees.
 
 ### Task 5: Commit the change
 

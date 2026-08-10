@@ -2,15 +2,15 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** A provider-neutral retry decorator (`inference/retry`) that wraps any `inference.Client` with exponential backoff (3 stable retries of 2s, then doubling), wired into carbon's model loader.
+**Goal:** A provider-neutral retry decorator (`inference/retry`) that wraps any `inference.Client` with exponential backoff (3 stable retries of 2s, then doubling), wired into coderig's model loader.
 
 **Architecture:** Leaf subpackage `inference/retry` implementing `inference.Client` by delegation. Retries cover `Invoke` and `Stream` *establishment* only; a mid-stream `Next()` error stays terminal. Classification reuses the typed `inference/failure` errors. `Retry-After` is plumbed onto `failure.APIError` by the transport. Attempt counts surface via new `Attempts` fields on `inference.Response` and `stream.StreamResult`.
 
-**Tech Stack:** Go (module `github.com/looprig/inference`, consumer `carbon`). Design doc: `inference/docs/plans/2026-08-08-retry-client-design.md` — read it first; its non-goals are binding.
+**Tech Stack:** Go (module `github.com/looprig/inference`, consumer `coderig`). Design doc: `inference/docs/plans/2026-08-08-retry-client-design.md` — read it first; its non-goals are binding.
 
-**Repos touched:** `inference` (tasks 1–7), `carbon` (task 8). Each is its own git repo; commit in the repo you edited. Workspace `go.work` at looprig root already covers both — do NOT tag/release or touch go.mod versions. Commit style: no Co-Authored-By trailer.
+**Repos touched:** `inference` (tasks 1–7), `coderig` (task 8). Each is its own git repo; commit in the repo you edited. Workspace `go.work` at looprig root already covers both — do NOT tag/release or touch go.mod versions. Commit style: no Co-Authored-By trailer.
 
-**Test commands:** `cd /Users/ipotter/code/looprig/inference && go test ./...` and `cd /Users/ipotter/code/looprig/carbon && go test ./...`. Also `go vet ./...` before each commit.
+**Test commands:** `cd /Users/ipotter/code/looprig/inference && go test ./...` and `cd /Users/ipotter/code/looprig/coderig && go test ./...`. Also `go vet ./...` before each commit.
 
 ---
 
@@ -579,11 +579,11 @@ Check `Result()`'s actual signature in `inference/stream/stream.go` (bottom of f
 
 ---
 
-### Task 8: carbon wiring
+### Task 8: coderig wiring
 
 **Files:**
-- Modify: `carbon/internal/app/model.go` (the `loadProductionModels` factory closure, ~line 24)
-- Test: `carbon/internal/app/model_retry_test.go` (new)
+- Modify: `coderig/internal/app/model.go` (the `loadProductionModels` factory closure, ~line 24)
+- Test: `coderig/internal/app/model_retry_test.go` (new)
 
 **Step 1: Failing test**
 
@@ -622,9 +622,9 @@ func TestNewProductionClient_Wrapped(t *testing.T) {
 }
 ```
 
-(Reuse whatever helper existing tests in `carbon/internal/app` use to get a valid `model.Model`; check `model_test.go` / `models_config_test.go` first — do not invent a new fixture if one exists.)
+(Reuse whatever helper existing tests in `coderig/internal/app` use to get a valid `model.Model`; check `model_test.go` / `models_config_test.go` first — do not invent a new fixture if one exists.)
 
-**Step 2: Run, expect FAIL.** `cd carbon && go test ./internal/app/ -run 'Retry|Wrapped' -v`
+**Step 2: Run, expect FAIL.** `cd coderig && go test ./internal/app/ -run 'Retry|Wrapped' -v`
 
 **Step 3: Implement** in `model.go`:
 
@@ -654,15 +654,15 @@ and change the `loadProductionModels` closure to `return newProductionClient(sel
 
 If `go build` complains that the workspace `inference` lacks `retry`: verify `go.work` uses the local `inference` directory (it does — workspace covers all modules; remember the offline-replace gotcha only applies outside the workspace).
 
-**Step 4: Run** `cd carbon && go test ./... && go vet ./...` → PASS.
+**Step 4: Run** `cd coderig && go test ./... && go vet ./...` → PASS.
 
-**Step 5: Commit** (in `carbon/`): `git commit -m "feat(app): wrap production inference clients with default retry policy"`
+**Step 5: Commit** (in `coderig/`): `git commit -m "feat(app): wrap production inference clients with default retry policy"`
 
 ---
 
 ### Task 9: final verification
 
 1. `cd inference && go test ./... && go vet ./...` → green.
-2. `cd carbon && go test ./... && go vet ./...` → green.
+2. `cd coderig && go test ./... && go vet ./...` → green.
 3. `cd /Users/ipotter/code/looprig && go build ./...` via `make` if the root Makefile has a build/test target (check `make -n`; otherwise per-module is enough).
-4. Confirm commit list: 1 docs commit (already made), ~6 inference commits, 1 carbon commit; none tagged, none pushed unless asked.
+4. Confirm commit list: 1 docs commit (already made), ~6 inference commits, 1 coderig commit; none tagged, none pushed unless asked.
