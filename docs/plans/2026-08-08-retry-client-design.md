@@ -112,7 +112,7 @@ actually surfacing it in harness events/TUI is a follow-up, not in scope.
 
 ### Wiring
 
-coderig's model loader (`coderig/internal/app/model.go`) wraps the client it
+carbon's model loader (`carbon/internal/app/model.go`) wraps the client it
 gets from `auto.New` with `retry.New(client, defaultPolicy)`. No
 `models.json` schema change: the policy is code-level default for now. No
 `llm/auto` helper is needed — that only existed for multi-target chains.
@@ -125,7 +125,7 @@ gets from `auto.New` with `retry.New(client, defaultPolicy)`. No
   context-cancel during sleep, exhaustion error unwrapping, Attempts fields.
 - A `Stream` test proving establishment retries are invisible and that a
   post-establishment `Next()` error is not retried.
-- coderig: loader test that constructed clients are wrapped and the production
+- carbon: loader test that constructed clients are wrapped and the production
   policy remains at ten total attempts with a 256s cap.
 
 ## Future work (recorded, not planned)

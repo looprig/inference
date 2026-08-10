@@ -126,7 +126,7 @@ look up, refresh, or select credentials. Keep the package boundary explicit:
 | `credentials` | safe descriptors/references, sources, leases, refresh state, and HTTP authorizers | login UI, provider transports, or inference codecs |
 | `inference` | neutral requests/results, codecs, transports, retry boundaries, and this gateway | provider credentials, account catalogs, or provider policy |
 | `llm` | provider/API-format policy, concrete transports, and credential-backed client adapters | account lifecycle UI and harness child process policy |
-| CodeRig | model catalog/configuration, explicit list/login/logout lifecycle, and child composition | raw provider credentials in a child environment |
+| Carbon | model catalog/configuration, explicit list/login/logout lifecycle, and child composition | raw provider credentials in a child environment |
 
 The canonical construction path is `llm/auto.NewWithAuth(model, source)`. The
 `source` is bound to one exact provider, transport, scheme, and usage class;
@@ -144,7 +144,7 @@ part of `model.Model`):
 client, err := auto.New(selectedModel, auth.APIKey(apiKey))
 ```
 
-Or CodeRig can resolve a safe reference such as
+Or Carbon can resolve a safe reference such as
 `credential://openai/personal` from its explicit catalog/store and pass the
 resulting source to `auto.NewWithAuth`. The reference identifies an account;
 it is not a URL, a filesystem path, an access token, or a routing rule.
@@ -187,7 +187,7 @@ reference per target.
 
 ### Harness child isolation
 
-When CodeRig starts Claude Code, Codex, or another ACP child through this
+When Carbon starts Claude Code, Codex, or another ACP child through this
 gateway, the child receives only the loopback gateway base URL and a unique
 gateway bearer token returned by `Server.Binding()`. Provider API keys,
 OAuth access/refresh tokens, credential-store roots, and account state remain

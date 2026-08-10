@@ -5,14 +5,14 @@ Status: approved
 
 ## Goal
 
-Increase coderig's production retry budget from six total attempts to ten,
+Increase carbon's production retry budget from six total attempts to ten,
 while preserving the existing retry classification, jitter, cancellation,
 and stream-establishment semantics.
 
 ## Design
 
 Keep the generic `inference/retry.Policy` API unchanged. Update only the
-production policy used by coderig's model loader:
+production policy used by carbon's model loader:
 
 - three stable retries at 2 seconds;
 - exponential delays thereafter, starting at 4 seconds;
@@ -25,8 +25,8 @@ attempt budget; it is not reached with ten total attempts.
 
 ## Testing
 
-Extend the coderig production-policy test to assert `MaxAttempts == 10` and
+Extend the carbon production-policy test to assert `MaxAttempts == 10` and
 `MaxDelay == 256*time.Second`. Update the retry design documentation to keep
 the recorded schedule and its total-attempt semantics accurate. Run the
-affected package tests, then the full inference and coderig test, vet, and
+affected package tests, then the full inference and carbon test, vet, and
 build suites.

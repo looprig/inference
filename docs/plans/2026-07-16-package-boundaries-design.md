@@ -22,7 +22,7 @@ The root package may depend on `model` and `stream`. Domain packages may depend 
 
 ## Migration
 
-Move declarations and their tests to the package that owns them, then update Harness, LLM, TUI, and CodeRig imports in the same change. Do not retain broad aliases in the root package merely to preserve the old catch-all API.
+Move declarations and their tests to the package that owns them, then update Harness, LLM, TUI, and Carbon imports in the same change. Do not retain broad aliases in the root package merely to preserve the old catch-all API.
 
 The migration is structural. Existing values, validation rules, JSON behavior, error messages, and execution paths remain unchanged.
 
