@@ -166,7 +166,7 @@ func WithRoundTripper(rt http.RoundTripper) Option {
 // WithRoundTripper is also supplied, that caller-owned transport remains in
 // use and is responsible for its own TLS verification policy.
 func WithTLSRootCAs(roots *x509.CertPool) Option {
-	if roots == nil || len(roots.Subjects()) == 0 {
+	if roots == nil || roots.Equal(x509.NewCertPool()) {
 		panic("transport.WithTLSRootCAs: root pool must be non-empty")
 	}
 	cloned := roots.Clone()
