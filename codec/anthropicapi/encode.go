@@ -39,12 +39,17 @@ func buildMessagesRequest(req inference.Request, stream bool) (messagesRequest, 
 	var messages []anthropicMessage
 	committedSourceMessages := len(req.Messages) - req.TransientMessages
 	committedEncodedMessages := 0
+	transientSystemMessageNonEmpty := false
 	for index, conv := range req.Messages {
 		switch m := conv.(type) {
 		case *content.SystemMessage:
 			// Anthropic has no in-thread system role: fold system text into the
 			// top-level `system` field, preserving order after Request.System.
-			system = appendSystem(system, textOf(m.Blocks))
+			systemText := textOf(m.Blocks)
+			if index >= committedSourceMessages && systemText != "" {
+				transientSystemMessageNonEmpty = true
+			}
+			system = appendSystem(system, systemText)
 		case *content.UserMessage:
 			blocks, err := encodeBlocks(m.Blocks)
 			if err != nil {
@@ -136,7 +141,9 @@ func buildMessagesRequest(req inference.Request, stream bool) (messagesRequest, 
 		r.TopP = sampling.TopP
 	}
 
-	if req.Model.Caps.PromptCaching {
+	// A non-empty transient SystemMessage folds into the top-level system
+	// prefix, so caching either breakpoint would include transient context.
+	if req.Model.Caps.PromptCaching && !transientSystemMessageNonEmpty {
 		applyCacheBreakpoints(&r, committedEncodedMessages)
 	}
 

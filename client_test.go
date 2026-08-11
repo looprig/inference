@@ -71,9 +71,12 @@ func TestRequest_Fields(t *testing.T) {
 
 	override := &model.Sampling{Temperature: f64ptr(0.2)}
 	req := inference.Request{
-		Model:             sampleModel(),
-		System:            "you are helpful",
-		Messages:          content.AgenticMessages{},
+		Model:  sampleModel(),
+		System: "you are helpful",
+		Messages: content.AgenticMessages{&content.UserMessage{Message: content.Message{
+			Role:   content.RoleUser,
+			Blocks: []content.Block{&content.TextBlock{Text: "hello"}},
+		}}},
 		TransientMessages: 1,
 		Tools:             []inference.Tool{{Name: "search"}},
 		Output:            &inference.OutputSchema{Name: "answer"},

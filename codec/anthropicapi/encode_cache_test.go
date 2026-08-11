@@ -188,6 +188,60 @@ func TestEncodeRequest_PromptCachingBoundarySurvivesSystemMessageFold(t *testing
 	}
 }
 
+// A non-empty transient SystemMessage folds into the top-level system prompt,
+// so all cache breakpoints must be suppressed for the request.
+func TestEncodeRequest_PromptCachingTransientSystemMessageSuppressesBreakpoints(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:             cachingModel(),
+		TransientMessages: 1,
+		Messages: content.AgenticMessages{
+			userMsg(textBlock("committed")),
+			sysMsg(textBlock("runtime instructions")),
+		},
+	}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	body := decodeObj(t, data)
+	if got := asString(t, body["system"]); got != "runtime instructions" {
+		t.Errorf("system = %q, want %q", got, "runtime instructions")
+	}
+
+	msgs := messagesOf(t, body)
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(msgs))
+	}
+	if cc := cacheControlOf(t, blocksOf(t, msgs[0])[0]); cc != nil {
+		t.Errorf("committed message unexpectedly carries cache_control: %v", cc)
+	}
+}
+
+// An all-transient non-empty SystemMessage must not create a cache breakpoint
+// even though it is rendered as the top-level system prompt.
+func TestEncodeRequest_PromptCachingAllTransientSystemMessageSuppressesBreakpoints(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:             cachingModel(),
+		TransientMessages: 1,
+		Messages:          content.AgenticMessages{sysMsg(textBlock("runtime instructions"))},
+	}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	body := decodeObj(t, data)
+	if got := asString(t, body["system"]); got != "runtime instructions" {
+		t.Errorf("system = %q, want %q", got, "runtime instructions")
+	}
+	if msgs := messagesOf(t, body); len(msgs) != 0 {
+		t.Fatalf("message count = %d, want 0", len(msgs))
+	}
+}
+
 // A tool-result tail (the common agentic-loop shape) carries the message
 // breakpoint on the tool_result block itself.
 func TestEncodeRequest_PromptCachingToolResultTail(t *testing.T) {
