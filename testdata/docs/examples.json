@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "repository": "inference",
+  "proofSources": [
+    {
+      "id": "example-inference-invoke-source",
+      "type": "source",
+      "path": "examples/invoke/main.go",
+      "symbol": "main"
+    },
+    {
+      "id": "example-inference-stream-source",
+      "type": "source",
+      "path": "examples/stream/main.go",
+      "symbol": "main"
+    },
+    {
+      "id": "example-inference-retry-source",
+      "type": "source",
+      "path": "examples/retry/main.go",
+      "symbol": "main"
+    },
+    {
+      "id": "example-inference-gateway-source",
+      "type": "source",
+      "path": "examples/gateway/main.go",
+      "symbol": "main"
+    },
+    {
+      "id": "example-inference-runnable-test",
+      "type": "test",
+      "path": "examples/examples_test.go",
+      "symbol": "TestRunnableExamples"
+    },
+    {
+      "id": "example-inference-manifest-contract-test",
+      "type": "test",
+      "path": "examples/artifacts_test.go",
+      "symbol": "TestDocsArtifacts"
+    }
+  ],
+  "examples": [
+    {
+      "id": "example-inference-invoke-example",
+      "ecosystem": "go",
+      "owner": "inference",
+      "sourcePath": "examples/invoke/main.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/inference": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/invoke",
+      "assertion": "The program builds a provider-neutral request, invokes an injected client, and reads the typed response message and resolved model.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; the client and response exist only in memory.",
+      "liveGate": null,
+      "proofIds": [
+        "example-inference-invoke-source",
+        "example-inference-runnable-test",
+        "example-inference-manifest-contract-test"
+      ]
+    },
+    {
+      "id": "example-inference-stream-example",
+      "ecosystem": "go",
+      "owner": "inference",
+      "sourcePath": "examples/stream/main.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/inference": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/stream",
+      "assertion": "The program consumes ordered typed chunks to EOF, closes the reader, and reads authoritative terminal stream metadata.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; the stream is backed by an in-memory sequence and is closed before exit.",
+      "liveGate": null,
+      "proofIds": [
+        "example-inference-stream-source",
+        "example-inference-runnable-test",
+        "example-inference-manifest-contract-test"
+      ]
+    },
+    {
+      "id": "example-inference-retry-example",
+      "ecosystem": "go",
+      "owner": "inference",
+      "sourcePath": "examples/retry/main.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/inference": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/retry",
+      "assertion": "The program decorates a client with a bounded retry policy, classifies two 429 failures as retryable, and reports third-attempt recovery.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; the deterministic retry delay is one nanosecond and no remote service is called.",
+      "liveGate": null,
+      "proofIds": [
+        "example-inference-retry-source",
+        "example-inference-runnable-test",
+        "example-inference-manifest-contract-test"
+      ]
+    },
+    {
+      "id": "example-inference-gateway-example",
+      "ecosystem": "go",
+      "owner": "inference",
+      "sourcePath": "examples/gateway/main.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/inference": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/gateway",
+      "assertion": "The program sends an Anthropic-format request through the gateway handler and proves that the public alias is replaced by the configured provider model upstream.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; httptest request and recorder values exercise the handler without opening a listener.",
+      "liveGate": null,
+      "proofIds": [
+        "example-inference-gateway-source",
+        "example-inference-runnable-test",
+        "example-inference-manifest-contract-test"
+      ]
+    }
+  ]
+}

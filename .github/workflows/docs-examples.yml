@@ -1,0 +1,32 @@
+name: Docs examples
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  docs-examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run invoke example
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/invoke
+      - name: Run streaming example
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/stream
+      - name: Run retry example
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/retry
+      - name: Run gateway example
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/gateway
+      - name: Run repository tests
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache make test
+      - name: Run race-enabled standalone tests
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go test -race ./...
