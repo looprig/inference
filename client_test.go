@@ -71,13 +71,14 @@ func TestRequest_Fields(t *testing.T) {
 
 	override := &model.Sampling{Temperature: f64ptr(0.2)}
 	req := inference.Request{
-		Model:      sampleModel(),
-		System:     "you are helpful",
-		Messages:   content.AgenticMessages{},
-		Tools:      []inference.Tool{{Name: "search"}},
-		Output:     &inference.OutputSchema{Name: "answer"},
-		ToolChoice: inference.ToolChoiceRequired,
-		Override:   override,
+		Model:             sampleModel(),
+		System:            "you are helpful",
+		Messages:          content.AgenticMessages{},
+		TransientMessages: 1,
+		Tools:             []inference.Tool{{Name: "search"}},
+		Output:            &inference.OutputSchema{Name: "answer"},
+		ToolChoice:        inference.ToolChoiceRequired,
+		Override:          override,
 	}
 
 	if req.Model.Provider != model.ProviderName("chutes") {
@@ -85,6 +86,9 @@ func TestRequest_Fields(t *testing.T) {
 	}
 	if req.System != "you are helpful" {
 		t.Errorf("Request.System = %q, want %q", req.System, "you are helpful")
+	}
+	if req.TransientMessages != 1 {
+		t.Errorf("Request.TransientMessages = %d, want 1", req.TransientMessages)
 	}
 	if len(req.Tools) != 1 || req.Tools[0].Name != "search" {
 		t.Errorf("Request.Tools = %+v, want one tool named search", req.Tools)
@@ -109,6 +113,76 @@ func TestRequest_Fields(t *testing.T) {
 	}
 	if def.ToolChoice != inference.ToolChoiceAuto {
 		t.Errorf("zero-value Request.ToolChoice = %d, want ToolChoiceAuto", def.ToolChoice)
+	}
+}
+
+func TestValidateRequestFeaturesTransientMessages(t *testing.T) {
+	t.Parallel()
+
+	oneMessage := content.AgenticMessages{&content.UserMessage{}}
+	tests := []struct {
+		name             string
+		req              inference.Request
+		wantErr          bool
+		wantTransient    int
+		wantMessageCount int
+	}{
+		{
+			name: "zero is valid",
+			req:  inference.Request{},
+		},
+		{
+			name: "one trailing transient message is valid",
+			req: inference.Request{
+				Messages:          oneMessage,
+				TransientMessages: 1,
+			},
+		},
+		{
+			name:             "negative is invalid",
+			req:              inference.Request{TransientMessages: -1},
+			wantErr:          true,
+			wantTransient:    -1,
+			wantMessageCount: 0,
+		},
+		{
+			name: "count past messages is invalid",
+			req: inference.Request{
+				Messages:          oneMessage,
+				TransientMessages: 2,
+			},
+			wantErr:          true,
+			wantTransient:    2,
+			wantMessageCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := inference.ValidateRequestFeatures(tt.req)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateRequestFeatures() error = %v, want nil", err)
+				}
+				return
+			}
+
+			var target *inference.InvalidTransientMessagesError
+			if !errors.As(err, &target) {
+				t.Fatalf("ValidateRequestFeatures() error = %T %v, want *InvalidTransientMessagesError", err, err)
+			}
+			if target.Transient != tt.wantTransient {
+				t.Errorf("InvalidTransientMessagesError.Transient = %d, want %d", target.Transient, tt.wantTransient)
+			}
+			if target.Messages != tt.wantMessageCount {
+				t.Errorf("InvalidTransientMessagesError.Messages = %d, want %d", target.Messages, tt.wantMessageCount)
+			}
+			if got := target.Error(); got != "inference: transient message count is outside request messages" {
+				t.Errorf("InvalidTransientMessagesError.Error() = %q, want stable contract message", got)
+			}
+		})
 	}
 }
 
