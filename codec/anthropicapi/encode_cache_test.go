@@ -94,6 +94,100 @@ func TestEncodeRequest_PromptCachingBreakpoints(t *testing.T) {
 	}
 }
 
+// The message breakpoint belongs to the committed history, before the
+// trailing transient suffix.
+func TestEncodeRequest_PromptCachingPrecedesTransientSuffix(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:             cachingModel(),
+		TransientMessages: 1,
+		Messages: content.AgenticMessages{
+			userMsg(textBlock("committed")),
+			userMsg(textBlock("runtime")),
+		},
+	}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	body := decodeObj(t, data)
+	msgs := messagesOf(t, body)
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	requireEphemeral(t, blocksOf(t, msgs[0])[0])
+	if cc := cacheControlOf(t, blocksOf(t, msgs[1])[0]); cc != nil {
+		t.Errorf("transient message unexpectedly carries cache_control: %v", cc)
+	}
+}
+
+// When the entire message thread is transient, the system breakpoint is the
+// only cache breakpoint emitted.
+func TestEncodeRequest_PromptCachingTransientOnlyUsesSystem(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:             cachingModel(),
+		System:            "be helpful",
+		TransientMessages: 1,
+		Messages:          content.AgenticMessages{userMsg(textBlock("runtime"))},
+	}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	body := decodeObj(t, data)
+	sysBlocks := asObjs(t, body["system"])
+	if len(sysBlocks) != 1 {
+		t.Fatalf("system block count = %d, want 1", len(sysBlocks))
+	}
+	requireEphemeral(t, sysBlocks[0])
+
+	msgs := messagesOf(t, body)
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(msgs))
+	}
+	if cc := cacheControlOf(t, blocksOf(t, msgs[0])[0]); cc != nil {
+		t.Errorf("transient message unexpectedly carries cache_control: %v", cc)
+	}
+}
+
+// Folding an in-thread system message must not move the committed-history
+// boundary: the committed user message still receives the message breakpoint.
+func TestEncodeRequest_PromptCachingBoundarySurvivesSystemMessageFold(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{
+		Model:             cachingModel(),
+		TransientMessages: 1,
+		Messages: content.AgenticMessages{
+			userMsg(textBlock("committed")),
+			sysMsg(textBlock("in thread")),
+			userMsg(textBlock("runtime")),
+		},
+	}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	body := decodeObj(t, data)
+	sysBlocks := asObjs(t, body["system"])
+	if len(sysBlocks) != 1 {
+		t.Fatalf("system block count = %d, want 1", len(sysBlocks))
+	}
+	requireEphemeral(t, sysBlocks[0])
+
+	msgs := messagesOf(t, body)
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	requireEphemeral(t, blocksOf(t, msgs[0])[0])
+	if cc := cacheControlOf(t, blocksOf(t, msgs[1])[0]); cc != nil {
+		t.Errorf("transient message unexpectedly carries cache_control: %v", cc)
+	}
+}
+
 // A tool-result tail (the common agentic-loop shape) carries the message
 // breakpoint on the tool_result block itself.
 func TestEncodeRequest_PromptCachingToolResultTail(t *testing.T) {
@@ -179,8 +273,11 @@ func TestEncodeRequest_PromptCachingNoSystem(t *testing.T) {
 	t.Parallel()
 
 	req := inference.Request{
-		Model:    cachingModel(),
-		Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
+		Model: cachingModel(),
+		Messages: content.AgenticMessages{
+			userMsg(textBlock("first")),
+			aiMsg(textBlock("final")),
+		},
 	}
 	data, err := anthropicapi.EncodeRequest(req, false)
 	if err != nil {
@@ -191,6 +288,11 @@ func TestEncodeRequest_PromptCachingNoSystem(t *testing.T) {
 		t.Error("system field should be omitted when empty")
 	}
 	msgs := messagesOf(t, body)
-	blocks := blocksOf(t, msgs[len(msgs)-1])
-	requireEphemeral(t, blocks[len(blocks)-1])
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if cc := cacheControlOf(t, blocksOf(t, msgs[0])[0]); cc != nil {
+		t.Errorf("unexpected cache_control on non-final message: %v", cc)
+	}
+	requireEphemeral(t, blocksOf(t, msgs[len(msgs)-1])[0])
 }
