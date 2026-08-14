@@ -4,9 +4,9 @@
 # (go list ./... stops at nested module boundaries and skips vendor).
 GO_DIRS := $(shell go list -f '{{.Dir}}' ./...)
 
-# inference does not vendor (it depends only on core via a local replace and
-# stdlib), so there is no -mod=vendor export here. Verification runs GOWORK=off so
-# each module proves it resolves through its own require/replace graph.
+# inference does not vendor, so there is no -mod=vendor export here.
+# Verification runs GOWORK=off so the module proves it resolves through its own
+# pinned dependency graph.
 
 test:
 	go test -race ./...
