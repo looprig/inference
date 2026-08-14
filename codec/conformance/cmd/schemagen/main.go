@@ -504,36 +504,46 @@ func crossCheckAnthropicPointer(recs map[string]*conformance.Source) error {
 }
 
 func writeTree(outDir string, files map[string][]byte) error {
+	root, err := os.OpenRoot(outDir)
+	if errors.Is(err, os.ErrNotExist) {
+		if len(files) == 0 {
+			return nil
+		}
+		if err := os.MkdirAll(outDir, 0o750); err != nil {
+			return err
+		}
+		root, err = os.OpenRoot(outDir)
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
 	// A removed target must remove its old generated document too. Otherwise a
 	// regeneration can leave an unindexed schema behind and make the checked-in
-	// tree depend on whatever happened to exist before the command ran.
-	if err := filepath.WalkDir(outDir, func(full string, entry fs.DirEntry, err error) error {
+	// tree depend on whatever happened to exist before the command ran. Traverse
+	// and mutate through one open root so a symlink swap cannot redirect a stale
+	// removal (or a generated write below) outside outDir.
+	if err := fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
 			return err
 		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
 			return nil
 		}
-		rel, err := filepath.Rel(outDir, full)
-		if err != nil {
-			return err
-		}
 		if _, current := files[filepath.ToSlash(rel)]; current {
 			return nil
 		}
-		return os.Remove(full)
-	}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return root.Remove(filepath.FromSlash(rel))
+	}); err != nil {
 		return err
 	}
 	for _, rel := range sortedKeys(files) {
-		full := filepath.Join(outDir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+		name := filepath.FromSlash(rel)
+		if err := root.MkdirAll(filepath.Dir(name), 0o750); err != nil {
 			return err
 		}
-		if err := os.WriteFile(full, files[rel], 0o600); err != nil {
+		if err := root.WriteFile(name, files[rel], 0o600); err != nil {
 			return err
 		}
 	}

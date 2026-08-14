@@ -67,6 +67,33 @@ func TestWriteTreePrunesStaleGeneratedSchemas(t *testing.T) {
 	}
 }
 
+func TestWriteTreeDoesNotFollowOutputSymlinkOutsideRoot(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	outDir := filepath.Join(parent, "schema")
+	outside := filepath.Join(parent, "outside")
+	if err := os.MkdirAll(outDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(outDir, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := writeTree(outDir, map[string][]byte{
+		"escape/current.schema.json": []byte("must stay confined"),
+	})
+	if err == nil {
+		t.Fatal("writeTree followed an output symlink outside its root")
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "current.schema.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("writeTree created a schema outside its output root; Stat error = %v", statErr)
+	}
+}
+
 func TestUnprovenOneOfIsPreservedUnlessKnownToOverlap(t *testing.T) {
 	t.Parallel()
 
