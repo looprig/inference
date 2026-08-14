@@ -1,0 +1,1134 @@
+{
+  "$defs": {
+    "AudioResponseFormat": {
+      "properties": {
+        "bitRate": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "delivery": {
+          "enum": [
+            "DELIVERY_UNSPECIFIED",
+            "INLINE",
+            "URI"
+          ],
+          "type": "string"
+        },
+        "mimeType": {
+          "enum": [
+            "MIME_TYPE_UNSPECIFIED",
+            "AUDIO_MP3",
+            "AUDIO_OGG_OPUS",
+            "AUDIO_L16",
+            "AUDIO_WAV",
+            "AUDIO_ALAW",
+            "AUDIO_MULAW"
+          ],
+          "type": "string"
+        },
+        "sampleRate": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AudioTranscriptionConfig": {
+      "properties": {
+        "adaptationPhrases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "customVocabulary": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "diarization": {
+          "type": "boolean"
+        },
+        "languageAuto": {
+          "$ref": "#/$defs/LanguageAuto"
+        },
+        "languageCodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "languageHints": {
+          "$ref": "#/$defs/LanguageHints"
+        },
+        "wordTimestamp": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Blob": {
+      "properties": {
+        "data": {
+          "format": "byte",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CodeExecution": {
+      "properties": {},
+      "type": "object"
+    },
+    "CodeExecutionResult": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "OUTCOME_UNSPECIFIED",
+            "OUTCOME_OK",
+            "OUTCOME_FAILED",
+            "OUTCOME_DEADLINE_EXCEEDED"
+          ],
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUse": {
+      "properties": {
+        "disabledSafetyPolicies": {
+          "items": {
+            "enum": [
+              "SAFETY_POLICY_UNSPECIFIED",
+              "FINANCIAL_TRANSACTIONS",
+              "SENSITIVE_DATA_MODIFICATION",
+              "COMMUNICATION_TOOL",
+              "ACCOUNT_CREATION",
+              "DATA_MODIFICATION",
+              "USER_CONSENT_MANAGEMENT",
+              "LEGAL_TERMS_AND_AGREEMENTS"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enablePromptInjectionDetection": {
+          "type": "boolean"
+        },
+        "environment": {
+          "enum": [
+            "ENVIRONMENT_UNSPECIFIED",
+            "ENVIRONMENT_BROWSER",
+            "ENVIRONMENT_MOBILE",
+            "ENVIRONMENT_DESKTOP"
+          ],
+          "type": "string"
+        },
+        "excludedPredefinedFunctions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Content": {
+      "properties": {
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/Part"
+          },
+          "type": "array"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DynamicRetrievalConfig": {
+      "properties": {
+        "dynamicThreshold": {
+          "format": "float",
+          "type": "number"
+        },
+        "mode": {
+          "enum": [
+            "MODE_UNSPECIFIED",
+            "MODE_DYNAMIC"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ExecutableCode": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "LANGUAGE_UNSPECIFIED",
+            "PYTHON"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FileData": {
+      "properties": {
+        "fileUri": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FileSearch": {
+      "properties": {
+        "fileSearchStoreNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadataFilter": {
+          "type": "string"
+        },
+        "topK": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionCall": {
+      "properties": {
+        "args": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionCallingConfig": {
+      "properties": {
+        "allowedFunctionNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "MODE_UNSPECIFIED",
+            "AUTO",
+            "ANY",
+            "NONE",
+            "VALIDATED"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionDeclaration": {
+      "properties": {
+        "behavior": {
+          "enum": [
+            "UNSPECIFIED",
+            "BLOCKING",
+            "NON_BLOCKING"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/Schema"
+        },
+        "parametersJsonSchema": {},
+        "response": {
+          "$ref": "#/$defs/Schema"
+        },
+        "responseJsonSchema": {}
+      },
+      "type": "object"
+    },
+    "FunctionResponse": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/FunctionResponsePart"
+          },
+          "type": "array"
+        },
+        "response": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "scheduling": {
+          "enum": [
+            "SCHEDULING_UNSPECIFIED",
+            "SILENT",
+            "WHEN_IDLE",
+            "INTERRUPT"
+          ],
+          "type": "string"
+        },
+        "willContinue": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionResponseBlob": {
+      "properties": {
+        "data": {
+          "format": "byte",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FunctionResponsePart": {
+      "properties": {
+        "inlineData": {
+          "$ref": "#/$defs/FunctionResponseBlob"
+        }
+      },
+      "type": "object"
+    },
+    "GenerateContentRequest": {
+      "properties": {
+        "cachedContent": {
+          "type": "string"
+        },
+        "contents": {
+          "items": {
+            "$ref": "#/$defs/Content"
+          },
+          "type": "array"
+        },
+        "generationConfig": {
+          "$ref": "#/$defs/GenerationConfig"
+        },
+        "model": {
+          "type": "string"
+        },
+        "safetySettings": {
+          "items": {
+            "$ref": "#/$defs/SafetySetting"
+          },
+          "type": "array"
+        },
+        "serviceTier": {
+          "enum": [
+            "unspecified",
+            "standard",
+            "flex",
+            "priority"
+          ],
+          "type": "string"
+        },
+        "store": {
+          "type": "boolean"
+        },
+        "systemInstruction": {
+          "$ref": "#/$defs/Content"
+        },
+        "toolConfig": {
+          "$ref": "#/$defs/ToolConfig"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "GenerationConfig": {
+      "properties": {
+        "_responseJsonSchema": {},
+        "audioTranscriptionConfig": {
+          "$ref": "#/$defs/AudioTranscriptionConfig"
+        },
+        "candidateCount": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "enableAffectiveDialog": {
+          "type": "boolean"
+        },
+        "enableEnhancedCivicAnswers": {
+          "type": "boolean"
+        },
+        "frequencyPenalty": {
+          "format": "float",
+          "type": "number"
+        },
+        "imageConfig": {
+          "$ref": "#/$defs/ImageConfig"
+        },
+        "logprobs": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "maxOutputTokens": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "mediaResolution": {
+          "enum": [
+            "MEDIA_RESOLUTION_UNSPECIFIED",
+            "MEDIA_RESOLUTION_LOW",
+            "MEDIA_RESOLUTION_MEDIUM",
+            "MEDIA_RESOLUTION_HIGH"
+          ],
+          "type": "string"
+        },
+        "presencePenalty": {
+          "format": "float",
+          "type": "number"
+        },
+        "responseFormat": {
+          "$ref": "#/$defs/ResponseFormatConfig"
+        },
+        "responseJsonSchema": {},
+        "responseLogprobs": {
+          "type": "boolean"
+        },
+        "responseMimeType": {
+          "type": "string"
+        },
+        "responseModalities": {
+          "items": {
+            "enum": [
+              "MODALITY_UNSPECIFIED",
+              "TEXT",
+              "IMAGE",
+              "AUDIO"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "responseSchema": {
+          "$ref": "#/$defs/Schema"
+        },
+        "seed": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "speechConfig": {
+          "$ref": "#/$defs/SpeechConfig"
+        },
+        "stopSequences": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "temperature": {
+          "format": "float",
+          "type": "number"
+        },
+        "thinkingConfig": {
+          "$ref": "#/$defs/ThinkingConfig"
+        },
+        "topK": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "topP": {
+          "format": "float",
+          "type": "number"
+        },
+        "translationConfig": {
+          "$ref": "#/$defs/TranslationConfig"
+        }
+      },
+      "type": "object"
+    },
+    "GoogleMaps": {
+      "properties": {
+        "enableWidget": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "GoogleSearch": {
+      "properties": {
+        "searchTypes": {
+          "$ref": "#/$defs/SearchTypes"
+        },
+        "timeRangeFilter": {
+          "$ref": "#/$defs/Interval"
+        }
+      },
+      "type": "object"
+    },
+    "GoogleSearchRetrieval": {
+      "properties": {
+        "dynamicRetrievalConfig": {
+          "$ref": "#/$defs/DynamicRetrievalConfig"
+        }
+      },
+      "type": "object"
+    },
+    "ImageConfig": {
+      "properties": {
+        "aspectRatio": {
+          "type": "string"
+        },
+        "imageSize": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImageResponseFormat": {
+      "properties": {
+        "aspectRatio": {
+          "enum": [
+            "ASPECT_RATIO_UNSPECIFIED",
+            "ASPECT_RATIO_ONE_BY_ONE",
+            "ASPECT_RATIO_TWO_BY_THREE",
+            "ASPECT_RATIO_THREE_BY_TWO",
+            "ASPECT_RATIO_THREE_BY_FOUR",
+            "ASPECT_RATIO_FOUR_BY_THREE",
+            "ASPECT_RATIO_FOUR_BY_FIVE",
+            "ASPECT_RATIO_FIVE_BY_FOUR",
+            "ASPECT_RATIO_NINE_BY_SIXTEEN",
+            "ASPECT_RATIO_SIXTEEN_BY_NINE",
+            "ASPECT_RATIO_TWENTY_ONE_BY_NINE",
+            "ASPECT_RATIO_ONE_BY_EIGHT",
+            "ASPECT_RATIO_EIGHT_BY_ONE",
+            "ASPECT_RATIO_ONE_BY_FOUR",
+            "ASPECT_RATIO_FOUR_BY_ONE"
+          ],
+          "type": "string"
+        },
+        "delivery": {
+          "enum": [
+            "DELIVERY_UNSPECIFIED",
+            "INLINE",
+            "URI"
+          ],
+          "type": "string"
+        },
+        "imageSize": {
+          "enum": [
+            "IMAGE_SIZE_UNSPECIFIED",
+            "IMAGE_SIZE_FIVE_TWELVE",
+            "IMAGE_SIZE_ONE_K",
+            "IMAGE_SIZE_TWO_K",
+            "IMAGE_SIZE_FOUR_K"
+          ],
+          "type": "string"
+        },
+        "mimeType": {
+          "enum": [
+            "MIME_TYPE_UNSPECIFIED",
+            "IMAGE_JPEG"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImageSearch": {
+      "properties": {},
+      "type": "object"
+    },
+    "Interval": {
+      "properties": {
+        "endTime": {
+          "format": "google-datetime",
+          "type": "string"
+        },
+        "startTime": {
+          "format": "google-datetime",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LanguageAuto": {
+      "properties": {},
+      "type": "object"
+    },
+    "LanguageHints": {
+      "properties": {
+        "languageCodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "LatLng": {
+      "properties": {
+        "latitude": {
+          "format": "double",
+          "type": "number"
+        },
+        "longitude": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "McpServer": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "streamableHttpTransport": {
+          "$ref": "#/$defs/StreamableHttpTransport"
+        }
+      },
+      "type": "object"
+    },
+    "MultiSpeakerVoiceConfig": {
+      "properties": {
+        "speakerVoiceConfigs": {
+          "items": {
+            "$ref": "#/$defs/SpeakerVoiceConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Part": {
+      "properties": {
+        "codeExecutionResult": {
+          "$ref": "#/$defs/CodeExecutionResult"
+        },
+        "executableCode": {
+          "$ref": "#/$defs/ExecutableCode"
+        },
+        "fileData": {
+          "$ref": "#/$defs/FileData"
+        },
+        "functionCall": {
+          "$ref": "#/$defs/FunctionCall"
+        },
+        "functionResponse": {
+          "$ref": "#/$defs/FunctionResponse"
+        },
+        "inlineData": {
+          "$ref": "#/$defs/Blob"
+        },
+        "mediaProcessing": {
+          "enum": [
+            "MEDIA_PROCESSING_UNSPECIFIED",
+            "STATIC",
+            "AGENTIC"
+          ],
+          "type": "string"
+        },
+        "mediaResolution": {
+          "$ref": "#/$defs/V1mainMediaResolution"
+        },
+        "partMetadata": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thought": {
+          "type": "boolean"
+        },
+        "thoughtSignature": {
+          "format": "byte",
+          "type": "string"
+        },
+        "toolCall": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "toolResponse": {
+          "$ref": "#/$defs/ToolResponse"
+        },
+        "videoMetadata": {
+          "$ref": "#/$defs/VideoMetadata"
+        }
+      },
+      "type": "object"
+    },
+    "PrebuiltVoiceConfig": {
+      "properties": {
+        "voiceName": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ResponseFormatConfig": {
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/AudioResponseFormat"
+        },
+        "image": {
+          "$ref": "#/$defs/ImageResponseFormat"
+        },
+        "text": {
+          "$ref": "#/$defs/TextResponseFormat"
+        }
+      },
+      "type": "object"
+    },
+    "RetrievalConfig": {
+      "properties": {
+        "languageCode": {
+          "type": "string"
+        },
+        "latLng": {
+          "$ref": "#/$defs/LatLng"
+        }
+      },
+      "type": "object"
+    },
+    "SafetySetting": {
+      "properties": {
+        "category": {
+          "enum": [
+            "HARM_CATEGORY_UNSPECIFIED",
+            "HARM_CATEGORY_DEROGATORY",
+            "HARM_CATEGORY_TOXICITY",
+            "HARM_CATEGORY_VIOLENCE",
+            "HARM_CATEGORY_SEXUAL",
+            "HARM_CATEGORY_MEDICAL",
+            "HARM_CATEGORY_DANGEROUS",
+            "HARM_CATEGORY_HARASSMENT",
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "HARM_CATEGORY_CIVIC_INTEGRITY",
+            "HARM_CATEGORY_JAILBREAK"
+          ],
+          "type": "string"
+        },
+        "threshold": {
+          "enum": [
+            "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
+            "BLOCK_LOW_AND_ABOVE",
+            "BLOCK_MEDIUM_AND_ABOVE",
+            "BLOCK_ONLY_HIGH",
+            "BLOCK_NONE",
+            "OFF"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Schema": {
+      "properties": {
+        "anyOf": {
+          "items": {
+            "$ref": "#/$defs/Schema"
+          },
+          "type": "array"
+        },
+        "default": {},
+        "description": {
+          "type": "string"
+        },
+        "enum": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "example": {},
+        "format": {
+          "type": "string"
+        },
+        "items": {
+          "$ref": "#/$defs/Schema"
+        },
+        "maxItems": {
+          "format": "int64",
+          "type": "string"
+        },
+        "maxLength": {
+          "format": "int64",
+          "type": "string"
+        },
+        "maxProperties": {
+          "format": "int64",
+          "type": "string"
+        },
+        "maximum": {
+          "format": "double",
+          "type": "number"
+        },
+        "minItems": {
+          "format": "int64",
+          "type": "string"
+        },
+        "minLength": {
+          "format": "int64",
+          "type": "string"
+        },
+        "minProperties": {
+          "format": "int64",
+          "type": "string"
+        },
+        "minimum": {
+          "format": "double",
+          "type": "number"
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Schema"
+          },
+          "type": "object"
+        },
+        "propertyOrdering": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "TYPE_UNSPECIFIED",
+            "STRING",
+            "NUMBER",
+            "INTEGER",
+            "BOOLEAN",
+            "ARRAY",
+            "OBJECT",
+            "NULL"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SearchTypes": {
+      "properties": {
+        "imageSearch": {
+          "$ref": "#/$defs/ImageSearch"
+        },
+        "webSearch": {
+          "$ref": "#/$defs/WebSearch"
+        }
+      },
+      "type": "object"
+    },
+    "SpeakerVoiceConfig": {
+      "properties": {
+        "speaker": {
+          "type": "string"
+        },
+        "voiceConfig": {
+          "$ref": "#/$defs/VoiceConfig"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechConfig": {
+      "properties": {
+        "languageCode": {
+          "type": "string"
+        },
+        "multiSpeakerVoiceConfig": {
+          "$ref": "#/$defs/MultiSpeakerVoiceConfig"
+        },
+        "voiceConfig": {
+          "$ref": "#/$defs/VoiceConfig"
+        }
+      },
+      "type": "object"
+    },
+    "StreamableHttpTransport": {
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "sseReadTimeout": {
+          "format": "google-duration",
+          "type": "string"
+        },
+        "terminateOnClose": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "format": "google-duration",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TextResponseFormat": {
+      "properties": {
+        "mimeType": {
+          "enum": [
+            "MIME_TYPE_UNSPECIFIED",
+            "APPLICATION_JSON",
+            "TEXT_PLAIN"
+          ],
+          "type": "string"
+        },
+        "schema": {}
+      },
+      "type": "object"
+    },
+    "ThinkingConfig": {
+      "properties": {
+        "includeThoughts": {
+          "type": "boolean"
+        },
+        "thinkingBudget": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "thinkingLevel": {
+          "enum": [
+            "THINKING_LEVEL_UNSPECIFIED",
+            "MINIMAL",
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Tool": {
+      "properties": {
+        "codeExecution": {
+          "$ref": "#/$defs/CodeExecution"
+        },
+        "computerUse": {
+          "$ref": "#/$defs/ComputerUse"
+        },
+        "fileSearch": {
+          "$ref": "#/$defs/FileSearch"
+        },
+        "functionDeclarations": {
+          "items": {
+            "$ref": "#/$defs/FunctionDeclaration"
+          },
+          "type": "array"
+        },
+        "googleMaps": {
+          "$ref": "#/$defs/GoogleMaps"
+        },
+        "googleSearch": {
+          "$ref": "#/$defs/GoogleSearch"
+        },
+        "googleSearchRetrieval": {
+          "$ref": "#/$defs/GoogleSearchRetrieval"
+        },
+        "mcpServers": {
+          "items": {
+            "$ref": "#/$defs/McpServer"
+          },
+          "type": "array"
+        },
+        "urlContext": {
+          "$ref": "#/$defs/UrlContext"
+        }
+      },
+      "type": "object"
+    },
+    "ToolCall": {
+      "properties": {
+        "args": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "toolName": {
+          "type": "string"
+        },
+        "toolType": {
+          "enum": [
+            "TOOL_TYPE_UNSPECIFIED",
+            "GOOGLE_SEARCH_WEB",
+            "GOOGLE_SEARCH_IMAGE",
+            "URL_CONTEXT",
+            "GOOGLE_MAPS",
+            "FILE_SEARCH"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolConfig": {
+      "properties": {
+        "functionCallingConfig": {
+          "$ref": "#/$defs/FunctionCallingConfig"
+        },
+        "includeServerSideToolInvocations": {
+          "type": "boolean"
+        },
+        "retrievalConfig": {
+          "$ref": "#/$defs/RetrievalConfig"
+        }
+      },
+      "type": "object"
+    },
+    "ToolResponse": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "response": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "toolType": {
+          "enum": [
+            "TOOL_TYPE_UNSPECIFIED",
+            "GOOGLE_SEARCH_WEB",
+            "GOOGLE_SEARCH_IMAGE",
+            "URL_CONTEXT",
+            "GOOGLE_MAPS",
+            "FILE_SEARCH"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TranslationConfig": {
+      "properties": {
+        "echoTargetLanguage": {
+          "type": "boolean"
+        },
+        "targetLanguageCode": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UrlContext": {
+      "properties": {},
+      "type": "object"
+    },
+    "V1mainMediaResolution": {
+      "properties": {
+        "level": {
+          "enum": [
+            "MEDIA_RESOLUTION_UNSPECIFIED",
+            "MEDIA_RESOLUTION_LOW",
+            "MEDIA_RESOLUTION_MEDIUM",
+            "MEDIA_RESOLUTION_HIGH",
+            "MEDIA_RESOLUTION_ULTRA_HIGH"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "VideoMetadata": {
+      "properties": {
+        "endOffset": {
+          "format": "google-duration",
+          "type": "string"
+        },
+        "fps": {
+          "format": "double",
+          "type": "number"
+        },
+        "startOffset": {
+          "format": "google-duration",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "VoiceConfig": {
+      "properties": {
+        "prebuiltVoiceConfig": {
+          "$ref": "#/$defs/PrebuiltVoiceConfig"
+        }
+      },
+      "type": "object"
+    },
+    "WebSearch": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.looprig.dev/llm/conformance/gemini/generate_content_request.schema.json",
+  "$ref": "#/$defs/GenerateContentRequest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Standalone JSON Schema 2020-12 for the gemini generate_content_request request body, derived from the gemini upstream API description. Generated by codec/conformance/cmd/schemagen; see schema/provenance.json for the source and schema/unenforced.json for what this document does not check.",
+  "title": "gemini generate_content_request"
+}

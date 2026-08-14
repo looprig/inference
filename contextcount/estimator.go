@@ -6,6 +6,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
+	"github.com/looprig/inference/codec/bedrockconverse"
 	"github.com/looprig/inference/codec/geminiapi"
 	"github.com/looprig/inference/codec/openaiapi"
 	"github.com/looprig/inference/codec/openairesponses"
@@ -14,13 +15,19 @@ import (
 
 const bytesPerEstimatedToken uint64 = 4
 
-// EstimatorRevision pins the bundled OpenAI/OpenAI-Responses/Anthropic/Gemini
-// encoder suite and the complete-request bytes/4 heuristic. Any
-// count-affecting codec change must bump this revision so durable
-// measurements remain attributable. Bumped from
-// "bundled-openai-anthropic-gemini-request-bytes-div4-v1" to add the
-// openairesponses encoder to the bundle.
-const EstimatorRevision TokenizerRevision = "bundled-openai-responses-anthropic-gemini-request-bytes-div4-v1"
+// EstimatorRevision pins the bundled
+// OpenAI/OpenAI-Responses/Anthropic/Gemini/Bedrock-Converse encoder suite and
+// the complete-request bytes/4 heuristic. Any count-affecting codec change
+// must bump this revision so durable measurements remain attributable. Bumped
+// from "bundled-openai-responses-anthropic-gemini-request-bytes-div4-v1" to add
+// the bedrockconverse encoder to the bundle, then to v2 because the bundled
+// encoders themselves changed shape: OpenAI Chat emits max_completion_tokens
+// for reasoning models, and Responses emits schema-valid input items (assistant
+// history as a bare-string message, reasoning items carrying their issued id).
+// Both shift encoded byte length, so counts taken under v1 are not comparable.
+// Version 3 records Anthropic's conversation projection: adjacent neutral
+// user-role turns now share the single user message sent on that wire.
+const EstimatorRevision TokenizerRevision = "bundled-openai-responses-anthropic-gemini-bedrock-request-bytes-div4-v3"
 
 // Estimator deterministically estimates input occupancy from a dialect's encoded
 // complete request. Its zero value is ready for use.
@@ -107,6 +114,10 @@ func encodeRequest(req inference.Request) ([]byte, error) {
 		body, err = anthropicapi.EncodeRequest(req, false)
 	case model.APIFormatGemini:
 		body, err = geminiapi.EncodeRequest(req)
+	case model.APIFormatBedrockConverse:
+		// Converse and ConverseStream share one body, so the encoder takes no
+		// mode and this is exactly what inference sends.
+		body, err = bedrockconverse.EncodeRequest(req)
 	default:
 		return nil, &UnsupportedAPIFormatError{APIFormat: req.Model.APIFormat}
 	}

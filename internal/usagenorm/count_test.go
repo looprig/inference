@@ -54,7 +54,7 @@ func TestCountTokenCount(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, tt.wantField, tt.wantReason, tt.wantValue, 0, 0, false)
+			assertNormalizationError(t, err, tt.wantField, tt.wantReason, tt.wantValue, 0, 0)
 			if !strings.Contains(err.Error(), string(tt.wantField)) || !strings.Contains(err.Error(), string(tt.wantReason)) {
 				t.Errorf("Error() = %q, want field %q and reason %q", err, tt.wantField, tt.wantReason)
 			}
@@ -139,12 +139,12 @@ func TestCountRejectsUnknownField(t *testing.T) {
 			t.Parallel()
 			var count usagenorm.Count
 			_, err := count.TokenCount(tt.field)
-			assertNormalizationError(t, err, "", usage.UsageNormalizationReasonInvalidField, 0, 0, 0, false)
+			assertNormalizationError(t, err, "", usage.UsageNormalizationReasonInvalidField, 0, 0, 0)
 		})
 	}
 }
 
-func assertNormalizationError(t *testing.T, err error, field usage.UsageNormalizationField, reason usage.UsageNormalizationReason, value int64, left, right content.TokenCount, wantCause bool) {
+func assertNormalizationError(t *testing.T, err error, field usage.UsageNormalizationField, reason usage.UsageNormalizationReason, value int64, left, right content.TokenCount) {
 	t.Helper()
 	var normalizationErr *usage.UsageNormalizationError
 	if !errors.As(err, &normalizationErr) {
@@ -152,8 +152,5 @@ func assertNormalizationError(t *testing.T, err error, field usage.UsageNormaliz
 	}
 	if normalizationErr.Field != field || normalizationErr.Reason != reason || normalizationErr.Value != value || normalizationErr.Left != left || normalizationErr.Right != right {
 		t.Errorf("normalization error = %+v, want field=%q reason=%q value=%d left=%d right=%d", normalizationErr, field, reason, value, left, right)
-	}
-	if (normalizationErr.Cause != nil) != wantCause {
-		t.Errorf("Cause present = %v, want %v", normalizationErr.Cause != nil, wantCause)
 	}
 }

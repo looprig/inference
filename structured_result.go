@@ -80,6 +80,16 @@ func StructuredMessageResult(msg *content.AIMessage) (json.RawMessage, error) {
 			} else {
 				ordinaryCount++
 			}
+		case *content.RefusalBlock:
+			// A refusal is what the model produced INSTEAD of the structured
+			// output, so it can never be a representation. It is classified
+			// alongside the other impossible blocks rather than falling through
+			// to the default's "nil block", which would send a reader hunting a
+			// malformed payload when the model simply declined.
+			if typed == nil {
+				return nil, malformedError(MalformedReasonNilBlock, nil)
+			}
+			return nil, malformedError(MalformedReasonInvalidBlock, nil)
 		case *content.ImageBlock:
 			if typed == nil {
 				return nil, malformedError(MalformedReasonNilBlock, nil)

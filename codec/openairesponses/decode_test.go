@@ -18,7 +18,7 @@ func TestDecodeResponse_TextAndUsage(t *testing.T) {
 		"output": [
 			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello there","annotations":[]}]}
 		],
-		"usage": {"input_tokens": 52, "output_tokens": 11, "total_tokens": 63, "input_tokens_details": {"cached_tokens": 2}, "output_tokens_details": {"reasoning_tokens": 0}}
+		"usage": {"input_tokens": 55, "output_tokens": 11, "total_tokens": 66, "input_tokens_details": {"cached_tokens": 2, "cache_write_tokens": 3}, "output_tokens_details": {"reasoning_tokens": 0}}
 	}`)
 	resp, err := openairesponses.DecodeResponse(body)
 	if err != nil {
@@ -37,12 +37,15 @@ func TestDecodeResponse_TextAndUsage(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage is nil")
 	}
-	// gross input_tokens(52) - cached_tokens(2) = 50
+	// gross input_tokens(55) - cached_tokens(2) - cache_write_tokens(3) = 50
 	if resp.Usage.InputTokens != 50 {
 		t.Errorf("InputTokens = %d, want 50", resp.Usage.InputTokens)
 	}
 	if resp.Usage.CacheReadTokens != 2 {
 		t.Errorf("CacheReadTokens = %d, want 2", resp.Usage.CacheReadTokens)
+	}
+	if resp.Usage.CacheCreationTokens != 3 {
+		t.Errorf("CacheCreationTokens = %d, want 3", resp.Usage.CacheCreationTokens)
 	}
 	if resp.Usage.OutputTokens != 11 {
 		t.Errorf("OutputTokens = %d, want 11", resp.Usage.OutputTokens)
@@ -124,12 +127,17 @@ func TestDecodeResponse_ReasoningSummaryAndEncryptedContent(t *testing.T) {
 	if tb.Signature != "" {
 		t.Errorf("Signature = %q, want empty (Responses uses ProviderState, not Signature)", tb.Signature)
 	}
-	var s string
-	if err := json.Unmarshal(tb.ProviderState, &s); err != nil {
-		t.Fatalf("ProviderState not a JSON string: %v", err)
+	// ProviderState carries the whole replayable reasoning item, not just the
+	// encrypted blob: the item's id is required to replay it and has nowhere
+	// else to live. (This assertion previously required a bare JSON string.)
+	var state struct {
+		EncryptedContent string `json:"encrypted_content"`
 	}
-	if s != "opaque-abc" {
-		t.Errorf("ProviderState decodes to %q, want opaque-abc", s)
+	if err := json.Unmarshal(tb.ProviderState, &state); err != nil {
+		t.Fatalf("ProviderState = %s: %v", tb.ProviderState, err)
+	}
+	if state.EncryptedContent != "opaque-abc" {
+		t.Errorf("ProviderState.encrypted_content = %q, want opaque-abc", state.EncryptedContent)
 	}
 }
 
@@ -206,5 +214,64 @@ func TestDecodeResponse_EmptyOutputIsNotAnError(t *testing.T) {
 	}
 	if len(resp.Message.Blocks) != 0 {
 		t.Errorf("Blocks = %#v, want empty", resp.Message.Blocks)
+	}
+}
+
+// TestDecodeResponse_ReasoningItemIDIsPreserved locks the other half of the
+// reasoning round trip: the response's own reasoning item id must survive into
+// ThinkingBlock.ProviderState, because ReasoningItem.required includes "id"
+// and a replayed item cannot supply one any other way. The neutral block has
+// no id field, so the dialect's opaque provider-state payload carries it.
+func TestDecodeResponse_ReasoningItemIDIsPreserved(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"id": "resp_1", "status": "completed", "model": "gpt-test",
+		"output": [
+			{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"step 1"}],"encrypted_content":"opaque-abc"}
+		]
+	}`)
+	resp, err := openairesponses.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	tb, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok {
+		t.Fatalf("Blocks[0] = %#v", resp.Message.Blocks[0])
+	}
+	var state struct {
+		ID               string `json:"id"`
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(tb.ProviderState, &state); err != nil {
+		t.Fatalf("ProviderState = %s: %v", tb.ProviderState, err)
+	}
+	if state.ID != "rs_1" {
+		t.Errorf("ProviderState.id = %q, want rs_1", state.ID)
+	}
+	if state.EncryptedContent != "opaque-abc" {
+		t.Errorf("ProviderState.encrypted_content = %q, want opaque-abc", state.EncryptedContent)
+	}
+}
+
+// TestDecodeResponse_ReasoningItemIDWithoutEncryptedContent covers a reasoning
+// item returned without encrypted content (the default when
+// reasoning.encrypted_content was not requested): the id alone is still worth
+// preserving, since it is what makes the item replayable at all.
+func TestDecodeResponse_ReasoningItemIDWithoutEncryptedContent(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"id": "resp_1", "status": "completed", "model": "gpt-test",
+		"output": [{"type":"reasoning","id":"rs_1","summary":[]}]
+	}`)
+	resp, err := openairesponses.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	tb, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok {
+		t.Fatalf("Blocks[0] = %#v", resp.Message.Blocks[0])
+	}
+	if !tb.ReplayableAs("openai-responses") {
+		t.Fatalf("ThinkingBlock not replayable: %#v", tb)
 	}
 }

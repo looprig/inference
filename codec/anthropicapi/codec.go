@@ -78,12 +78,15 @@ func (Codec) DecodeResponse(body []byte) (*inference.Response, error) {
 }
 
 // DecodeEvent decodes one already-de-framed SSE event payload into the chunk(s)
-// it yields. It is stateless and tolerant by contract: malformed JSON and every
-// uninteresting or unknown event (message_start, content_block_stop,
-// message_delta, message_stop, ping, signature_delta, …) return (nil, nil) — a
-// skip, not an error. Cross-event assembly (concatenating a tool call's start +
-// input_json_delta fragments into a ToolUseBlock) happens downstream in the
-// stream accumulator, not here.
+// it yields. It is stateless, and tolerant of every uninteresting or unknown but
+// VALID event (message_start, content_block_stop, message_delta, message_stop,
+// ping, unrecognized future types, …), which return (nil, nil) — a skip, not an
+// error. Malformed JSON is the one intolerant case: it yields a
+// *StreamEventDecodeError, because a truncated frame is indistinguishable from a
+// dropped one and skipping it would let a lossy stream report success.
+// Cross-event assembly (concatenating a tool call's start + input_json_delta
+// fragments into a ToolUseBlock) happens downstream in the stream accumulator,
+// not here.
 func (Codec) DecodeEvent(event []byte) ([]content.Chunk, error) {
 	return decodeEvent(event)
 }
@@ -92,15 +95,27 @@ func (Codec) DecodeEvent(event []byte) ([]content.Chunk, error) {
 // mapping, per de-framed Anthropic SSE event:
 //   - content_block_start(tool_use)  → one ToolUseChunk carrying Index/ID/Name
 //     (the fragment that seeds the accumulator with the tool id + name).
+//   - content_block_start(redacted_thinking) → one ThinkingChunk carrying
+//     Index + the opaque redacted payload.
 //   - content_block_delta(text_delta)       → one TextChunk.
-//   - content_block_delta(thinking_delta)   → one ThinkingChunk.
+//   - content_block_delta(thinking_delta)   → one ThinkingChunk (Index).
+//   - content_block_delta(signature_delta)  → one ThinkingChunk (Index).
 //   - content_block_delta(input_json_delta) → one ToolUseChunk arg fragment
 //     (Index + InputJSON, emitted verbatim for the accumulator to concatenate).
-//   - everything else                       → (nil, nil), a tolerant skip.
+//   - everything else valid                 → (nil, nil), a tolerant skip.
+//   - unparseable JSON                       → *StreamEventDecodeError.
+//
+// INDEX SEMANTICS. Every chunk's Index is the event's own `index`, which is
+// Anthropic's position in the message's SINGLE `content` array — one space
+// shared by text, thinking, redacted_thinking and tool_use blocks. So the
+// indexes the thinking accumulator sees may have gaps (a missing 1 is a text or
+// tool_use block, not a missing reasoning block), and a thinking Index may
+// equal no tool-use Index and vice versa. The accumulators key by it and sort
+// on it; they never treat it as dense, and never index a slice with it.
 func decodeEvent(payload []byte) ([]content.Chunk, error) {
 	var ev streamEvent
 	if err := json.Unmarshal(payload, &ev); err != nil {
-		return nil, nil // skip malformed events
+		return nil, &StreamEventDecodeError{Err: err}
 	}
 
 	switch ev.Type {
@@ -110,6 +125,13 @@ func decodeEvent(payload []byte) ([]content.Chunk, error) {
 				Index: ev.Index,
 				ID:    ev.ContentBlock.ID,
 				Name:  ev.ContentBlock.Name,
+			}}, nil
+		}
+		if ev.ContentBlock != nil && ev.ContentBlock.Type == blockTypeRedactedThinking {
+			return []content.Chunk{&content.ThinkingChunk{
+				Index:               ev.Index,
+				ProviderState:       opaqueRedactedState(ev.ContentBlock.Data),
+				ProviderStateFormat: providerStateFormatAnthropicRedacted,
 			}}, nil
 		}
 		// A text/thinking block start carries no content yet; deltas follow.
@@ -129,6 +151,14 @@ func decodeEvent(payload []byte) ([]content.Chunk, error) {
 // thinking deltas are skipped (they would fold into a spurious empty block);
 // an input_json_delta fragment is emitted verbatim, carrying the block Index so
 // the accumulator keys it to the right tool call.
+//
+// A thinking_delta and its terminal signature_delta carry the SAME block Index
+// for the same reason. Extended thinking opens a fresh thinking or
+// redacted_thinking block around every tool call, each with its own signature,
+// and Anthropic rejects a follow-up request whose thinking blocks do not match
+// the sequence it generated signature-for-block. Dropping the Index folded
+// every block's text into one and rebound the last signature to the whole
+// concatenation.
 func decodeDelta(ev streamEvent) ([]content.Chunk, error) {
 	if ev.Delta == nil {
 		return nil, nil
@@ -143,7 +173,21 @@ func decodeDelta(ev streamEvent) ([]content.Chunk, error) {
 		if ev.Delta.Thinking == "" {
 			return nil, nil
 		}
-		return []content.Chunk{&content.ThinkingChunk{Thinking: ev.Delta.Thinking}}, nil
+		return []content.Chunk{&content.ThinkingChunk{Index: ev.Index, Thinking: ev.Delta.Thinking}}, nil
+	case deltaSignature:
+		if ev.Delta.Signature == "" {
+			return nil, nil
+		}
+		// Labelled with this dialect exactly as decodeBlocks labels the
+		// non-streaming block. Streaming must reconstruct the SAME continuation
+		// state, and after this change provenance is part of that state: an
+		// unlabelled streamed signature would make the streamed turn
+		// unreplayable while the identical non-streamed turn stayed fine.
+		return []content.Chunk{&content.ThinkingChunk{
+			Index:           ev.Index,
+			Signature:       ev.Delta.Signature,
+			SignatureFormat: signatureFormatAnthropic,
+		}}, nil
 	case deltaInputJSON:
 		return []content.Chunk{&content.ToolUseChunk{Index: ev.Index, InputJSON: ev.Delta.PartialJSON}}, nil
 	default:

@@ -82,7 +82,21 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "fractional completion", usageField: `,"usage":{"completion_tokens":1.5}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonFractional},
 		{name: "out of range cache read", usageField: `,"usage":{"prompt_tokens_details":{"cached_tokens":9223372036854775808}}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
 		{name: "cache totals exceed prompt", usageField: `,"usage":{"prompt_tokens":4,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonComponentsExceedTotal},
-		{name: "reasoning exceeds output", usageField: `,"usage":{"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":3}}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput},
+		{
+			// OpenAI documents reasoning_tokens as a subset of completion_tokens:
+			// completion_tokens_details is a "Breakdown of tokens used in a
+			// completion", and the sibling rejected_prediction_tokens says such
+			// tokens "are still counted in the total completion tokens"
+			// (openai/openai-openapi, CompletionUsage). Not every server that
+			// speaks this format honours it. These are the live counts from an
+			// OpenRouter HTTP 200 against nvidia/nemotron-3-ultra-550b-a55b:free.
+			// Both numbers are individually well-formed, so both are reported as
+			// received: the relationship between them is an accounting fact about
+			// the provider, and no published arithmetic reconciles them.
+			name:       "reasoning exceeding completion is reported, not fatal",
+			usageField: `,"usage":{"prompt_tokens":31,"completion_tokens":216,"completion_tokens_details":{"reasoning_tokens":226}}`,
+			want:       &content.Usage{InputTokens: 31, OutputTokens: 216, ReasoningTokens: 226},
+		},
 	}
 
 	for _, tt := range tests {
@@ -193,7 +207,7 @@ func TestDecodeResponse(t *testing.T) {
 			body: []byte(`{
 				"id": "chatcmpl-2",
 				"model": "gpt-4o",
-				"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call_abc", "type": "function", "function": {"name": "get_weather", "arguments": {"key":"value"}}}]}, "finish_reason": "tool_calls"}],
+				"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call_abc", "type": "function", "function": {"name": "get_weather", "arguments": "{\"key\":\"value\"}"}}]}, "finish_reason": "tool_calls"}],
 				"usage": {"prompt_tokens": 20, "completion_tokens": 8}
 			}`),
 			wantModel:        "gpt-4o",
@@ -295,8 +309,8 @@ func TestDecodeResponse(t *testing.T) {
 				"id": "chatcmpl-8",
 				"model": "gpt-4o",
 				"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
-					{"id": "call_1", "type": "function", "function": {"name": "fn_a", "arguments": {"key":"value"}}},
-					{"id": "call_2", "type": "function", "function": {"name": "fn_b", "arguments": {"key":"value"}}}
+					{"id": "call_1", "type": "function", "function": {"name": "fn_a", "arguments": "{\"key\":\"value\"}"}},
+					{"id": "call_2", "type": "function", "function": {"name": "fn_b", "arguments": "{\"key\":\"value\"}"}}
 				]}, "finish_reason": "tool_calls"}],
 				"usage": {"prompt_tokens": 40, "completion_tokens": 12}
 			}`),
@@ -431,5 +445,87 @@ func TestDecodeResponse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDecodeResponse_TopLevelErrorObject covers a non-streaming body that
+// carries the spec's ErrorResponse envelope ({"error": Error}) on an HTTP 200
+// response — the shape OpenAI-compatible gateways such as OpenRouter document
+// returning. transport only builds a failure.APIError for non-2xx statuses, so
+// without this check the body decodes to a zero-block "successful" assistant
+// turn and the caller sees an empty answer instead of the upstream failure.
+func TestDecodeResponse_TopLevelErrorObject(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			// OpenRouter's HTTP-200 form: `code` is the HTTP status the
+			// upstream provider actually returned.
+			name:       "numeric code alongside an empty assistant message",
+			body:       `{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"","refusal":null},"finish_reason":"error"}],"error":{"code":429,"message":"upstream rate limited"}}`,
+			wantStatus: 429,
+		},
+		{
+			name:       "spec-shaped error envelope with no choices",
+			body:       `{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"too long","param":null}}`,
+			wantStatus: 0,
+			wantCode:   "context_length_exceeded",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp, err := openaiapi.DecodeResponse([]byte(tc.body))
+			if err == nil {
+				t.Fatalf("DecodeResponse() error = nil, want an API error (resp=%+v)", resp)
+			}
+			var apiErr *failure.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("DecodeResponse() error = %v (%T), want *failure.APIError", err, err)
+			}
+			if apiErr.Status != tc.wantStatus {
+				t.Errorf("APIError.Status = %d, want %d", apiErr.Status, tc.wantStatus)
+			}
+			if tc.wantCode != "" && apiErr.Code != tc.wantCode {
+				t.Errorf("APIError.Code = %q, want %q", apiErr.Code, tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestDecodeResponse_NullErrorMemberDecodesNormally guards the opposite
+// failure: an explicit "error":null next to a real choice is a success.
+func TestDecodeResponse_NullErrorMemberDecodesNormally(t *testing.T) {
+	t.Parallel()
+
+	body := `{"id":"x","model":"m","error":null,"choices":[{"index":0,"message":{"role":"assistant","content":"hi","refusal":null},"finish_reason":"stop"}]}`
+	resp, err := openaiapi.DecodeResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v, want success", err)
+	}
+	if len(resp.Message.Blocks) != 1 {
+		t.Fatalf("Blocks = %+v, want one text block", resp.Message.Blocks)
+	}
+}
+
+// TestMapFinishReason_Error confirms the non-spec "error" finish_reason some
+// OpenAI-compatible gateways emit never reads as a clean stop.
+func TestMapFinishReason_Error(t *testing.T) {
+	t.Parallel()
+
+	body := `{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"","refusal":null},"finish_reason":"error"}]}`
+	resp, err := openaiapi.DecodeResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	if resp.FinishReason == stream.FinishReasonStop {
+		t.Errorf("FinishReason = %q, want anything but a clean stop", resp.FinishReason)
 	}
 }

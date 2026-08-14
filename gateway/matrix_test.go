@@ -293,7 +293,7 @@ func TestMatrix_ThinkingOpaqueState_SameDialectReplaySurvives(t *testing.T) {
 			Message: &content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					&content.ThinkingBlock{Thinking: "step by step", Signature: "sig-anthropic-777"},
+					content.NewSignedThinkingBlock("step by step", "sig-anthropic-777", "anthropic", nil, ""),
 					&content.TextBlock{Text: "42"},
 				},
 			}},
@@ -389,7 +389,10 @@ func TestMatrix_ThinkingOpaqueState_SameDialectReplaySurvives(t *testing.T) {
 // from every other dialect's ProviderState -- no bundled codec's outbound
 // encoder ever reads Signature, and Anthropic's own outbound encoder never
 // reads ProviderState, so these pairs demonstrate the property by
-// construction.
+// construction. Their fixtures are labelled with the INGRESS dialect that
+// minted them, because a signature now carries its issuer: an unlabelled one
+// would be refused by Anthropic's own ingress encoder before the cross-dialect
+// question was ever reached, and the test would pass for the wrong reason.
 //
 // The final 2 pairs are the regression case for a real bug found in this
 // task's own integration testing: geminiapi and openairesponses both store
@@ -422,7 +425,7 @@ func TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded(t *testing.T) {
 			name:      "anthropic_signature_not_forwarded_to_gemini_target",
 			ingress:   model.APIFormatAnthropic,
 			target:    model.APIFormatGemini,
-			block:     &content.ThinkingBlock{Thinking: "reasoning", Signature: "sig-anthropic-secret-abc"},
+			block:     content.NewSignedThinkingBlock("reasoning", "sig-anthropic-secret-abc", "anthropic", nil, ""),
 			secretSub: "sig-anthropic-secret-abc",
 		},
 		{
@@ -437,7 +440,7 @@ func TestMatrix_ThinkingOpaqueState_CrossDialectNotForwarded(t *testing.T) {
 			name:      "anthropic_signature_not_forwarded_to_responses_target",
 			ingress:   model.APIFormatAnthropic,
 			target:    model.APIFormatOpenAIResponses,
-			block:     &content.ThinkingBlock{Thinking: "reasoning", Signature: "sig-anthropic-secret-def"},
+			block:     content.NewSignedThinkingBlock("reasoning", "sig-anthropic-secret-def", "anthropic", nil, ""),
 			secretSub: "sig-anthropic-secret-def",
 		},
 		{

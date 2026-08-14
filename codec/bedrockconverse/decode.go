@@ -2,6 +2,7 @@ package bedrockconverse
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 
@@ -63,11 +64,19 @@ func normalizeUsage(wire *responseUsage) (*usage.Usage, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheRead, err := wire.CacheReadInputTokens.TokenCount(usagenorm.FieldCacheReadTokens)
+	// AWS marks only inputTokens, outputTokens and totalTokens @required on
+	// com.amazonaws.bedrockruntime#TokenUsage; cacheReadInputTokens and
+	// cacheWriteInputTokens carry no @required trait, so a conforming response
+	// may omit them or send them as null on any turn that read from or wrote to
+	// no cache. OptionalTokenCount maps null to zero while keeping the strict
+	// numeric validation for present values; TokenCount would discard an
+	// otherwise complete response over an accounting field. Identical treatment
+	// to codec/anthropicapi for the identical two fields.
+	cacheRead, err := wire.CacheReadInputTokens.OptionalTokenCount(usagenorm.FieldCacheReadTokens)
 	if err != nil {
 		return nil, err
 	}
-	cacheWrite, err := wire.CacheWriteInputTokens.TokenCount(usagenorm.FieldCacheCreationTokens)
+	cacheWrite, err := wire.CacheWriteInputTokens.OptionalTokenCount(usagenorm.FieldCacheCreationTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +85,6 @@ func normalizeUsage(wire *responseUsage) (*usage.Usage, error) {
 		OutputTokens:        output,
 		CacheReadTokens:     cacheRead,
 		CacheCreationTokens: cacheWrite,
-	}
-	if err := usagenorm.ValidateUsage(normalized); err != nil {
-		return nil, err
 	}
 	return &normalized, nil
 }
@@ -106,6 +112,8 @@ func decodeContentBlock(block converseContentBlock) (content.Block, error) {
 		return decodeImage(block.Image)
 	case block.Document != nil:
 		return decodeDocument(block.Document)
+	case block.Audio != nil:
+		return decodeAudio(block.Audio)
 	case block.ReasoningContent != nil:
 		reasoning := block.ReasoningContent
 		reasoningVariants := 0
@@ -119,12 +127,19 @@ func decodeContentBlock(block converseContentBlock) (content.Block, error) {
 			return nil, &DecodeError{Reason: "reasoningContent must contain exactly one recognized variant"}
 		}
 		if len(reasoning.RedactedContent) > 0 {
-			return nil, &DecodeError{Reason: "redacted reasoning content has no shared representation"}
+			encoded, _ := json.Marshal(base64.StdEncoding.EncodeToString(reasoning.RedactedContent))
+			return content.NewThinkingBlock("", "", encoded, providerStateFormatBedrockRedacted), nil
 		}
 		if reasoning.ReasoningText.Text == nil {
 			return nil, &DecodeError{Reason: "reasoningText is missing text"}
 		}
-		return &content.ThinkingBlock{Thinking: *reasoning.ReasoningText.Text, Signature: reasoning.ReasoningText.Signature}, nil
+		// Stamped with THIS dialect as it comes off the wire. Converse fronts
+		// the same Claude models as the Anthropic Messages API and the
+		// signatures are not interchangeable, so the label is the only thing
+		// that keeps the two apart once the block is in the neutral transcript.
+		signature := reasoning.ReasoningText.Signature
+		return content.NewSignedThinkingBlock(
+			*reasoning.ReasoningText.Text, signature, signatureFormatFor(signature), nil, ""), nil
 	case block.ToolUse != nil:
 		input, err := decodeToolInput(block.ToolUse.Input)
 		if err != nil {
@@ -150,6 +165,9 @@ func contentBlockVariantCount(block converseContentBlock) int {
 		count++
 	}
 	if block.Document != nil {
+		count++
+	}
+	if block.Audio != nil {
 		count++
 	}
 	if block.ReasoningContent != nil {
@@ -199,19 +217,78 @@ func decodeDocument(document *documentContent) (*content.DocumentBlock, error) {
 		MediaType: documentMediaType(document.Format),
 		Name:      document.Name,
 	}
+	// DocumentSource has four members. bytes and text map onto
+	// content.DocumentBlock's two payload fields; s3Location and content have
+	// no neutral counterpart at all, so they are named rather than folded into
+	// the arity error — an operator reading "must contain exactly one variant"
+	// against a source that plainly holds exactly one has no way to tell that
+	// the member itself is the problem.
 	hasBytes := len(document.Source.Bytes) > 0
 	hasText := document.Source.Text != nil
-	if hasBytes == hasText {
+	switch {
+	case document.Source.S3Location != nil:
+		return nil, &DecodeError{Reason: "document source s3Location has no neutral representation; content.DocumentBlock carries a payload, not a storage reference"}
+	case len(document.Source.Content) > 0:
+		return nil, &DecodeError{Reason: "document source content blocks have no neutral representation; content.DocumentBlock carries a single body, not a block list"}
+	case hasBytes == hasText:
 		return nil, &DecodeError{Reason: "document content block source must contain exactly one variant"}
-	}
-	if hasBytes {
+	case hasBytes:
 		decoded.Data = append([]byte(nil), document.Source.Bytes...)
-	} else if document.Source.Text != nil {
+	default:
 		decoded.Text = *document.Source.Text
-	} else {
-		return nil, &DecodeError{Reason: "document content block has empty source"}
 	}
 	return decoded, nil
+}
+
+// decodeAudio maps Converse's AudioBlock onto a neutral audio block.
+//
+// The format map is audioFormat read backwards, and it is an allowlist for the
+// same reason: AudioFormat carries members the shared vocabulary has no name
+// for (pcm, opus, mka, mkv, mpga, x-aac), and AWS may add more. Synthesising
+// "audio/pcm" the way decodeImage synthesises "image/png" would mint a media
+// type no other codec in this module recognizes, which then fails at the far
+// end of a cross-provider replay instead of here.
+func decodeAudio(audio *audioContent) (*content.AudioBlock, error) {
+	if audio == nil || audio.Format == "" {
+		return nil, &DecodeError{Reason: "audio content block is incomplete"}
+	}
+	mediaType := audioMediaType(audio.Format)
+	if mediaType == "" {
+		return nil, &DecodeError{Reason: "audio content block format " + audio.Format + " has no neutral media type"}
+	}
+	if audio.Source.S3Location != nil {
+		return nil, &DecodeError{Reason: "audio source s3Location has no neutral representation; content.AudioBlock carries a payload, not a storage reference"}
+	}
+	if len(audio.Source.Bytes) == 0 {
+		return nil, &DecodeError{Reason: "audio content block source must contain exactly one variant"}
+	}
+	return &content.AudioBlock{MediaType: mediaType, Data: append([]byte(nil), audio.Source.Bytes...)}, nil
+}
+
+// audioMediaType maps an AudioFormat member back to a shared media type, or ""
+// when the vocabulary has no name for it. Two enum members can select the same
+// media type — "mp3" and "mpeg" are both audio/mpeg, "mp4" and "m4a" are both
+// audio/mp4 — which is why the forward map documents which of each pair it
+// emits.
+func audioMediaType(format string) content.MediaType {
+	switch strings.ToLower(format) {
+	case audioFormatMP3, "mpeg":
+		return content.MediaTypeAudioMPEG
+	case audioFormatWAV:
+		return content.MediaTypeAudioWAV
+	case audioFormatOGG:
+		return content.MediaTypeAudioOGG
+	case audioFormatFLAC:
+		return content.MediaTypeAudioFLAC
+	case audioFormatAAC:
+		return content.MediaTypeAudioAAC
+	case audioFormatMP4, "m4a":
+		return content.MediaTypeAudioMP4
+	case audioFormatWebM:
+		return content.MediaTypeAudioWebM
+	default:
+		return ""
+	}
 }
 
 func decodeToolResult(result *toolResultContent) (*content.ToolResultBlock, error) {

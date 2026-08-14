@@ -110,6 +110,15 @@ func TestStructuredMessageResultRejectsInvalidRepresentations(t *testing.T) {
 		{name: "audio block", msg: assistantMessage(&content.AudioBlock{}), wantReason: inference.MalformedReasonInvalidBlock},
 		{name: "document block", msg: assistantMessage(&content.DocumentBlock{}), wantReason: inference.MalformedReasonInvalidBlock},
 		{name: "tool result block", msg: assistantMessage(&content.ToolResultBlock{}), wantReason: inference.MalformedReasonInvalidBlock},
+		// A refusal is a block the model produced INSTEAD of the structured
+		// output, so it classifies with the other blocks that cannot be a
+		// representation. It became reachable when the OpenAI codecs stopped
+		// overriding a refused turn's finish reason to content_filter (which
+		// StructuredResult rejects before it ever looks at the blocks); without
+		// its own arm it fell through to "nil block", which sends a reader
+		// hunting a malformed payload instead of reporting the decline.
+		{name: "refusal block", msg: assistantMessage(&content.RefusalBlock{Text: "I cannot."}), wantReason: inference.MalformedReasonInvalidBlock},
+		{name: "empty refusal block", msg: assistantMessage(&content.RefusalBlock{}), wantReason: inference.MalformedReasonInvalidBlock},
 		{name: "typed nil text", msg: assistantMessage((*content.TextBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
 		{name: "typed nil thinking", msg: assistantMessage((*content.ThinkingBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
 		{name: "typed nil terminal", msg: assistantMessage((*content.ToolUseBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
@@ -117,6 +126,7 @@ func TestStructuredMessageResultRejectsInvalidRepresentations(t *testing.T) {
 		{name: "typed nil audio", msg: assistantMessage((*content.AudioBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
 		{name: "typed nil document", msg: assistantMessage((*content.DocumentBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
 		{name: "typed nil tool result", msg: assistantMessage((*content.ToolResultBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
+		{name: "typed nil refusal", msg: assistantMessage((*content.RefusalBlock)(nil)), wantReason: inference.MalformedReasonNilBlock},
 	}
 
 	for _, tt := range tests {

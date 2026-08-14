@@ -107,12 +107,16 @@ type geminiTool struct {
 	FunctionDeclarations []functionDeclaration `json:"functionDeclarations,omitempty"`
 }
 
-// functionDeclaration is a callable function exposed to the model. Parameters is
-// a JSON-Schema object describing the arguments.
+// functionDeclaration is a callable function exposed to the model. The argument
+// schema lives in exactly one of two MUTUALLY EXCLUSIVE fields: Parameters, in
+// Gemini's own Schema dialect (an OpenAPI 3.0 subset with an uppercase type
+// enum), or ParametersJSONSchema, which takes a standard JSON Schema verbatim.
+// declareFunction (encode.go) chooses between them; setting both is a 400.
 type functionDeclaration struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description,omitempty"`
+	Parameters           json.RawMessage `json:"parameters,omitempty"`
+	ParametersJSONSchema json.RawMessage `json:"parametersJsonSchema,omitempty"`
 }
 
 // generationConfig maps dialect-neutral Sampling to Gemini's sampling knobs.
@@ -132,8 +136,19 @@ type toolConfig struct {
 	FunctionCallingConfig *functionCallingConfig `json:"functionCallingConfig,omitempty"`
 }
 
+// functionCallingConfig is `toolConfig.functionCallingConfig`. Gemini has no
+// mode meaning "call this one tool": the discovery document defines ANY as
+// "constrained to always predicting a function call", limited to
+// allowedFunctionNames when that list is set. A forced single tool is
+// therefore ANY plus a one-element list, and an unrestricted required choice
+// is ANY with the list omitted.
+//
+// AllowedFunctionNames is a list on the wire even though the neutral
+// vocabulary carries one name, so it stays a slice rather than collapsing to
+// a string: the extra shape is Gemini's, not ours to erase.
 type functionCallingConfig struct {
-	Mode string `json:"mode"`
+	Mode                 string   `json:"mode"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 // thinkingConfig controls Gemini 2.5+ extended thinking. ThinkingBudget is a
@@ -152,18 +167,75 @@ type GenerateContentResponse struct {
 	Candidates    []candidate    `json:"candidates"`
 	UsageMetadata *usageMetadata `json:"usageMetadata"`
 	ModelVersion  string         `json:"modelVersion"`
+
+	// PromptFeedback explains a response that carries no candidates. The
+	// discovery document states the API "returns no candidates at all only if
+	// there was something wrong with the prompt (check prompt_feedback)", so
+	// this is the only place such a response says WHY — there is no error
+	// envelope and the HTTP status is a success. Decoded so that case becomes
+	// a *PromptBlockedError instead of an anonymous failure (decode.go).
+	PromptFeedback *promptFeedback `json:"promptFeedback"`
+
+	// Error carries the `{"error":{...}}` envelope (a google.rpc.Status:
+	// code/message/status) Google can emit as a stream frame AFTER the request
+	// already returned a successful HTTP status. It is modeled here rather than
+	// left unknown because such a frame is otherwise a perfectly valid object
+	// with no candidates — indistinguishable, to a tolerant decoder, from an
+	// uninteresting chunk — so ignoring it let a failed generation finish as a
+	// clean, truncated success. It reuses the same geminiErrorBody this codec's
+	// server direction writes (server_encode.go).
+	Error *geminiErrorBody `json:"error"`
 }
 
 // candidate is one generated alternative. The codec reads candidates[0] only.
+// A non-empty FinishReason is this dialect's ONLY end-of-generation signal —
+// there is no [DONE]-style sentinel — and the v1beta discovery document is
+// explicit that the field is "Optional. Output only. The reason why the model
+// stopped generating tokens. If empty, the model has not stopped generating
+// tokens."
 type candidate struct {
 	Content      geminiContent `json:"content"`
 	FinishReason string        `json:"finishReason"`
 	Index        int           `json:"index"`
 }
 
+// promptFeedback is the content-filter verdict on the REQUEST's prompt, as
+// opposed to a candidate's own finishReason/safetyRatings. BlockReason is set
+// only when the prompt was refused; SafetyRatings holds at most one rating per
+// harm category, with the deciding one flagged.
+type promptFeedback struct {
+	BlockReason   string             `json:"blockReason"`
+	SafetyRatings []wireSafetyRating `json:"safetyRatings"`
+}
+
+// wireSafetyRating is one harm-category rating. It is named apart from the
+// exported SafetyRating (errors.go) because the wire values pass through an
+// allowlist before they are surfaced.
+type wireSafetyRating struct {
+	Category    string `json:"category"`
+	Probability string `json:"probability"`
+	Blocked     bool   `json:"blocked"`
+}
+
 // usageMetadata reports token consumption.
+//
+// ToolUsePromptTokenCount is the discovery document's toolUsePromptTokenCount,
+// "Output only. Number of tokens present in tool-use prompt(s)". It is a
+// published member of UsageMetadata that appears on grounded and
+// code-execution turns, it is billable input, and it is reported apart from
+// promptTokenCount rather than inside it — a full response carries a
+// promptTokensDetails breakdown that sums to promptTokenCount exactly, with
+// toolUsePromptTokensDetails listed separately. Leaving it unmodelled dropped
+// those tokens from the caller's accounting entirely; see normalizeInputUsage
+// in decode.go.
+//
+// The remaining members of the published shape (promptTokensDetails,
+// candidatesTokensDetails, toolUsePromptTokensDetails, cacheTokensDetails,
+// serviceTier) are per-modality breakdowns and labels, not additional token
+// buckets, so they are deliberately not modelled.
 type usageMetadata struct {
 	PromptTokenCount        usagenorm.Count `json:"promptTokenCount"`
+	ToolUsePromptTokenCount usagenorm.Count `json:"toolUsePromptTokenCount"`
 	CandidatesTokenCount    usagenorm.Count `json:"candidatesTokenCount"`
 	CachedContentTokenCount usagenorm.Count `json:"cachedContentTokenCount"`
 	ThoughtsTokenCount      usagenorm.Count `json:"thoughtsTokenCount"`

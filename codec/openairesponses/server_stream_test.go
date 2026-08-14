@@ -24,6 +24,16 @@ func sseEventTypes(t *testing.T, body string) []string {
 	return types
 }
 
+// TestServerStream_NativeEventOrderForText asserts the full served sequence for
+// a text-only response.
+//
+// The expectation below was DELIBERATELY changed when two missing events were
+// added (see server_stream_terminal_test.go for why each is needed):
+// response.in_progress, which now follows response.created at stream open, and
+// response.output_text.done, the terminal for the output_text channel, which
+// now precedes response.content_part.done exactly as the refusal branch's
+// refusal.done precedes it. Neither is a relaxation: this test still pins an
+// exact sequence of an exact length, it is just a longer and more faithful one.
 func TestServerStream_NativeEventOrderForText(t *testing.T) {
 	t.Parallel()
 	c := openairesponses.Codec{}
@@ -45,10 +55,12 @@ func TestServerStream_NativeEventOrderForText(t *testing.T) {
 	got := sseEventTypes(t, rec.Body.String())
 	want := []string{
 		"response.created",
+		"response.in_progress",
 		"response.output_item.added",
 		"response.content_part.added",
 		"response.output_text.delta",
 		"response.output_text.delta",
+		"response.output_text.done",
 		"response.content_part.done",
 		"response.output_item.done",
 		"response.completed",
@@ -87,6 +99,7 @@ func TestServerStream_ToolCallEvents(t *testing.T) {
 	got := sseEventTypes(t, rec.Body.String())
 	want := []string{
 		"response.created",
+		"response.in_progress",
 		"response.output_item.added",
 		"response.function_call_arguments.delta",
 		"response.function_call_arguments.delta",
@@ -175,6 +188,7 @@ func TestServerStream_ReasoningEvents(t *testing.T) {
 	got := sseEventTypes(t, rec.Body.String())
 	want := []string{
 		"response.created",
+		"response.in_progress",
 		"response.output_item.added",
 		"response.reasoning_summary_text.delta",
 		"response.reasoning_summary_text.delta",
@@ -189,6 +203,38 @@ func TestServerStream_ReasoningEvents(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("event[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestServerStream_DecodedEncryptedReasoningRoundTripsInItemDone(t *testing.T) {
+	t.Parallel()
+	chunks, err := (openairesponses.Codec{}).DecodeEvent([]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","encrypted_content":"opaque-state"}}`))
+	if err != nil {
+		t.Fatalf("DecodeEvent: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	enc, _ := (openairesponses.Codec{}).OpenStream(rec)
+	for _, chunk := range chunks {
+		if err := enc.WriteChunk(chunk); err != nil {
+			t.Fatalf("WriteChunk: %v", err)
+		}
+	}
+	_ = enc.Finish(stream.StreamResult{})
+	if !strings.Contains(rec.Body.String(), `"encrypted_content":"opaque-state"`) {
+		t.Fatalf("encrypted reasoning lost: %s", rec.Body.String())
+	}
+}
+
+func TestServerStream_LengthUsesIncompleteTerminalEvent(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	enc, _ := (openairesponses.Codec{}).OpenStream(rec)
+	if err := enc.Finish(stream.StreamResult{FinishReason: stream.FinishReasonLength}); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	types := sseEventTypes(t, rec.Body.String())
+	if got := types[len(types)-1]; got != "response.incomplete" {
+		t.Fatalf("terminal event = %q, want response.incomplete; body=%s", got, rec.Body.String())
 	}
 }
 

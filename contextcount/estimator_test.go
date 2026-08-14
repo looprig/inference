@@ -7,11 +7,17 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	"github.com/looprig/inference/codec/anthropicapi"
+	"github.com/looprig/inference/codec/bedrockconverse"
+	"github.com/looprig/inference/codec/geminiapi"
+	"github.com/looprig/inference/codec/openaiapi"
+	"github.com/looprig/inference/codec/openairesponses"
 	model "github.com/looprig/inference/model"
 )
 
@@ -21,10 +27,18 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 		format model.APIFormat
 		want   content.TokenCount
 	}{
-		{name: "OpenAI", format: model.APIFormatOpenAI, want: 199},
-		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses, want: 253},
-		{name: "Anthropic", format: model.APIFormatAnthropic, want: 231},
+		{name: "OpenAI", format: model.APIFormatOpenAI, want: 201},
+		// 222, up from 219: the Responses encoder now emits FunctionTool's
+		// required `strict` member, which it previously omitted. The golden
+		// measures the real encoded body, so a correct encoder change moves it.
+		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses, want: 222},
+		// 224, down from 231: the Anthropic encoder projects adjacent neutral
+		// user-role turns into the single user message its wire conversation
+		// model requires. The tool-result turn and following image turn in this
+		// fixture now share one message envelope.
+		{name: "Anthropic", format: model.APIFormatAnthropic, want: 224},
 		{name: "Gemini", format: model.APIFormatGemini, want: 213},
+		{name: "BedrockConverse", format: model.APIFormatBedrockConverse, want: 213},
 	}
 
 	for _, tt := range tests {
@@ -41,6 +55,53 @@ func TestEstimatorGoldenCounts(t *testing.T) {
 			}
 			if got.Quality != CountQualityHeuristicEstimate {
 				t.Errorf("Quality = %v, want heuristic estimate", got.Quality)
+			}
+		})
+	}
+}
+
+// TestEstimatorProjectsDialectRequestBody pins the invariant that counting
+// measures exactly the body inference would send in the model's dialect: the
+// bundled encoder's output, byte for byte.
+func TestEstimatorProjectsDialectRequestBody(t *testing.T) {
+	tests := []struct {
+		name   string
+		format model.APIFormat
+		encode func(inference.Request) ([]byte, error)
+	}{
+		{name: "OpenAI", format: model.APIFormatOpenAI, encode: func(req inference.Request) ([]byte, error) {
+			return openaiapi.EncodeRequest(req, false)
+		}},
+		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses, encode: func(req inference.Request) ([]byte, error) {
+			return openairesponses.EncodeRequest(req, false)
+		}},
+		{name: "Anthropic", format: model.APIFormatAnthropic, encode: func(req inference.Request) ([]byte, error) {
+			return anthropicapi.EncodeRequest(req, false)
+		}},
+		{name: "Gemini", format: model.APIFormatGemini, encode: geminiapi.EncodeRequest},
+		{name: "BedrockConverse", format: model.APIFormatBedrockConverse, encode: bedrockconverse.EncodeRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := completeRequest(tt.format, nil)
+			want, err := tt.encode(req)
+			if err != nil {
+				t.Fatalf("dialect encode error = %v", err)
+			}
+			got, err := encodeRequest(req)
+			if err != nil {
+				t.Fatalf("encodeRequest() error = %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("encoded body =\n%s\nwant\n%s", got, want)
+			}
+			count, err := NewEstimator().CountContext(context.Background(), req)
+			if err != nil {
+				t.Fatalf("CountContext() error = %v", err)
+			}
+			if wantTokens := estimatedTokensForBytes(uint64(len(want))); count.InputTokens != wantTokens {
+				t.Errorf("InputTokens = %d, want %d", count.InputTokens, wantTokens)
 			}
 		})
 	}
@@ -113,6 +174,11 @@ func TestEstimatorCountsCompleteRequest(t *testing.T) {
 		{name: "Gemini tool and schema", format: model.APIFormatGemini, mutate: addTool},
 		{name: "Gemini image", format: model.APIFormatGemini, mutate: addImage},
 		{name: "Gemini sampling", format: model.APIFormatGemini, mutate: addSampling},
+		{name: "BedrockConverse system", format: model.APIFormatBedrockConverse, mutate: addSystem},
+		{name: "BedrockConverse message", format: model.APIFormatBedrockConverse, mutate: addMessage},
+		{name: "BedrockConverse tool and schema", format: model.APIFormatBedrockConverse, mutate: addTool},
+		{name: "BedrockConverse image", format: model.APIFormatBedrockConverse, mutate: addImage},
+		{name: "BedrockConverse sampling", format: model.APIFormatBedrockConverse, mutate: addSampling},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +210,7 @@ func TestEstimatorCountsToolResultErrorMetadata(t *testing.T) {
 		{name: "OpenAIResponses intentionally omits IsError", format: model.APIFormatOpenAIResponses, wantChanged: false},
 		{name: "Anthropic includes IsError", format: model.APIFormatAnthropic, wantChanged: true},
 		{name: "Gemini intentionally omits IsError", format: model.APIFormatGemini, wantChanged: false},
+		{name: "BedrockConverse includes IsError as a status", format: model.APIFormatBedrockConverse, wantChanged: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -164,6 +231,7 @@ func TestEstimatorCountsHistoricalThinking(t *testing.T) {
 		{name: "OpenAIResponses includes thinking as a reasoning item", format: model.APIFormatOpenAIResponses, wantChanged: true},
 		{name: "Anthropic includes thinking and signature", format: model.APIFormatAnthropic, wantChanged: true},
 		{name: "Gemini intentionally omits thinking", format: model.APIFormatGemini, wantChanged: false},
+		{name: "BedrockConverse includes thinking as reasoning content", format: model.APIFormatBedrockConverse, wantChanged: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,6 +254,7 @@ func TestEstimatorCountsEffortByDialect(t *testing.T) {
 		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, false), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, false), wantChanged: false},
 		{name: "Gemini effort with thinking", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, true), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, true), wantChanged: true},
 		{name: "Gemini gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, false), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, false), wantChanged: false},
+		{name: "BedrockConverse intentionally omits effort", before: requestWithEffort(model.APIFormatBedrockConverse, model.EffortNone, true), after: requestWithEffort(model.APIFormatBedrockConverse, model.EffortLow, true), wantChanged: false},
 	}
 
 	for _, tt := range tests {
@@ -247,6 +316,7 @@ func TestEstimatorIgnoresHistoricalUsage(t *testing.T) {
 		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses},
 		{name: "Anthropic", format: model.APIFormatAnthropic},
 		{name: "Gemini", format: model.APIFormatGemini},
+		{name: "BedrockConverse", format: model.APIFormatBedrockConverse},
 	}
 
 	for _, tt := range tests {
@@ -327,21 +397,35 @@ func TestEstimatorTypedFailures(t *testing.T) {
 			wantEncoding: model.APIFormatOpenAIResponses,
 		},
 		{
-			name:         "OpenAIResponses unsupported document",
+			// Responses models documents (input_file) but not audio: its input
+			// content union is input_text|input_image|input_file, and the
+			// spec's InputAudio object is reachable only from the Evals API.
+			// Chat Completions, which does model audio, is deliberately not
+			// listed here.
+			name:         "OpenAIResponses unsupported audio",
 			estimator:    NewEstimator(),
-			req:          requestWithDocument(model.APIFormatOpenAIResponses),
+			req:          requestWithAudio(model.APIFormatOpenAIResponses),
 			wantEncoding: model.APIFormatOpenAIResponses,
 		},
 		{
+			// Anthropic models RequestDocumentBlock, so a text/plain document
+			// now encodes. What it has no source member for is a non-PDF
+			// BINARY document: Base64PDFSource.media_type is const
+			// "application/pdf".
 			name:         "Anthropic unsupported document",
 			estimator:    NewEstimator(),
-			req:          requestWithDocument(model.APIFormatAnthropic),
+			req:          requestWithBinaryDocument(model.APIFormatAnthropic),
 			wantEncoding: model.APIFormatAnthropic,
 		},
 		{
+			// Gemini models documents and audio through Part's inlineData
+			// (Blob) and text members, so a PDF, an audio clip and extracted
+			// document text all encode now. What remains unencodable is a
+			// document whose BYTES carry a media type absent from Blob's
+			// documented list — .docx and .xlsx among them.
 			name:         "Gemini unsupported document",
 			estimator:    NewEstimator(),
-			req:          requestWithDocument(model.APIFormatGemini),
+			req:          requestWithBinaryDocument(model.APIFormatGemini),
 			wantEncoding: model.APIFormatGemini,
 		},
 	}
@@ -398,7 +482,7 @@ func TestEstimatorCapability(t *testing.T) {
 	want := CounterCapability{
 		Transport:    CounterTransportLocal,
 		Retention:    RetentionNone,
-		TokenizerRev: TokenizerRevision("bundled-openai-responses-anthropic-gemini-request-bytes-div4-v1"),
+		TokenizerRev: TokenizerRevision("bundled-openai-responses-anthropic-gemini-bedrock-request-bytes-div4-v3"),
 		Quality:      CountQualityHeuristicEstimate,
 	}
 	tests := []struct {
@@ -434,6 +518,7 @@ func TestEstimatorDeterminismAndInputIntegrity(t *testing.T) {
 		{name: "OpenAIResponses", format: model.APIFormatOpenAIResponses},
 		{name: "Anthropic", format: model.APIFormatAnthropic},
 		{name: "Gemini", format: model.APIFormatGemini},
+		{name: "BedrockConverse", format: model.APIFormatBedrockConverse},
 	}
 
 	for _, tt := range tests {
@@ -515,10 +600,20 @@ func requestWithThinking(format model.APIFormat, include bool) inference.Request
 	req := minimalRequest(format)
 	blocks := []content.Block{&content.TextBlock{Text: "assistant answer"}}
 	if include {
-		blocks = append(blocks, &content.ThinkingBlock{
-			Thinking:  "a deliberately long historical reasoning trace",
-			Signature: "a-deliberately-long-provider-signature",
-		})
+		// Carry Responses-issued provider state so the reasoning item is
+		// replayable. Responses drops a reasoning item that has no issued id,
+		// because ReasoningItem.required includes "id" and inventing one is a
+		// 400; without state this fixture would encode identically with and
+		// without thinking and the test would assert nothing. Dialects that do
+		// not own this format ignore the state via ReplayableAs and continue to
+		// project Thinking/Signature as before.
+		blocks = append(blocks, content.NewSignedThinkingBlock(
+			"a deliberately long historical reasoning trace",
+			"a-deliberately-long-provider-signature",
+			signatureFormatOf(format),
+			json.RawMessage(`{"id":"rs_historical","type":"reasoning","summary":[],"encrypted_content":"a-deliberately-long-encrypted-reasoning-blob"}`),
+			"openai-responses",
+		))
 	}
 	req.Messages = content.AgenticMessages{&content.AIMessage{Message: content.Message{
 		Role:   content.RoleAssistant,
@@ -527,14 +622,47 @@ func requestWithThinking(format model.APIFormat, include bool) inference.Request
 	return req
 }
 
+// signatureFormatOf labels a fixture's reasoning signature with the dialect
+// under test. A signature is verified by the endpoint that minted it, so these
+// dialect-parameterised fixtures cannot share one label: the Anthropic and
+// Bedrock encoders refuse a signature that is not theirs, which is the point of
+// the label. The dialects with no signature wire field at all get none, and
+// their encoders never read the field.
+func signatureFormatOf(format model.APIFormat) string {
+	switch format {
+	case model.APIFormatAnthropic:
+		return "anthropic"
+	case model.APIFormatBedrockConverse:
+		return "bedrock-converse"
+	default:
+		return ""
+	}
+}
+
 func requestWithEffort(format model.APIFormat, effort model.Effort, thinkingCap bool) inference.Request {
 	req := minimalRequest(format)
 	req.Model.Caps.Thinking = thinkingCap
+	// A thinking-capable model must also say WHICH thinking request shape it
+	// takes: the Anthropic encoder refuses to guess between the two spellings
+	// its API serves concurrently (UndeclaredThinkingDialectError).
+	req.Model.Caps.ThinkingDialect = model.ThinkingDialectAdaptive
 	req.Override = &model.Sampling{Effort: effort}
 	return req
 }
 
 func completeRequest(format model.APIFormat, usage *content.Usage) inference.Request {
+	req := dialectNeutralCompleteRequest(format, usage)
+	if format == model.APIFormatBedrockConverse {
+		// Converse rejects a committed user turn after tool results, so the
+		// image turn precedes the tool exchange. The content is otherwise
+		// identical to the other dialects' complete request.
+		m := req.Messages
+		req.Messages = content.AgenticMessages{m[0], m[1], m[4], m[2], m[3]}
+	}
+	return req
+}
+
+func dialectNeutralCompleteRequest(format model.APIFormat, usage *content.Usage) inference.Request {
 	temperature := 0.25
 	topP := 0.9
 	maxTokens := 64
@@ -543,7 +671,10 @@ func completeRequest(format model.APIFormat, usage *content.Usage) inference.Req
 			Provider:  "test-provider",
 			APIFormat: format,
 			Name:      "test-model",
-			Caps:      model.Capabilities{Tools: true, AcceptsImages: true, Thinking: true},
+			Caps: model.Capabilities{
+				Tools: true, AcceptsImages: true,
+				Thinking: true, ThinkingDialect: model.ThinkingDialectAdaptive,
+			},
 			Sampling: model.Sampling{
 				Temperature: &temperature,
 				TopP:        &topP,
@@ -562,7 +693,7 @@ func completeRequest(format model.APIFormat, usage *content.Usage) inference.Req
 			}}},
 			&content.AIMessage{Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
 				&content.TextBlock{Text: "world"},
-				&content.ThinkingBlock{Thinking: "historical reasoning", Signature: "provider-signature"},
+				content.NewSignedThinkingBlock("historical reasoning", "provider-signature", signatureFormatOf(format), nil, ""),
 				&content.ToolUseBlock{ID: testToolID, Name: testToolName, Input: json.RawMessage(testToolInput)},
 			}}, Usage: usage},
 			&content.ToolResultMessage{
@@ -630,15 +761,124 @@ func requestWithInvalidToolSchema(format model.APIFormat) inference.Request {
 	return req
 }
 
-func requestWithDocument(format model.APIFormat) inference.Request {
+// requestWithBinaryDocument carries a document whose payload is binary and
+// whose media type is not application/pdf — the one document shape the
+// Anthropic dialect cannot source, because both of its payload-carrying source
+// members declare their media_type as a const.
+func requestWithBinaryDocument(format model.APIFormat) inference.Request {
 	req := minimalRequest(format)
 	req.Messages = content.AgenticMessages{&content.UserMessage{Message: content.Message{
 		Role: content.RoleUser,
 		Blocks: []content.Block{&content.DocumentBlock{
-			MediaType: content.MediaTypeDocumentText,
-			Name:      "notes.txt",
-			Text:      "document contents",
+			MediaType: content.MediaTypeDocumentDOCX,
+			Name:      "spec.docx",
+			Data:      []byte{0x50, 0x4b, 0x03, 0x04},
 		}},
+	}}}
+	return req
+}
+
+func requestWithAudio(format model.APIFormat) inference.Request {
+	req := minimalRequest(format)
+	req.Messages = content.AgenticMessages{&content.UserMessage{Message: content.Message{
+		Role: content.RoleUser,
+		Blocks: []content.Block{&content.AudioBlock{
+			MediaType: content.MediaTypeAudioWAV,
+			Data:      []byte("RIFF"),
+		}},
+	}}}
+	return req
+}
+
+// TestEstimatorCountsTextDocumentContents pins that a text document's contents
+// reach the estimate. The sibling binary-document case is already covered by
+// TestEstimatorRejects..., which asserts a refusal; this is the accepted half,
+// and it was the one left unexercised — requestWithDocument sat unused until
+// staticcheck reported it, which is exactly the shape of an untested modality.
+//
+// The assertion is that the count RISES, not that it merely changes: an
+// estimator that dropped the document would leave a request whose only block is
+// the document indistinguishable from one carrying an empty message.
+func TestEstimatorCountsTextDocumentContents(t *testing.T) {
+	formats := []model.APIFormat{
+		model.APIFormatOpenAI,
+		model.APIFormatOpenAIResponses,
+		model.APIFormatAnthropic,
+		model.APIFormatGemini,
+		model.APIFormatBedrockConverse,
+	}
+
+	for _, format := range formats {
+		t.Run(string(format), func(t *testing.T) {
+			base, err := NewEstimator().CountContext(context.Background(), minimalRequest(format))
+			if err != nil {
+				t.Fatalf("base CountContext() error = %v", err)
+			}
+			// "notes", not "notes.txt": a period is legal in every other
+			// dialect and illegal in Bedrock's, which is the subject of
+			// TestEstimatorRejectsADottedDocumentNameOnBedrockOnly below.
+			withDoc, err := NewEstimator().CountContext(context.Background(), requestWithDocument(format, "notes"))
+			if err != nil {
+				t.Fatalf("document CountContext() error = %v", err)
+			}
+			if withDoc.InputTokens <= base.InputTokens {
+				t.Errorf("InputTokens = %d with a text document, want more than the %d without one; the document's contents are not reaching the encoded request",
+					withDoc.InputTokens, base.InputTokens)
+			}
+		})
+	}
+}
+
+// TestEstimatorRejectsADottedDocumentNameOnBedrockOnly pins a cross-provider
+// divergence the conformance gate cannot see. AWS's Smithy model constrains
+// DocumentBlock.name only by length (minLength 1, maxLength 200) and declares
+// no pattern, so the schema accepts "notes.txt"; the Converse documentation
+// separately restricts the name to alphanumerics, hyphens, parentheses, square
+// brackets and non-consecutive whitespace. bedrockconverse therefore carries
+// that rule as an encoder allowlist, which is where a gate-blind constraint
+// belongs — and this test is what keeps it honest.
+//
+// The same name is legal for Anthropic, so this is a genuine dialect
+// difference and not a shared restriction: a document that counts fine for one
+// model must be renamed before it can be counted for the other.
+func TestEstimatorRejectsADottedDocumentNameOnBedrockOnly(t *testing.T) {
+	_, err := NewEstimator().CountContext(context.Background(), requestWithDocument(model.APIFormatBedrockConverse, "notes.txt"))
+	if err == nil {
+		t.Fatal("bedrock-converse accepted a document name containing a period; the Converse name allowlist is no longer enforced")
+	}
+	// Assert the REASON, not merely that something failed. Converse has more
+	// than one document rule, and an earlier draft of this test passed against
+	// the "requires a text block" error instead — proving nothing about names.
+	var unsupported *bedrockconverse.UnsupportedBlockError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("bedrock-converse failed with %v, which is not the block rejection this test is about", err)
+	}
+	if !strings.Contains(unsupported.Reason, "name") {
+		t.Fatalf("bedrock-converse rejected the document for %q, not for its name; this case no longer tests the name allowlist", unsupported.Reason)
+	}
+
+	if _, err := NewEstimator().CountContext(context.Background(), requestWithDocument(model.APIFormatAnthropic, "notes.txt")); err != nil {
+		t.Fatalf("anthropic rejected a document name containing a period, so the restriction is not Bedrock-specific after all: %v", err)
+	}
+}
+
+func requestWithDocument(format model.APIFormat, name string) inference.Request {
+	req := minimalRequest(format)
+	req.Messages = content.AgenticMessages{&content.UserMessage{Message: content.Message{
+		Role: content.RoleUser,
+		// The anchor text block is required, not decorative: Converse rejects a
+		// message whose only content is a document ("a document requires a text
+		// block in the same message"). Carrying it in every dialect keeps the
+		// five formats comparable, and keeps the name test below failing for the
+		// reason it claims to test.
+		Blocks: []content.Block{
+			&content.TextBlock{Text: "anchor"},
+			&content.DocumentBlock{
+				MediaType: content.MediaTypeDocumentText,
+				Name:      name,
+				Text:      "document contents",
+			},
+		},
 	}}}
 	return req
 }

@@ -12,11 +12,17 @@ import (
 
 // --- TestEncodeRequest_UnsupportedBlock ---
 
-// A block the OpenAI chat dialect does not model must fail secure with a
-// *openaiapi.UnsupportedBlockError rather than being silently dropped — the
-// model must never receive less than the caller sent. This mirrors the sibling
-// anthropicapi and geminiapi codecs. The tool message is text-only on this
-// wire, so a non-text block in a tool result is likewise refused, not dropped.
+// A block this dialect cannot place in the position it occupies must fail
+// secure with a *openaiapi.UnsupportedBlockError rather than being silently
+// dropped — the model must never receive less than the caller sent. This
+// mirrors the sibling anthropicapi and geminiapi codecs.
+//
+// The tool message is the position with no richer shape available:
+// ChatCompletionRequestToolMessageContentPart is a one-member union over the
+// text part ("For tool messages, only type `text` is supported"), so an image,
+// audio or document block in a tool result is refused however well the user
+// turn models it. A user turn itself now carries all four content-part
+// members — see encode_media_test.go.
 func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 	t.Parallel()
 
@@ -25,20 +31,16 @@ func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 		msgs content.AgenticMessages
 	}{
 		{
-			name: "audio block in a user turn is unsupported",
-			msgs: content.AgenticMessages{userMsg(&content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}})},
-		},
-		{
-			name: "document block in a user turn is unsupported",
-			msgs: content.AgenticMessages{userMsg(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Data: []byte{1}})},
-		},
-		{
 			name: "image block in a tool result is unsupported",
 			msgs: content.AgenticMessages{toolMsg("call_1", imageDataBlock(content.MediaTypeImagePNG, []byte{0x89}))},
 		},
 		{
 			name: "audio block in a tool result is unsupported",
 			msgs: content.AgenticMessages{toolMsg("call_1", &content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}})},
+		},
+		{
+			name: "document block in a tool result is unsupported",
+			msgs: content.AgenticMessages{toolMsg("call_1", &content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: "report.pdf", Data: []byte{1}})},
 		},
 	}
 

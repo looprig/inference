@@ -1,7 +1,6 @@
 package usagenorm_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -39,7 +38,7 @@ func TestAddTokenCounts(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, usage.UsageNormalizationFieldOutputTokens, tt.wantReason, 0, tt.left, tt.right, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldOutputTokens, tt.wantReason, 0, tt.left, tt.right)
 			if !strings.Contains(err.Error(), "left=18446744073709551615") || !strings.Contains(err.Error(), "right=1") {
 				t.Errorf("Error() = %q, want arithmetic operands", err)
 			}
@@ -77,7 +76,7 @@ func TestSubtractTokenCounts(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, usage.UsageNormalizationFieldInputTokens, tt.wantReason, 0, tt.total, tt.wantRight, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldInputTokens, tt.wantReason, 0, tt.total, tt.wantRight)
 			if !strings.Contains(err.Error(), "left=4") || !strings.Contains(err.Error(), "right=5") {
 				t.Errorf("Error() = %q, want arithmetic operands", err)
 			}
@@ -109,74 +108,9 @@ func TestRequireEqual(t *testing.T) {
 				}
 				return
 			}
-			assertNormalizationError(t, err, usage.UsageNormalizationFieldTotalTokens, usage.UsageNormalizationReasonTotalMismatch, 0, tt.reported, tt.calculated, false)
+			assertNormalizationError(t, err, usage.UsageNormalizationFieldTotalTokens, usage.UsageNormalizationReasonTotalMismatch, 0, tt.reported, tt.calculated)
 			if !strings.Contains(err.Error(), "left=3") || !strings.Contains(err.Error(), "right=4") {
 				t.Errorf("Error() = %q, want mismatch operands", err)
-			}
-		})
-	}
-}
-
-func TestNormalizeValidationError(t *testing.T) {
-	t.Parallel()
-
-	known := &content.UsageValidationError{Field: content.UsageFieldReasoningTokens, Reason: content.UsageValidationReasonReasoningExceedsOutput}
-	unknown := &content.UsageValidationError{Field: content.UsageField("FutureTokens"), Reason: content.UsageValidationReason("future invariant")}
-	unknownKnownField := &content.UsageValidationError{Field: content.UsageFieldReasoningTokens, Reason: content.UsageValidationReason("future reasoning invariant")}
-	tests := []struct {
-		name       string
-		input      error
-		wantField  usage.UsageNormalizationField
-		wantReason usage.UsageNormalizationReason
-	}{
-		{name: "known reasoning invariant", input: known, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput},
-		{name: "future invariant", input: unknown, wantField: usage.UsageNormalizationField("FutureTokens"), wantReason: usage.UsageNormalizationReasonDomainValidation},
-		{name: "future invariant on known field", input: unknownKnownField, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonDomainValidation},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := usagenorm.NormalizeValidationError(tt.input)
-			assertNormalizationError(t, err, tt.wantField, tt.wantReason, 0, 0, 0, true)
-			if !errors.Is(err, tt.input) {
-				t.Errorf("NormalizeValidationError() does not preserve exact cause: %v", err)
-			}
-			if strings.Contains(err.Error(), "left=0") || strings.Contains(err.Error(), "right=0") {
-				t.Errorf("NormalizeValidationError() invents unavailable operands: %q", err)
-			}
-		})
-	}
-}
-
-func TestValidateUsage(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		usage      content.Usage
-		wantReason usage.UsageNormalizationReason
-		wantLeft   content.TokenCount
-		wantRight  content.TokenCount
-	}{
-		{name: "zero", usage: content.Usage{}},
-		{name: "reasoning subset", usage: content.Usage{OutputTokens: 3, ReasoningTokens: 3}},
-		{name: "reasoning exceeds output", usage: content.Usage{OutputTokens: 2, ReasoningTokens: 3}, wantReason: usage.UsageNormalizationReasonReasoningExceedsOutput, wantLeft: 2, wantRight: 3},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := usagenorm.ValidateUsage(tt.usage)
-			if tt.wantReason == "" {
-				if err != nil {
-					t.Errorf("ValidateUsage() error = %v", err)
-				}
-				return
-			}
-			assertNormalizationError(t, err, usage.UsageNormalizationFieldReasoningTokens, tt.wantReason, 0, tt.wantLeft, tt.wantRight, true)
-			if !strings.Contains(err.Error(), "left=2") || !strings.Contains(err.Error(), "right=3") {
-				t.Errorf("Error() = %q, want usage operands", err)
 			}
 		})
 	}

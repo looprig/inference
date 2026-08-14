@@ -1,0 +1,1810 @@
+{
+  "$defs": {
+    "AccountId": {
+      "pattern": "^[0-9]{12}$",
+      "type": "string"
+    },
+    "AppliedGuardrailDetails": {
+      "properties": {
+        "guardrailArn": {
+          "$ref": "#/$defs/GuardrailArn"
+        },
+        "guardrailId": {
+          "$ref": "#/$defs/GuardrailId"
+        },
+        "guardrailOrigin": {
+          "$ref": "#/$defs/GuardrailOriginList"
+        },
+        "guardrailOwnership": {
+          "$ref": "#/$defs/GuardrailOwnership"
+        },
+        "guardrailVersion": {
+          "$ref": "#/$defs/GuardrailVersion"
+        }
+      },
+      "type": "object"
+    },
+    "AutomatedReasoningRuleIdentifier": {
+      "maxLength": 12,
+      "pattern": "^[a-z0-9]{12}$",
+      "type": "string"
+    },
+    "CacheDetail": {
+      "properties": {
+        "inputTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ttl": {
+          "$ref": "#/$defs/CacheTTL"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "ttl"
+      ],
+      "type": "object"
+    },
+    "CacheDetailsList": {
+      "items": {
+        "$ref": "#/$defs/CacheDetail"
+      },
+      "type": "array"
+    },
+    "CacheTTL": {
+      "enum": [
+        "1h",
+        "5m"
+      ],
+      "type": "string"
+    },
+    "CitationLocation": {
+      "oneOf": [
+        {
+          "required": [
+            "documentChar"
+          ]
+        },
+        {
+          "required": [
+            "documentChunk"
+          ]
+        },
+        {
+          "required": [
+            "documentPage"
+          ]
+        },
+        {
+          "required": [
+            "searchResultLocation"
+          ]
+        },
+        {
+          "required": [
+            "web"
+          ]
+        }
+      ],
+      "properties": {
+        "documentChar": {
+          "$ref": "#/$defs/DocumentCharLocation"
+        },
+        "documentChunk": {
+          "$ref": "#/$defs/DocumentChunkLocation"
+        },
+        "documentPage": {
+          "$ref": "#/$defs/DocumentPageLocation"
+        },
+        "searchResultLocation": {
+          "$ref": "#/$defs/SearchResultLocation"
+        },
+        "web": {
+          "$ref": "#/$defs/WebLocation"
+        }
+      },
+      "type": "object"
+    },
+    "CitationSourceContentDelta": {
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CitationSourceContentListDelta": {
+      "items": {
+        "$ref": "#/$defs/CitationSourceContentDelta"
+      },
+      "type": "array"
+    },
+    "CitationsDelta": {
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/CitationLocation"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceContent": {
+          "$ref": "#/$defs/CitationSourceContentListDelta"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ContentBlockDelta": {
+      "oneOf": [
+        {
+          "required": [
+            "citation"
+          ]
+        },
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "reasoningContent"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "required": [
+            "toolResult"
+          ]
+        },
+        {
+          "required": [
+            "toolUse"
+          ]
+        }
+      ],
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/CitationsDelta"
+        },
+        "image": {
+          "$ref": "#/$defs/ImageBlockDelta"
+        },
+        "reasoningContent": {
+          "$ref": "#/$defs/ReasoningContentBlockDelta"
+        },
+        "text": {
+          "type": "string"
+        },
+        "toolResult": {
+          "$ref": "#/$defs/ToolResultBlocksDelta"
+        },
+        "toolUse": {
+          "$ref": "#/$defs/ToolUseBlockDelta"
+        }
+      },
+      "type": "object"
+    },
+    "ContentBlockDeltaEvent": {
+      "properties": {
+        "contentBlockIndex": {
+          "$ref": "#/$defs/NonNegativeInteger"
+        },
+        "delta": {
+          "$ref": "#/$defs/ContentBlockDelta"
+        }
+      },
+      "required": [
+        "contentBlockIndex",
+        "delta"
+      ],
+      "type": "object"
+    },
+    "ContentBlockStart": {
+      "oneOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "toolResult"
+          ]
+        },
+        {
+          "required": [
+            "toolUse"
+          ]
+        }
+      ],
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/ImageBlockStart"
+        },
+        "toolResult": {
+          "$ref": "#/$defs/ToolResultBlockStart"
+        },
+        "toolUse": {
+          "$ref": "#/$defs/ToolUseBlockStart"
+        }
+      },
+      "type": "object"
+    },
+    "ContentBlockStartEvent": {
+      "properties": {
+        "contentBlockIndex": {
+          "$ref": "#/$defs/NonNegativeInteger"
+        },
+        "start": {
+          "$ref": "#/$defs/ContentBlockStart"
+        }
+      },
+      "required": [
+        "contentBlockIndex",
+        "start"
+      ],
+      "type": "object"
+    },
+    "ContentBlockStopEvent": {
+      "properties": {
+        "contentBlockIndex": {
+          "$ref": "#/$defs/NonNegativeInteger"
+        }
+      },
+      "required": [
+        "contentBlockIndex"
+      ],
+      "type": "object"
+    },
+    "ConversationRole": {
+      "enum": [
+        "assistant",
+        "system",
+        "user"
+      ],
+      "type": "string"
+    },
+    "ConverseStreamMetadataEvent": {
+      "properties": {
+        "metrics": {
+          "$ref": "#/$defs/ConverseStreamMetrics"
+        },
+        "performanceConfig": {
+          "$ref": "#/$defs/PerformanceConfiguration"
+        },
+        "serviceTier": {
+          "$ref": "#/$defs/ServiceTier"
+        },
+        "trace": {
+          "$ref": "#/$defs/ConverseStreamTrace"
+        },
+        "usage": {
+          "$ref": "#/$defs/TokenUsage"
+        }
+      },
+      "required": [
+        "metrics",
+        "usage"
+      ],
+      "type": "object"
+    },
+    "ConverseStreamMetrics": {
+      "properties": {
+        "latencyMs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "latencyMs"
+      ],
+      "type": "object"
+    },
+    "ConverseStreamOutput": {
+      "oneOf": [
+        {
+          "required": [
+            "contentBlockDelta"
+          ]
+        },
+        {
+          "required": [
+            "contentBlockStart"
+          ]
+        },
+        {
+          "required": [
+            "contentBlockStop"
+          ]
+        },
+        {
+          "required": [
+            "internalServerException"
+          ]
+        },
+        {
+          "required": [
+            "messageStart"
+          ]
+        },
+        {
+          "required": [
+            "messageStop"
+          ]
+        },
+        {
+          "required": [
+            "metadata"
+          ]
+        },
+        {
+          "required": [
+            "modelStreamErrorException"
+          ]
+        },
+        {
+          "required": [
+            "serviceUnavailableException"
+          ]
+        },
+        {
+          "required": [
+            "throttlingException"
+          ]
+        },
+        {
+          "required": [
+            "validationException"
+          ]
+        }
+      ],
+      "properties": {
+        "contentBlockDelta": {
+          "$ref": "#/$defs/ContentBlockDeltaEvent"
+        },
+        "contentBlockStart": {
+          "$ref": "#/$defs/ContentBlockStartEvent"
+        },
+        "contentBlockStop": {
+          "$ref": "#/$defs/ContentBlockStopEvent"
+        },
+        "internalServerException": {
+          "$ref": "#/$defs/InternalServerException"
+        },
+        "messageStart": {
+          "$ref": "#/$defs/MessageStartEvent"
+        },
+        "messageStop": {
+          "$ref": "#/$defs/MessageStopEvent"
+        },
+        "metadata": {
+          "$ref": "#/$defs/ConverseStreamMetadataEvent"
+        },
+        "modelStreamErrorException": {
+          "$ref": "#/$defs/ModelStreamErrorException"
+        },
+        "serviceUnavailableException": {
+          "$ref": "#/$defs/ServiceUnavailableException"
+        },
+        "throttlingException": {
+          "$ref": "#/$defs/ThrottlingException"
+        },
+        "validationException": {
+          "$ref": "#/$defs/ValidationException"
+        }
+      },
+      "type": "object"
+    },
+    "ConverseStreamTrace": {
+      "properties": {
+        "guardrail": {
+          "$ref": "#/$defs/GuardrailTraceAssessment"
+        },
+        "promptRouter": {
+          "$ref": "#/$defs/PromptRouterTrace"
+        }
+      },
+      "type": "object"
+    },
+    "DocumentCharLocation": {
+      "properties": {
+        "documentIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "DocumentChunkLocation": {
+      "properties": {
+        "documentIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "DocumentPageLocation": {
+      "properties": {
+        "documentIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ErrorBlock": {
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailArn": {
+      "maxLength": 2048,
+      "pattern": "^(arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}:[0-9]{12}:guardrail/[a-z0-9]+)$",
+      "type": "string"
+    },
+    "GuardrailAssessment": {
+      "properties": {
+        "appliedGuardrailDetails": {
+          "$ref": "#/$defs/AppliedGuardrailDetails"
+        },
+        "automatedReasoningPolicy": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningPolicyAssessment"
+        },
+        "contentPolicy": {
+          "$ref": "#/$defs/GuardrailContentPolicyAssessment"
+        },
+        "contextualGroundingPolicy": {
+          "$ref": "#/$defs/GuardrailContextualGroundingPolicyAssessment"
+        },
+        "invocationMetrics": {
+          "$ref": "#/$defs/GuardrailInvocationMetrics"
+        },
+        "sensitiveInformationPolicy": {
+          "$ref": "#/$defs/GuardrailSensitiveInformationPolicyAssessment"
+        },
+        "topicPolicy": {
+          "$ref": "#/$defs/GuardrailTopicPolicyAssessment"
+        },
+        "wordPolicy": {
+          "$ref": "#/$defs/GuardrailWordPolicyAssessment"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAssessmentList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAssessment"
+      },
+      "type": "array"
+    },
+    "GuardrailAssessmentListMap": {
+      "additionalProperties": {
+        "$ref": "#/$defs/GuardrailAssessmentList"
+      },
+      "type": "object"
+    },
+    "GuardrailAssessmentMap": {
+      "additionalProperties": {
+        "$ref": "#/$defs/GuardrailAssessment"
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningDifferenceScenarioList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningScenario"
+      },
+      "maxItems": 2,
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningFinding": {
+      "oneOf": [
+        {
+          "required": [
+            "impossible"
+          ]
+        },
+        {
+          "required": [
+            "invalid"
+          ]
+        },
+        {
+          "required": [
+            "noTranslations"
+          ]
+        },
+        {
+          "required": [
+            "satisfiable"
+          ]
+        },
+        {
+          "required": [
+            "tooComplex"
+          ]
+        },
+        {
+          "required": [
+            "translationAmbiguous"
+          ]
+        },
+        {
+          "required": [
+            "valid"
+          ]
+        }
+      ],
+      "properties": {
+        "impossible": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningImpossibleFinding"
+        },
+        "invalid": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningInvalidFinding"
+        },
+        "noTranslations": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningNoTranslationsFinding"
+        },
+        "satisfiable": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningSatisfiableFinding"
+        },
+        "tooComplex": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTooComplexFinding"
+        },
+        "translationAmbiguous": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslationAmbiguousFinding"
+        },
+        "valid": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningValidFinding"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningFindingList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningFinding"
+      },
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningImpossibleFinding": {
+      "properties": {
+        "contradictingRules": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningRuleList"
+        },
+        "logicWarning": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningLogicWarning"
+        },
+        "translation": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslation"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningInputTextReference": {
+      "properties": {
+        "text": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementNaturalLanguageContent"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningInputTextReferenceList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningInputTextReference"
+      },
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningInvalidFinding": {
+      "properties": {
+        "contradictingRules": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningRuleList"
+        },
+        "logicWarning": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningLogicWarning"
+        },
+        "translation": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslation"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningLogicWarning": {
+      "properties": {
+        "claims": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementList"
+        },
+        "premises": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementList"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningLogicWarningType"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningLogicWarningType": {
+      "enum": [
+        "ALWAYS_FALSE",
+        "ALWAYS_TRUE"
+      ],
+      "type": "string"
+    },
+    "GuardrailAutomatedReasoningNoTranslationsFinding": {
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningPoliciesProcessed": {
+      "type": "integer"
+    },
+    "GuardrailAutomatedReasoningPolicyAssessment": {
+      "properties": {
+        "findings": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningFindingList"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailAutomatedReasoningPolicyVersionArn": {
+      "maxLength": 2048,
+      "pattern": "^arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}:[0-9]{12}:automated-reasoning-policy/[a-z0-9]{12}(:([1-9][0-9]{0,11}))?$",
+      "type": "string"
+    },
+    "GuardrailAutomatedReasoningRule": {
+      "properties": {
+        "identifier": {
+          "$ref": "#/$defs/AutomatedReasoningRuleIdentifier"
+        },
+        "policyVersionArn": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningPolicyVersionArn"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningRuleList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningRule"
+      },
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningSatisfiableFinding": {
+      "properties": {
+        "claimsFalseScenario": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningScenario"
+        },
+        "claimsTrueScenario": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningScenario"
+        },
+        "logicWarning": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningLogicWarning"
+        },
+        "translation": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslation"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningScenario": {
+      "properties": {
+        "statements": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementList"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningStatement": {
+      "properties": {
+        "logic": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementLogicContent"
+        },
+        "naturalLanguage": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementNaturalLanguageContent"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningStatementList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningStatement"
+      },
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningStatementLogicContent": {
+      "maxLength": 1000,
+      "type": "string"
+    },
+    "GuardrailAutomatedReasoningStatementNaturalLanguageContent": {
+      "maxLength": 1000,
+      "type": "string"
+    },
+    "GuardrailAutomatedReasoningTooComplexFinding": {
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningTranslation": {
+      "properties": {
+        "claims": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementList"
+        },
+        "confidence": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslationConfidence"
+        },
+        "premises": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningStatementList"
+        },
+        "untranslatedClaims": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningInputTextReferenceList"
+        },
+        "untranslatedPremises": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningInputTextReferenceList"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningTranslationAmbiguousFinding": {
+      "properties": {
+        "differenceScenarios": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningDifferenceScenarioList"
+        },
+        "options": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslationOptionList"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningTranslationConfidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "GuardrailAutomatedReasoningTranslationList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningTranslation"
+      },
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningTranslationOption": {
+      "properties": {
+        "translations": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslationList"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailAutomatedReasoningTranslationOptionList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailAutomatedReasoningTranslationOption"
+      },
+      "maxItems": 2,
+      "type": "array"
+    },
+    "GuardrailAutomatedReasoningValidFinding": {
+      "properties": {
+        "claimsTrueScenario": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningScenario"
+        },
+        "logicWarning": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningLogicWarning"
+        },
+        "supportingRules": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningRuleList"
+        },
+        "translation": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningTranslation"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailContentFilter": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailContentPolicyAction"
+        },
+        "confidence": {
+          "$ref": "#/$defs/GuardrailContentFilterConfidence"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "filterStrength": {
+          "$ref": "#/$defs/GuardrailContentFilterStrength"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailContentFilterType"
+        }
+      },
+      "required": [
+        "action",
+        "confidence",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GuardrailContentFilterConfidence": {
+      "enum": [
+        "HIGH",
+        "LOW",
+        "MEDIUM",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContentFilterList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailContentFilter"
+      },
+      "type": "array"
+    },
+    "GuardrailContentFilterStrength": {
+      "enum": [
+        "HIGH",
+        "LOW",
+        "MEDIUM",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContentFilterType": {
+      "enum": [
+        "HATE",
+        "INSULTS",
+        "MISCONDUCT",
+        "PROMPT_ATTACK",
+        "SEXUAL",
+        "VIOLENCE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContentPolicyAction": {
+      "enum": [
+        "BLOCKED",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContentPolicyAssessment": {
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/GuardrailContentFilterList"
+        }
+      },
+      "required": [
+        "filters"
+      ],
+      "type": "object"
+    },
+    "GuardrailContentPolicyImageUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailContentPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailContextualGroundingFilter": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailContextualGroundingPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "threshold": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailContextualGroundingFilterType"
+        }
+      },
+      "required": [
+        "action",
+        "score",
+        "threshold",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GuardrailContextualGroundingFilterType": {
+      "enum": [
+        "GROUNDING",
+        "RELEVANCE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContextualGroundingFilters": {
+      "items": {
+        "$ref": "#/$defs/GuardrailContextualGroundingFilter"
+      },
+      "type": "array"
+    },
+    "GuardrailContextualGroundingPolicyAction": {
+      "enum": [
+        "BLOCKED",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailContextualGroundingPolicyAssessment": {
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/GuardrailContextualGroundingFilters"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailContextualGroundingPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailCoverage": {
+      "properties": {
+        "images": {
+          "$ref": "#/$defs/GuardrailImageCoverage"
+        },
+        "textCharacters": {
+          "$ref": "#/$defs/GuardrailTextCharactersCoverage"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailCustomWord": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailWordPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "match": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "match"
+      ],
+      "type": "object"
+    },
+    "GuardrailCustomWordList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailCustomWord"
+      },
+      "type": "array"
+    },
+    "GuardrailId": {
+      "maxLength": 2048,
+      "pattern": "^([a-z0-9]+)$",
+      "type": "string"
+    },
+    "GuardrailImageCoverage": {
+      "properties": {
+        "guarded": {
+          "$ref": "#/$defs/ImagesGuarded"
+        },
+        "total": {
+          "$ref": "#/$defs/ImagesTotal"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailInvocationMetrics": {
+      "properties": {
+        "guardrailCoverage": {
+          "$ref": "#/$defs/GuardrailCoverage"
+        },
+        "guardrailProcessingLatency": {
+          "$ref": "#/$defs/GuardrailProcessingLatency"
+        },
+        "usage": {
+          "$ref": "#/$defs/GuardrailUsage"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailManagedWord": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailWordPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "match": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailManagedWordType"
+        }
+      },
+      "required": [
+        "action",
+        "match",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GuardrailManagedWordList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailManagedWord"
+      },
+      "type": "array"
+    },
+    "GuardrailManagedWordType": {
+      "enum": [
+        "PROFANITY"
+      ],
+      "type": "string"
+    },
+    "GuardrailOrigin": {
+      "enum": [
+        "ACCOUNT_ENFORCED",
+        "ORGANIZATION_ENFORCED",
+        "REQUEST"
+      ],
+      "type": "string"
+    },
+    "GuardrailOriginList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailOrigin"
+      },
+      "type": "array"
+    },
+    "GuardrailOutputText": {
+      "type": "string"
+    },
+    "GuardrailOwnership": {
+      "enum": [
+        "CROSS_ACCOUNT",
+        "SELF"
+      ],
+      "type": "string"
+    },
+    "GuardrailPiiEntityFilter": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailSensitiveInformationPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "match": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailPiiEntityType"
+        }
+      },
+      "required": [
+        "action",
+        "match",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GuardrailPiiEntityFilterList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailPiiEntityFilter"
+      },
+      "type": "array"
+    },
+    "GuardrailPiiEntityType": {
+      "enum": [
+        "ADDRESS",
+        "AGE",
+        "AWS_ACCESS_KEY",
+        "AWS_SECRET_KEY",
+        "CA_HEALTH_NUMBER",
+        "CA_SOCIAL_INSURANCE_NUMBER",
+        "CREDIT_DEBIT_CARD_CVV",
+        "CREDIT_DEBIT_CARD_EXPIRY",
+        "CREDIT_DEBIT_CARD_NUMBER",
+        "DRIVER_ID",
+        "EMAIL",
+        "INTERNATIONAL_BANK_ACCOUNT_NUMBER",
+        "IP_ADDRESS",
+        "LICENSE_PLATE",
+        "MAC_ADDRESS",
+        "NAME",
+        "PASSWORD",
+        "PHONE",
+        "PIN",
+        "SWIFT_CODE",
+        "UK_NATIONAL_HEALTH_SERVICE_NUMBER",
+        "UK_NATIONAL_INSURANCE_NUMBER",
+        "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER",
+        "URL",
+        "USERNAME",
+        "US_BANK_ACCOUNT_NUMBER",
+        "US_BANK_ROUTING_NUMBER",
+        "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
+        "US_PASSPORT_NUMBER",
+        "US_SOCIAL_SECURITY_NUMBER",
+        "VEHICLE_IDENTIFICATION_NUMBER"
+      ],
+      "type": "string"
+    },
+    "GuardrailProcessingLatency": {
+      "type": "integer"
+    },
+    "GuardrailRegexFilter": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailSensitiveInformationPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "match": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "regex": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "GuardrailRegexFilterList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailRegexFilter"
+      },
+      "type": "array"
+    },
+    "GuardrailSensitiveInformationPolicyAction": {
+      "enum": [
+        "ANONYMIZED",
+        "BLOCKED",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailSensitiveInformationPolicyAssessment": {
+      "properties": {
+        "piiEntities": {
+          "$ref": "#/$defs/GuardrailPiiEntityFilterList"
+        },
+        "regexes": {
+          "$ref": "#/$defs/GuardrailRegexFilterList"
+        }
+      },
+      "required": [
+        "piiEntities",
+        "regexes"
+      ],
+      "type": "object"
+    },
+    "GuardrailSensitiveInformationPolicyFreeUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailSensitiveInformationPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailTextCharactersCoverage": {
+      "properties": {
+        "guarded": {
+          "$ref": "#/$defs/TextCharactersGuarded"
+        },
+        "total": {
+          "$ref": "#/$defs/TextCharactersTotal"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailTopic": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/GuardrailTopicPolicyAction"
+        },
+        "detected": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/GuardrailTopicType"
+        }
+      },
+      "required": [
+        "action",
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GuardrailTopicList": {
+      "items": {
+        "$ref": "#/$defs/GuardrailTopic"
+      },
+      "type": "array"
+    },
+    "GuardrailTopicPolicyAction": {
+      "enum": [
+        "BLOCKED",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailTopicPolicyAssessment": {
+      "properties": {
+        "topics": {
+          "$ref": "#/$defs/GuardrailTopicList"
+        }
+      },
+      "required": [
+        "topics"
+      ],
+      "type": "object"
+    },
+    "GuardrailTopicPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "GuardrailTopicType": {
+      "enum": [
+        "DENY"
+      ],
+      "type": "string"
+    },
+    "GuardrailTraceAssessment": {
+      "properties": {
+        "actionReason": {
+          "type": "string"
+        },
+        "inputAssessment": {
+          "$ref": "#/$defs/GuardrailAssessmentMap"
+        },
+        "modelOutput": {
+          "$ref": "#/$defs/ModelOutputs"
+        },
+        "outputAssessments": {
+          "$ref": "#/$defs/GuardrailAssessmentListMap"
+        }
+      },
+      "type": "object"
+    },
+    "GuardrailUsage": {
+      "properties": {
+        "automatedReasoningPolicies": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningPoliciesProcessed"
+        },
+        "automatedReasoningPolicyUnits": {
+          "$ref": "#/$defs/GuardrailAutomatedReasoningPolicyUnitsProcessed"
+        },
+        "contentPolicyImageUnits": {
+          "$ref": "#/$defs/GuardrailContentPolicyImageUnitsProcessed"
+        },
+        "contentPolicyUnits": {
+          "$ref": "#/$defs/GuardrailContentPolicyUnitsProcessed"
+        },
+        "contextualGroundingPolicyUnits": {
+          "$ref": "#/$defs/GuardrailContextualGroundingPolicyUnitsProcessed"
+        },
+        "sensitiveInformationPolicyFreeUnits": {
+          "$ref": "#/$defs/GuardrailSensitiveInformationPolicyFreeUnitsProcessed"
+        },
+        "sensitiveInformationPolicyUnits": {
+          "$ref": "#/$defs/GuardrailSensitiveInformationPolicyUnitsProcessed"
+        },
+        "topicPolicyUnits": {
+          "$ref": "#/$defs/GuardrailTopicPolicyUnitsProcessed"
+        },
+        "wordPolicyUnits": {
+          "$ref": "#/$defs/GuardrailWordPolicyUnitsProcessed"
+        }
+      },
+      "required": [
+        "contentPolicyUnits",
+        "contextualGroundingPolicyUnits",
+        "sensitiveInformationPolicyFreeUnits",
+        "sensitiveInformationPolicyUnits",
+        "topicPolicyUnits",
+        "wordPolicyUnits"
+      ],
+      "type": "object"
+    },
+    "GuardrailVersion": {
+      "pattern": "^(|([1-9][0-9]{0,7})|(DRAFT))$",
+      "type": "string"
+    },
+    "GuardrailWordPolicyAction": {
+      "enum": [
+        "BLOCKED",
+        "NONE"
+      ],
+      "type": "string"
+    },
+    "GuardrailWordPolicyAssessment": {
+      "properties": {
+        "customWords": {
+          "$ref": "#/$defs/GuardrailCustomWordList"
+        },
+        "managedWordLists": {
+          "$ref": "#/$defs/GuardrailManagedWordList"
+        }
+      },
+      "required": [
+        "customWords",
+        "managedWordLists"
+      ],
+      "type": "object"
+    },
+    "GuardrailWordPolicyUnitsProcessed": {
+      "type": "integer"
+    },
+    "ImageBlockDelta": {
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBlock"
+        },
+        "source": {
+          "$ref": "#/$defs/ImageSource"
+        }
+      },
+      "type": "object"
+    },
+    "ImageBlockStart": {
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ImageFormat"
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "type": "object"
+    },
+    "ImageFormat": {
+      "enum": [
+        "gif",
+        "jpeg",
+        "png",
+        "webp"
+      ],
+      "type": "string"
+    },
+    "ImageSource": {
+      "oneOf": [
+        {
+          "required": [
+            "bytes"
+          ]
+        },
+        {
+          "required": [
+            "s3Location"
+          ]
+        }
+      ],
+      "properties": {
+        "bytes": {
+          "contentEncoding": "base64",
+          "minLength": 1,
+          "type": "string"
+        },
+        "s3Location": {
+          "$ref": "#/$defs/S3Location"
+        }
+      },
+      "type": "object"
+    },
+    "ImagesGuarded": {
+      "type": "integer"
+    },
+    "ImagesTotal": {
+      "type": "integer"
+    },
+    "InternalServerException": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonBlankString"
+        }
+      },
+      "type": "object"
+    },
+    "InvokedModelId": {
+      "pattern": "^(arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}::foundation-model/[a-z0-9-]{1,63}[.]{1}[a-z0-9-]{1,63}([a-z0-9-]{1,63}[.]){0,2}[a-z0-9-]{1,63}([:][a-z0-9-]{1,63}){0,2})|(arn:aws(|-us-gov|-cn|-iso|-iso-b):bedrock:(|[0-9a-z-]{1,20}):(|[0-9]{12}):inference-profile/[a-zA-Z0-9-:.]+)$",
+      "type": "string"
+    },
+    "MessageStartEvent": {
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ConversationRole"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
+    "MessageStopEvent": {
+      "properties": {
+        "additionalModelResponseFields": {},
+        "stopReason": {
+          "$ref": "#/$defs/StopReason"
+        }
+      },
+      "required": [
+        "stopReason"
+      ],
+      "type": "object"
+    },
+    "ModelOutputs": {
+      "items": {
+        "$ref": "#/$defs/GuardrailOutputText"
+      },
+      "type": "array"
+    },
+    "ModelStreamErrorException": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonBlankString"
+        },
+        "originalMessage": {
+          "$ref": "#/$defs/NonBlankString"
+        },
+        "originalStatusCode": {
+          "$ref": "#/$defs/StatusCode"
+        }
+      },
+      "type": "object"
+    },
+    "NonBlankString": {
+      "pattern": "^[\\s\\S]*$",
+      "type": "string"
+    },
+    "NonNegativeInteger": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "PerformanceConfigLatency": {
+      "enum": [
+        "optimized",
+        "standard"
+      ],
+      "type": "string"
+    },
+    "PerformanceConfiguration": {
+      "properties": {
+        "latency": {
+          "$ref": "#/$defs/PerformanceConfigLatency"
+        }
+      },
+      "type": "object"
+    },
+    "PromptRouterTrace": {
+      "properties": {
+        "invokedModelId": {
+          "$ref": "#/$defs/InvokedModelId"
+        }
+      },
+      "type": "object"
+    },
+    "ReasoningContentBlockDelta": {
+      "oneOf": [
+        {
+          "required": [
+            "redactedContent"
+          ]
+        },
+        {
+          "required": [
+            "signature"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        }
+      ],
+      "properties": {
+        "redactedContent": {
+          "contentEncoding": "base64",
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "S3Location": {
+      "properties": {
+        "bucketOwner": {
+          "$ref": "#/$defs/AccountId"
+        },
+        "uri": {
+          "$ref": "#/$defs/S3Uri"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
+    "S3Uri": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^s3://[a-z0-9][\\.\\-a-z0-9]{1,61}[a-z0-9](/.*)?$",
+      "type": "string"
+    },
+    "SearchResultLocation": {
+      "properties": {
+        "end": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "searchResultIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ServiceTier": {
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/ServiceTierType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "ServiceTierType": {
+      "enum": [
+        "default",
+        "flex",
+        "priority",
+        "reserved"
+      ],
+      "type": "string"
+    },
+    "ServiceUnavailableException": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonBlankString"
+        }
+      },
+      "type": "object"
+    },
+    "StatusCode": {
+      "maximum": 599,
+      "minimum": 100,
+      "type": "integer"
+    },
+    "StopReason": {
+      "enum": [
+        "content_filtered",
+        "end_turn",
+        "guardrail_intervened",
+        "malformed_model_output",
+        "malformed_tool_use",
+        "max_tokens",
+        "model_context_window_exceeded",
+        "stop_sequence",
+        "tool_use"
+      ],
+      "type": "string"
+    },
+    "TextCharactersGuarded": {
+      "type": "integer"
+    },
+    "TextCharactersTotal": {
+      "type": "integer"
+    },
+    "ThrottlingException": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonBlankString"
+        }
+      },
+      "type": "object"
+    },
+    "TokenUsage": {
+      "properties": {
+        "cacheDetails": {
+          "$ref": "#/$defs/CacheDetailsList"
+        },
+        "cacheReadInputTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cacheWriteInputTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inputTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outputTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalTokens": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens"
+      ],
+      "type": "object"
+    },
+    "ToolName": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "type": "string"
+    },
+    "ToolResultBlockDelta": {
+      "oneOf": [
+        {
+          "required": [
+            "json"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        }
+      ],
+      "properties": {
+        "json": {},
+        "text": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolResultBlockStart": {
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/ToolResultStatus"
+        },
+        "toolUseId": {
+          "$ref": "#/$defs/ToolUseId"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolUseId"
+      ],
+      "type": "object"
+    },
+    "ToolResultBlocksDelta": {
+      "items": {
+        "$ref": "#/$defs/ToolResultBlockDelta"
+      },
+      "type": "array"
+    },
+    "ToolResultStatus": {
+      "enum": [
+        "error",
+        "success"
+      ],
+      "type": "string"
+    },
+    "ToolUseBlockDelta": {
+      "properties": {
+        "input": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    },
+    "ToolUseBlockStart": {
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "toolUseId": {
+          "$ref": "#/$defs/ToolUseId"
+        },
+        "type": {
+          "$ref": "#/$defs/ToolUseType"
+        }
+      },
+      "required": [
+        "name",
+        "toolUseId"
+      ],
+      "type": "object"
+    },
+    "ToolUseId": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.:-]+$",
+      "type": "string"
+    },
+    "ToolUseType": {
+      "enum": [
+        "server_tool_use"
+      ],
+      "type": "string"
+    },
+    "ValidationException": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonBlankString"
+        }
+      },
+      "type": "object"
+    },
+    "WebLocation": {
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.looprig.dev/llm/conformance/bedrock-converse/converse_stream_output.schema.json",
+  "$ref": "#/$defs/ConverseStreamOutput",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Standalone JSON Schema 2020-12 for the bedrock-converse converse_stream_output response body, derived from the bedrock upstream API description. Generated by codec/conformance/cmd/schemagen; see schema/provenance.json for the source and schema/unenforced.json for what this document does not check.",
+  "title": "bedrock-converse converse_stream_output"
+}

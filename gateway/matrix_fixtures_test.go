@@ -520,7 +520,10 @@ func textRequest(text string) inference.Request {
 func broadCaps() []model.ModelOption {
 	return []model.ModelOption{
 		model.WithImages(),
-		model.WithThinking(),
+		// A declared dialect, not a bare WithThinking: the Anthropic encoder
+		// fails closed on an undeclared one, and this matrix measures dialect
+		// translation rather than catalogue completeness.
+		model.WithThinkingDialect(model.ThinkingDialectAdaptive),
 		model.WithTools(),
 	}
 }

@@ -1,0 +1,10 @@
+data: {"id":"chatcmpl-CJ7v2Qn4kZm1pRt8sWx0Yd3Lg","object":"chat.completion.chunk","created":1755043200,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0aa8d3e20b","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-CJ7v2Qn4kZm1pRt8sWx0Yd3Lg","object":"chat.completion.chunk","created":1755043200,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0aa8d3e20b","choices":[{"index":0,"delta":{"content":"The forecast"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-CJ7v2Qn4kZm1pRt8sWx0Yd3Lg","object":"chat.completion.chunk","created":1755043200,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0aa8d3e20b","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-CJ7v2Qn4kZm1pRt8sWx0Yd3Lg","object":"chat.completion.chunk","created":1755043200,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0aa8d3e20b","choices":[],"usage":{"prompt_tokens":82,"completion_tokens":17,"total_tokens":99,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+

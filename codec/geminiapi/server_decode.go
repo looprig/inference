@@ -160,11 +160,15 @@ func decodeGenerateContentBody(raw []byte) (inference.Request, error) {
 	var tools []inference.Tool
 	for _, t := range wire.Tools {
 		for _, fd := range t.FunctionDeclarations {
-			tools = append(tools, inference.Tool{Name: fd.Name, Description: fd.Description, Schema: fd.Parameters})
+			schema, err := decodeToolSchema(fd)
+			if err != nil {
+				return inference.Request{}, err
+			}
+			tools = append(tools, inference.Tool{Name: fd.Name, Description: fd.Description, Schema: schema})
 		}
 	}
 
-	toolChoiceValue, err := decodeFunctionCallingMode(wire.ToolConfig)
+	toolChoice, err := decodeFunctionCallingMode(wire.ToolConfig)
 	if err != nil {
 		return inference.Request{}, err
 	}
@@ -198,27 +202,45 @@ func decodeGenerateContentBody(raw []byte) (inference.Request, error) {
 		Messages:   messages,
 		Tools:      tools,
 		Output:     output,
-		ToolChoice: toolChoiceValue,
+		ToolChoice: toolChoice,
 		Override:   &sampling,
 	}, nil
 }
 
-// decodeFunctionCallingMode maps the wire toolConfig.functionCallingConfig.mode
-// to the two-state neutral inference.ToolChoice, inverting the encoder's own
-// AUTO-omitted/ANY-forced choice. Any other real Gemini mode (e.g. NONE, or
-// the allowed-function-names restriction) is behavior the neutral vocabulary
-// cannot represent, so it fails closed rather than silently degrading.
+// decodeFunctionCallingMode maps the wire toolConfig.functionCallingConfig to
+// the neutral inference.ToolChoice, inverting the encoder. ANY with a
+// one-element allowedFunctionNames list is the neutral named choice; ANY with
+// no list is ToolRequired.
+//
+// Two restrictions fail closed rather than degrading. An allowlist with more
+// than one member restricts the model to a SET, which the single-name neutral
+// vocabulary cannot express and must not be widened back to an unrestricted
+// ToolRequired. An allowlist on any other mode is likewise unrepresentable
+// — and Google documents it as only meaningful for ANY and VALIDATED. Any other
+// real Gemini mode (NONE, VALIDATED) has no neutral spelling either.
 func decodeFunctionCallingMode(tc *toolConfig) (inference.ToolChoice, error) {
 	if tc == nil || tc.FunctionCallingConfig == nil {
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	}
-	switch tc.FunctionCallingConfig.Mode {
+	config := tc.FunctionCallingConfig
+	allowed := config.AllowedFunctionNames
+	switch config.Mode {
 	case "", functionCallingModeAuto:
-		return inference.ToolChoiceAuto, nil
+		if len(allowed) > 0 {
+			return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_allowed_function_names", Detail: config.Mode}
+		}
+		return inference.ToolAuto(), nil
 	case functionCallingModeAny:
-		return inference.ToolChoiceRequired, nil
+		switch len(allowed) {
+		case 0:
+			return inference.ToolRequired(), nil
+		case 1:
+			return inference.ToolNamed(allowed[0]), nil
+		default:
+			return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_allowed_function_names", Detail: config.Mode}
+		}
 	default:
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_function_calling_mode", Detail: tc.FunctionCallingConfig.Mode}
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_function_calling_mode", Detail: config.Mode}
 	}
 }
 
@@ -247,6 +269,151 @@ func effortFromThinkingBudget(budget *int) (model.Effort, error) {
 	default:
 		return model.EffortNone, &ServerDecodeError{Reason: "unsupported_thinking_budget", Detail: strconv.Itoa(*budget)}
 	}
+}
+
+// decodeToolSchema reads a declaration's argument schema from whichever of
+// FunctionDeclaration's two mutually exclusive parameter fields carries it.
+//
+// parametersJsonSchema is already standard JSON Schema and becomes the neutral
+// Tool.Schema as-is. `parameters` is Gemini's own dialect, so its uppercase
+// Type enum is mapped back to JSON Schema's lowercase names — the exact inverse
+// of the projection buildTools performs, which keeps a same-dialect round trip
+// faithful and stops a Gemini-only spelling leaking into a neutral schema bound
+// for another provider. A declaration setting BOTH fields is rejected: Google
+// documents them as mutually exclusive, and guessing which one the client meant
+// is exactly the kind of silent choice this codec refuses to make.
+func decodeToolSchema(fd functionDeclaration) (json.RawMessage, error) {
+	if len(fd.Parameters) > 0 && len(fd.ParametersJSONSchema) > 0 {
+		return nil, &ServerDecodeError{Reason: "conflicting_function_parameters", Detail: fd.Name}
+	}
+	if len(fd.ParametersJSONSchema) > 0 {
+		return fd.ParametersJSONSchema, nil
+	}
+	return jsonSchemaTypesFor(fd.Parameters), nil
+}
+
+// jsonSchemaTypesFor rewrites Gemini's uppercase Schema type names to the JSON
+// Schema ones, recursing through the keywords that hold subschemas. It is
+// deliberately tolerant: anything it does not recognize — including a schema
+// that is not an object at all — is returned untouched, because a client's
+// schema must reach the neutral model even when this codec cannot improve it.
+func jsonSchemaTypesFor(schema json.RawMessage) json.RawMessage {
+	normalized, changed := normalizeSchemaTypes(schema, 1)
+	if !changed {
+		return schema
+	}
+	return normalized
+}
+
+func normalizeSchemaTypes(schema json.RawMessage, depth int) (json.RawMessage, bool) {
+	if depth > maxGeminiSchemaDepth {
+		return schema, false
+	}
+	var node map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &node); err != nil || node == nil {
+		return schema, false
+	}
+	changed := false
+	for keyword, value := range node {
+		switch keyword {
+		case "type":
+			if name, ok := jsonSchemaTypeName(value); ok {
+				node[keyword] = name
+				changed = true
+			}
+		case "items":
+			if child, childChanged := normalizeSchemaTypes(value, depth+1); childChanged {
+				node[keyword] = child
+				changed = true
+			}
+		case "properties":
+			if child, childChanged := normalizeSchemaTypeMap(value, depth); childChanged {
+				node[keyword] = child
+				changed = true
+			}
+		case "anyOf":
+			if child, childChanged := normalizeSchemaTypeList(value, depth); childChanged {
+				node[keyword] = child
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return schema, false
+	}
+	encoded, err := json.Marshal(node)
+	if err != nil {
+		return schema, false
+	}
+	return encoded, true
+}
+
+func normalizeSchemaTypeMap(raw json.RawMessage, depth int) (json.RawMessage, bool) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return raw, false
+	}
+	changed := false
+	for name, member := range members {
+		if child, childChanged := normalizeSchemaTypes(member, depth+1); childChanged {
+			members[name] = child
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	encoded, err := json.Marshal(members)
+	if err != nil {
+		return raw, false
+	}
+	return encoded, true
+}
+
+func normalizeSchemaTypeList(raw json.RawMessage, depth int) (json.RawMessage, bool) {
+	var members []json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return raw, false
+	}
+	changed := false
+	for i, member := range members {
+		if child, childChanged := normalizeSchemaTypes(member, depth+1); childChanged {
+			members[i] = child
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	encoded, err := json.Marshal(members)
+	if err != nil {
+		return raw, false
+	}
+	return encoded, true
+}
+
+// jsonSchemaTypeNames inverts geminiSchemaTypes (encode.go). The two maps are
+// held to being exact inverses by TestGeminiSchemaTypeMapsAreInverses.
+var jsonSchemaTypeNames = map[string]json.RawMessage{
+	"STRING":  json.RawMessage(`"string"`),
+	"NUMBER":  json.RawMessage(`"number"`),
+	"INTEGER": json.RawMessage(`"integer"`),
+	"BOOLEAN": json.RawMessage(`"boolean"`),
+	"ARRAY":   json.RawMessage(`"array"`),
+	"OBJECT":  json.RawMessage(`"object"`),
+	"NULL":    json.RawMessage(`"null"`),
+}
+
+// jsonSchemaTypeName maps "STRING" to "string". A value that is not one of
+// Gemini's enum members — a lowercase name a tolerant client sent, say — is
+// left alone.
+func jsonSchemaTypeName(raw json.RawMessage) (json.RawMessage, bool) {
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return nil, false
+	}
+	jsonName, ok := jsonSchemaTypeNames[name]
+	return jsonName, ok
 }
 
 // decodeResponseSchema maps the wire responseMimeType/responseJsonSchema
@@ -291,16 +458,17 @@ func decodeSystemInstruction(sys *geminiContent) (string, error) {
 // becomes one AIMessage.
 func decodeContents(contents []geminiContent) ([]content.Conversation, error) {
 	var out []content.Conversation
+	calls := &serverToolCallLedger{}
 	for _, c := range contents {
 		switch c.Role {
 		case roleUser:
-			msgs, err := decodeUserParts(c.Parts)
+			msgs, err := decodeUserParts(c.Parts, calls)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, msgs...)
 		case roleModel:
-			ai, err := decodeModelParts(c.Parts)
+			ai, err := decodeModelParts(c.Parts, calls)
 			if err != nil {
 				return nil, err
 			}
@@ -312,13 +480,58 @@ func decodeContents(contents []geminiContent) ([]content.Conversation, error) {
 	return out, nil
 }
 
+// serverToolCallLedger carries a decoded functionCall's identity forward to the
+// functionResponse that answers it. Gemini pairs the two by NAME — Required on
+// both FunctionCall and FunctionResponse in the v1beta discovery document,
+// while `id` is Optional on both — so a native request may legally answer a
+// call using only its name. The neutral vocabulary addresses a result solely by
+// ToolUseID, so dropping the name (as this decoder previously did, keeping only
+// the possibly-absent id) severed the pairing for exactly the id-less parallel
+// case. The name is therefore the join key: a name-only response takes the id,
+// real or synthetic, of the earliest still-unanswered call of that name.
+type serverToolCallLedger struct {
+	byName map[string][]string
+}
+
+// record queues a decoded call's identity under its function name.
+func (l *serverToolCallLedger) record(name, id string) {
+	if name == "" || id == "" {
+		return
+	}
+	if l.byName == nil {
+		l.byName = make(map[string][]string)
+	}
+	l.byName[name] = append(l.byName[name], id)
+}
+
+// resolve is the ToolUseID for a functionResponse: the wire id when the client
+// supplied one, otherwise the queued identity of the oldest unanswered call of
+// that name. Either way one queue entry is consumed, so a later response for
+// the same name resolves to the next call rather than re-answering the first.
+// A response naming no call this thread made yields "" — the same
+// "not in this thread" outcome the encoder's toolCallIndex reports.
+func (l *serverToolCallLedger) resolve(name, wireID string) string {
+	queue := l.byName[name]
+	if len(queue) == 0 {
+		return wireID
+	}
+	l.byName[name] = queue[1:]
+	if wireID != "" {
+		return wireID
+	}
+	return queue[0]
+}
+
 // decodeUserParts splits a "user"-role content's parts into the neutral
 // turns they represent: consecutive text/image parts are grouped into one
 // UserMessage (preserving order), and each functionResponse part becomes its
 // own ToolResultMessage, in the order both kinds appear on the wire —
 // mirroring anthropicapi's decodeUserMessage splitting of tool_result blocks
-// out of an otherwise-plain user turn.
-func decodeUserParts(parts []geminiPart) ([]content.Conversation, error) {
+// out of an otherwise-plain user turn. calls carries the preceding model turns'
+// functionCall identities forward so a functionResponse that names its call but
+// omits `id` (both `id` fields are Optional on the wire, while both `name`
+// fields are Required) still produces an addressable ToolUseID.
+func decodeUserParts(parts []geminiPart, calls *serverToolCallLedger) ([]content.Conversation, error) {
 	var out []content.Conversation
 	var pending []content.Block
 
@@ -339,21 +552,20 @@ func decodeUserParts(parts []geminiPart) ([]content.Conversation, error) {
 			}
 			out = append(out, &content.ToolResultMessage{
 				Message:   content.Message{Role: content.RoleUser, Blocks: []content.Block{&content.TextBlock{Text: text}}},
-				ToolUseID: p.FunctionResponse.ID,
+				ToolUseID: calls.resolve(p.FunctionResponse.Name, p.FunctionResponse.ID),
 			})
 		case p.InlineData != nil:
-			data, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
+			block, err := decodeInlineData(p.InlineData)
 			if err != nil {
-				return nil, &ServerDecodeError{Reason: "invalid_image_data", Detail: err.Error()}
+				return nil, err
 			}
-			pending = append(pending, &content.ImageBlock{MediaType: content.MediaType(p.InlineData.MimeType), Source: content.ImageSource{Data: data}})
+			pending = append(pending, block)
 		case p.FileData != nil:
-			// A harness-supplied fileUri is accepted as an opaque URL string,
-			// same as an ImageBlock.Source.URL from any other dialect —
-			// validating it is a "real" Gemini File API / gs:// / YouTube URI
-			// is the outbound Gemini encoder's job when THIS decoded request
-			// later gets re-encoded to a Gemini target, not this decoder's.
-			pending = append(pending, &content.ImageBlock{MediaType: content.MediaType(p.FileData.MimeType), Source: content.ImageSource{URL: p.FileData.FileURI}})
+			block, err := decodeFileData(p.FileData)
+			if err != nil {
+				return nil, err
+			}
+			pending = append(pending, block)
 		case p.Text != "" && !p.Thought:
 			pending = append(pending, &content.TextBlock{Text: p.Text})
 		default:
@@ -362,6 +574,55 @@ func decodeUserParts(parts []geminiPart) ([]content.Conversation, error) {
 	}
 	flush()
 	return out, nil
+}
+
+// decodeInlineData maps an inlineData part to the neutral block its mimeType
+// names. One Blob carries images, audio and documents alike, so the media type
+// is the only discriminator there is: decoding every Blob as an ImageBlock (as
+// this decoder previously did) silently rewrote an audio or PDF part into an
+// image whose media type contradicted its own block type, and lost the round
+// trip with the encoder, which puts documents and audio in this very member.
+//
+// The image default is deliberate and is the decoder's tolerance, not an
+// allowlist gap: this is untrusted ingress, and refusing a media type Google
+// adds to Blob later would reject a legal client request. Only the two types
+// with a dedicated neutral block are routed away from it.
+func decodeInlineData(blob *inlineData) (content.Block, error) {
+	data, err := base64.StdEncoding.DecodeString(blob.Data)
+	if err != nil {
+		return nil, &ServerDecodeError{Reason: "invalid_inline_data", Detail: err.Error()}
+	}
+	mediaType := content.MediaType(blob.MimeType)
+	switch {
+	case isBlobAudioMIME(mediaType):
+		return &content.AudioBlock{MediaType: mediaType, Data: data}, nil
+	case isBlobDocumentMIME(mediaType):
+		return &content.DocumentBlock{MediaType: mediaType, Data: data}, nil
+	default:
+		return &content.ImageBlock{MediaType: mediaType, Source: content.ImageSource{Data: data}}, nil
+	}
+}
+
+// decodeFileData maps a fileData part to an ImageBlock carrying the URI.
+//
+// A harness-supplied fileUri is accepted as an opaque URL string, same as an
+// ImageBlock.Source.URL from any other dialect — validating it is a "real"
+// Gemini File API / gs:// / YouTube URI is the outbound Gemini encoder's job
+// when THIS decoded request later gets re-encoded to a Gemini target, not this
+// decoder's.
+//
+// ImageBlock is the only neutral media block with a URL source: AudioBlock and
+// DocumentBlock hold bytes and nothing else. A fileUri whose mime type says
+// audio or document therefore has no faithful destination, and fails closed
+// rather than becoming an ImageBlock labelled audio/mpeg. An absent mimeType —
+// Optional on FileData — keeps the image reading, which is what every fileData
+// this codec itself emits carries.
+func decodeFileData(file *fileData) (content.Block, error) {
+	mediaType := content.MediaType(file.MimeType)
+	if isBlobAudioMIME(mediaType) || isBlobDocumentMIME(mediaType) {
+		return nil, &ServerDecodeError{Reason: "unsupported_file_data_mime_type", Detail: file.MimeType}
+	}
+	return &content.ImageBlock{MediaType: mediaType, Source: content.ImageSource{URL: file.FileURI}}, nil
 }
 
 // decodeFunctionResponseText extracts the plain text of a functionResponse's
@@ -387,15 +648,22 @@ func decodeFunctionResponseText(raw json.RawMessage) (string, error) {
 // exactly like the client-decode direction's buildBlocks (decode.go); any
 // other non-empty text part becomes a TextBlock. A functionCall part's own
 // thoughtSignature (Gemini 2.5+ may attach one directly to the call rather
-// than a separate thought part) has no home in ToolUseBlock and is a
-// documented, known gap — out of this task's scope, which only covers
-// thought-part signature preservation.
-func decodeModelParts(parts []geminiPart) (*content.AIMessage, error) {
+// than a separate thought part) is preserved positionally in the resulting
+// ToolUseBlock's Gemini-tagged ProviderState for exact same-dialect replay. An
+// id-less call gets the same synthetic per-turn ordinal the client-decode
+// direction assigns (toolCallID), recorded in calls under its name so the
+// functionResponse that answers it can be given the same identity.
+func decodeModelParts(parts []geminiPart, calls *serverToolCallLedger) (*content.AIMessage, error) {
 	var blocks []content.Block
+	callOrdinal := 0
 	for _, p := range parts {
 		switch {
 		case p.FunctionCall != nil:
-			blocks = append(blocks, &content.ToolUseBlock{ID: p.FunctionCall.ID, Name: p.FunctionCall.Name, Input: argsJSON(p.FunctionCall.Args)})
+			id := toolCallID(p.FunctionCall.ID, callOrdinal)
+			callOrdinal++
+			calls.record(p.FunctionCall.Name, id)
+			blocks = append(blocks, content.NewToolUseBlock(id, p.FunctionCall.Name,
+				argsJSON(p.FunctionCall.Args), providerStateFromThoughtSignature(p.ThoughtSignature), providerStateFormatFor(p.ThoughtSignature)))
 		case p.Thought && (p.Text != "" || p.ThoughtSignature != ""):
 			blocks = append(blocks, content.NewThinkingBlock(p.Text, "", providerStateFromThoughtSignature(p.ThoughtSignature), providerStateFormatFor(p.ThoughtSignature)))
 		case p.Text != "":

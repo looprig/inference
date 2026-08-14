@@ -1,14 +1,48 @@
 package openairesponses
 
-// UnsupportedBlockError is returned by an encoder when a content block has a
-// concrete type this dialect does not model in that position (e.g. audio or
-// document blocks). Block holds the Go type name for diagnosis.
+import "fmt"
+
+// SamplingRangeError is returned by the encoder when a sampling knob falls
+// outside the interval CreateResponse declares for it — temperature [0, 2],
+// top_p [0, 1], reached through CreateModelResponseProperties ->
+// ModelResponseProperties, the same schema Chat Completions inherits.
+//
+// Min and Max are carried on the error rather than baked into the message
+// because the two fields have DIFFERENT bounds here, and because the bound that
+// matters is the destination's: Anthropic and Bedrock cap temperature at 1 and
+// OpenAI at 2, so a session moved between providers carries a value that was
+// legal at its source into a request where it is not. The shared
+// model.Sampling vocabulary is wide enough to hold every dialect's range, so
+// the narrowing has to happen in the codec that owns the destination contract.
+// This mirrors the sibling openaiapi error of the same name.
+type SamplingRangeError struct {
+	Field string
+	Value float64
+	Min   float64
+	Max   float64
+}
+
+func (e *SamplingRangeError) Error() string {
+	return fmt.Sprintf("openairesponses: %s must be between %v and %v, got %v", e.Field, e.Min, e.Max, e.Value)
+}
+
+// UnsupportedBlockError is returned by an encoder when a content block cannot
+// be placed on the wire: a concrete type this dialect does not model in that
+// position (audio anywhere, any non-text block in a text-only tool result), or
+// a block whose value the position's schema cannot carry (a document with no
+// name to attach its inline data to). Block holds the Go type name for
+// diagnosis; Reason, when set, names the specific limitation — mirroring the
+// sibling bedrockconverse and openaiapi codecs' errors of the same name.
 type UnsupportedBlockError struct {
-	Block string
+	Block  string
+	Reason string
 }
 
 func (e *UnsupportedBlockError) Error() string {
-	return "openairesponses: unsupported content block type " + e.Block
+	if e.Reason == "" {
+		return "openairesponses: unsupported content block type " + e.Block
+	}
+	return "openairesponses: unsupported content block type " + e.Block + ": " + e.Reason
 }
 
 // UnsupportedConversationError is returned by the encoder when a
@@ -82,6 +116,17 @@ type StreamAPIError struct {
 	Code    string
 	Message string
 }
+
+// StreamEventDecodeError reports malformed JSON inside an otherwise
+// successfully framed Responses stream. Unknown well-formed events remain
+// forward-compatible skips.
+type StreamEventDecodeError struct{ Err error }
+
+func (e *StreamEventDecodeError) Error() string {
+	return "openairesponses: malformed stream event: " + e.Err.Error()
+}
+
+func (e *StreamEventDecodeError) Unwrap() error { return e.Err }
 
 func (e *StreamAPIError) Error() string {
 	message := "openairesponses: stream error"

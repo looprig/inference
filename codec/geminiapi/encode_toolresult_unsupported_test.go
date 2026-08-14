@@ -12,11 +12,17 @@ import (
 
 // --- TestEncodeRequest_ToolResultUnsupportedBlock ---
 
-// The classic Gemini functionResponse carries text only, so a non-text block in
-// a tool result must fail secure with a *geminiapi.UnsupportedBlockError rather
-// than being silently dropped — the model must never receive less than the
-// caller sent. Mirrors the user/model-turn fail-secure behavior covered by
+// A block in a tool result that this dialect cannot represent anywhere must fail
+// secure with a *geminiapi.UnsupportedBlockError rather than being silently
+// dropped — the model must never receive less than the caller sent. Mirrors the
+// user/model-turn fail-secure behavior covered by
 // TestEncodeRequest_UnsupportedBlock.
+//
+// Media blocks are no longer among them: an image, audio or document result now
+// travels as inlineData parts of the same user turn as the functionResponse
+// (toolResultContent, encode.go), covered by TestEncodeRequest_ToolResultMedia.
+// The mime contract still fails closed there — see
+// TestEncodeRequest_ToolResultUnsupportedMedia.
 func TestEncodeRequest_ToolResultUnsupportedBlock(t *testing.T) {
 	t.Parallel()
 
@@ -25,12 +31,12 @@ func TestEncodeRequest_ToolResultUnsupportedBlock(t *testing.T) {
 		block content.Block
 	}{
 		{
-			name:  "image block in a tool result is unsupported",
-			block: &content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte{0x89}}},
+			name:  "thinking block in a tool result is unsupported",
+			block: &content.ThinkingBlock{Thinking: "not a tool's to send"},
 		},
 		{
-			name:  "audio block in a tool result is unsupported",
-			block: &content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}},
+			name:  "nested tool result block in a tool result is unsupported",
+			block: &content.ToolResultBlock{ToolUseID: "call_1"},
 		},
 	}
 

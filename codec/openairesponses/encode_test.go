@@ -205,6 +205,57 @@ func TestEncodeRequest_ToolsCallsAndOutputs(t *testing.T) {
 	}
 }
 
+// TestEncodeRequest_EmptyInputIsAnEmptyArrayNotNull pins that `input` is
+// always an array on the wire. The spec types it as string-or-array with no
+// null alternative, so a Go nil slice marshalling as `null` is a type error in
+// the request body, not merely an empty one.
+func TestEncodeRequest_EmptyInputIsAnEmptyArrayNotNull(t *testing.T) {
+	t.Parallel()
+	body, err := openairesponses.EncodeRequest(inference.Request{
+		Model: model.Model{Name: "gpt-test"},
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	input, ok := decodeRequestBody(t, body)["input"]
+	if !ok {
+		t.Fatalf("body = %s, want an input member", body)
+	}
+	if _, ok := input.([]any); !ok {
+		t.Errorf("input = %#v (%T), want an array", input, input)
+	}
+}
+
+// TestEncodeRequest_FunctionToolAlwaysCarriesStrict pins a REQUIRED member of
+// the Responses FunctionTool shape. OpenAI's own spec lists
+// ["type","name","strict","parameters"] as required, so a tool object without
+// `strict` is not a legal request body, however permissively any one server
+// happens to treat it. The value is always false: `strict` true additionally
+// demands the tool schema be a strict subset (every property required,
+// additionalProperties:false), and inference.Tool carries arbitrary caller
+// schemas that this codec cannot certify.
+func TestEncodeRequest_FunctionToolAlwaysCarriesStrict(t *testing.T) {
+	t.Parallel()
+	body, err := openairesponses.EncodeRequest(inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Tools: true}},
+		Tools: []inference.Tool{{
+			Name:   "get_weather",
+			Schema: json.RawMessage(`{"type":"object"}`),
+		}},
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	tool := decodeRequestBody(t, body)["tools"].([]any)[0].(map[string]any)
+	strict, ok := tool["strict"]
+	if !ok {
+		t.Fatalf("tool = %#v, want a `strict` member (FunctionTool.required)", tool)
+	}
+	if strict != false {
+		t.Errorf("strict = %#v, want false", strict)
+	}
+}
+
 func TestEncodeRequest_ParallelToolCalls(t *testing.T) {
 	t.Parallel()
 	req := inference.Request{
@@ -240,7 +291,7 @@ func TestEncodeRequest_ToolChoiceRequired(t *testing.T) {
 	req := inference.Request{
 		Model:      model.Model{Name: "gpt-test", Caps: model.Capabilities{Tools: true}},
 		Tools:      []inference.Tool{{Name: "f", Schema: json.RawMessage(`{"type":"object"}`)}},
-		ToolChoice: inference.ToolChoiceRequired,
+		ToolChoice: inference.ToolRequired(),
 	}
 	body, err := openairesponses.EncodeRequest(req, false)
 	if err != nil {
@@ -249,6 +300,35 @@ func TestEncodeRequest_ToolChoiceRequired(t *testing.T) {
 	m := decodeRequestBody(t, body)
 	if m["tool_choice"] != "required" {
 		t.Errorf("tool_choice = %v, want required", m["tool_choice"])
+	}
+}
+
+// TestEncodeRequest_ToolChoiceNamedTool pins the named tool-choice variant.
+// Responses' ToolChoiceFunction is flat — `{"type":"function","name":...}` —
+// unlike Chat Completions, which nests the name under `function`.
+func TestEncodeRequest_ToolChoiceNamedTool(t *testing.T) {
+	t.Parallel()
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Tools: true}},
+		Tools: []inference.Tool{
+			{Name: "f", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "g", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: inference.ToolNamed("g"),
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var wire struct {
+		ToolChoice json.RawMessage `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	const want = `{"type":"function","name":"g"}`
+	if string(wire.ToolChoice) != want {
+		t.Errorf("tool_choice = %s, want %s", wire.ToolChoice, want)
 	}
 }
 
@@ -312,9 +392,16 @@ func TestEncodeRequest_ReasoningOmittedWithoutThinkingCapability(t *testing.T) {
 	}
 }
 
+// TestEncodeRequest_EncryptedReasoningReplay covers the encrypted-content
+// round trip through ThinkingBlock.ProviderState. It previously asserted that
+// the replayed item carried NO id — a rule that read as "never invent an id"
+// but in practice emitted a reasoning item missing a required member, which
+// the provider rejects outright. The rule is unchanged in spirit (no id is
+// ever fabricated); the item now replays the id the response itself carried,
+// which ProviderState transports alongside the encrypted content.
 func TestEncodeRequest_EncryptedReasoningReplay(t *testing.T) {
 	t.Parallel()
-	providerState := json.RawMessage(`"opaque-blob-abc123"`)
+	providerState := json.RawMessage(`{"id":"rs_abc123","encrypted_content":"opaque-blob-abc123"}`)
 	req := inference.Request{
 		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
 		Messages: content.AgenticMessages{
@@ -338,6 +425,9 @@ func TestEncodeRequest_EncryptedReasoningReplay(t *testing.T) {
 	}
 	if item["encrypted_content"] != "opaque-blob-abc123" {
 		t.Errorf("encrypted_content = %v", item["encrypted_content"])
+	}
+	if item["id"] != "rs_abc123" {
+		t.Errorf("id = %#v, want the response's own rs_abc123", item["id"])
 	}
 	summary := item["summary"].([]any)
 	part := summary[0].(map[string]any)
@@ -399,6 +489,18 @@ func TestEncodeRequest_StopSequencesOmitted(t *testing.T) {
 	}
 }
 
+// TestEncodeRequest_AssistantTextReplay locks the input shape of replayed
+// assistant history. It previously asserted the OutputMessage form
+// ({"type":"message","role":"assistant","content":[{"type":"output_text",...}]})
+// with no id — but OutputMessage.required is ["id","type","role","content",
+// "status"], so that item is invalid as input and no id is available to
+// supply, since a message item's id is not carried by any neutral block.
+// The valid alternative is EasyInputMessage, whose required members are only
+// ["role","content"] and whose content may be a bare string. The `type`
+// discriminator is deliberately omitted: with role "assistant" present,
+// EasyInputMessage is then the only variant of the InputItem union that can
+// match (InputMessage's role enum excludes assistant, OutputMessage demands
+// an id and status).
 func TestEncodeRequest_AssistantTextReplay(t *testing.T) {
 	t.Parallel()
 	req := inference.Request{
@@ -417,13 +519,16 @@ func TestEncodeRequest_AssistantTextReplay(t *testing.T) {
 	m := decodeRequestBody(t, body)
 	input := m["input"].([]any)
 	item := input[0].(map[string]any)
-	if item["type"] != "message" || item["role"] != "assistant" {
+	if item["role"] != "assistant" {
 		t.Fatalf("item = %#v", item)
 	}
-	parts := item["content"].([]any)
-	part := parts[0].(map[string]any)
-	if part["type"] != "output_text" || part["text"] != "prior answer" {
-		t.Errorf("part = %#v", part)
+	if item["content"] != "prior answer" {
+		t.Errorf("content = %#v, want the plain string %q", item["content"], "prior answer")
+	}
+	for _, forbidden := range []string{"type", "id", "status"} {
+		if _, present := item[forbidden]; present {
+			t.Errorf("assistant history item carries %q, want the bare EasyInputMessage form: %#v", forbidden, item)
+		}
 	}
 }
 
@@ -435,5 +540,188 @@ func TestEncodeRequest_UnsupportedConversation(t *testing.T) {
 	}
 	if _, err := openairesponses.EncodeRequest(req, false); err == nil {
 		t.Fatal("EncodeRequest() error = nil, want error for unsupported conversation")
+	}
+}
+
+// TestEncodeRequest_ToolResultEmptyOutput locks the required `output` member.
+// FunctionCallOutputItemParam.required is ["type","output"], so an empty tool
+// result must still carry "output":"" — an omitempty drop makes the provider
+// reject the whole request with a missing-required-parameter 400, which is the
+// single most common way an empty tool result poisons a turn.
+func TestEncodeRequest_ToolResultEmptyOutput(t *testing.T) {
+	t.Parallel()
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test"},
+		Messages: content.AgenticMessages{
+			&content.ToolResultMessage{
+				Message:   content.Message{Role: content.RoleUser, Blocks: []content.Block{&content.TextBlock{Text: ""}}},
+				ToolUseID: "call_1",
+			},
+		},
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	m := decodeRequestBody(t, body)
+	item := m["input"].([]any)[0].(map[string]any)
+	if item["type"] != "function_call_output" {
+		t.Fatalf("item = %#v", item)
+	}
+	out, present := item["output"]
+	if !present {
+		t.Fatalf("output absent; it is required even when empty (item=%#v)", item)
+	}
+	if out != "" {
+		t.Errorf("output = %#v, want empty string", out)
+	}
+	if item["call_id"] != "call_1" {
+		t.Errorf("call_id = %#v, want call_1", item["call_id"])
+	}
+}
+
+// TestEncodeRequest_ItemsCarryOnlyTheirOwnMembers guards the tagged union:
+// making `output`/`call_id` unconditional must not leak them onto message,
+// reasoning, or function_call items, which have no such properties.
+func TestEncodeRequest_ItemsCarryOnlyTheirOwnMembers(t *testing.T) {
+	t.Parallel()
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
+		Messages: content.AgenticMessages{
+			&content.UserMessage{Message: content.Message{
+				Role:   content.RoleUser,
+				Blocks: []content.Block{&content.TextBlock{Text: "hi"}},
+			}},
+			&content.AIMessage{Message: content.Message{
+				Role: content.RoleAssistant,
+				Blocks: []content.Block{
+					content.NewThinkingBlock("think", "", json.RawMessage(`{"id":"rs_1","encrypted_content":"blob"}`), "openai-responses"),
+					&content.ToolUseBlock{ID: "call_1", Name: "calc", Input: json.RawMessage(`{"x":1}`)},
+				},
+			}},
+		},
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	m := decodeRequestBody(t, body)
+	for i, raw := range m["input"].([]any) {
+		item := raw.(map[string]any)
+		if item["type"] == "function_call_output" {
+			continue
+		}
+		if _, present := item["output"]; present {
+			t.Errorf("input[%d] (%v) carries an `output` member: %#v", i, item["type"], item)
+		}
+		if item["type"] != "function_call" {
+			if _, present := item["call_id"]; present {
+				t.Errorf("input[%d] (%v) carries a `call_id` member: %#v", i, item["type"], item)
+			}
+		}
+	}
+}
+
+// TestEncodeRequest_ReasoningReplayPreservesItemID locks the fix for the
+// reasoning-replay 400. ReasoningItem.required is ["id","summary","type"], so
+// replaying a reasoning item without its id is rejected with "Missing required
+// parameter: 'input[N].id'". The id is not invented — it is the one the
+// provider's own response carried, round-tripped through
+// ThinkingBlock.ProviderState alongside the encrypted content.
+func TestEncodeRequest_ReasoningReplayPreservesItemID(t *testing.T) {
+	t.Parallel()
+	providerState := json.RawMessage(`{"id":"rs_abc123","encrypted_content":"opaque-blob-abc123"}`)
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
+		Messages: content.AgenticMessages{
+			&content.AIMessage{Message: content.Message{
+				Role: content.RoleAssistant,
+				Blocks: []content.Block{
+					content.NewThinkingBlock("step by step", "", providerState, "openai-responses"),
+				},
+			}},
+		},
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	m := decodeRequestBody(t, body)
+	item := m["input"].([]any)[0].(map[string]any)
+	if item["type"] != "reasoning" {
+		t.Fatalf("item type = %v, want reasoning", item["type"])
+	}
+	if item["id"] != "rs_abc123" {
+		t.Errorf("id = %#v, want the response's own rs_abc123", item["id"])
+	}
+	if item["encrypted_content"] != "opaque-blob-abc123" {
+		t.Errorf("encrypted_content = %v", item["encrypted_content"])
+	}
+	summary := item["summary"].([]any)
+	part := summary[0].(map[string]any)
+	if part["type"] != "summary_text" || part["text"] != "step by step" {
+		t.Errorf("summary part = %#v", part)
+	}
+}
+
+// TestEncodeRequest_ReasoningSummaryAlwaysPresent covers a reasoning item whose
+// summary is empty: `summary` is required, so it must marshal as [] rather
+// than being dropped.
+func TestEncodeRequest_ReasoningSummaryAlwaysPresent(t *testing.T) {
+	t.Parallel()
+	providerState := json.RawMessage(`{"id":"rs_abc123","encrypted_content":"blob"}`)
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
+		Messages: content.AgenticMessages{
+			&content.AIMessage{Message: content.Message{
+				Role:   content.RoleAssistant,
+				Blocks: []content.Block{content.NewThinkingBlock("", "", providerState, "openai-responses")},
+			}},
+		},
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	m := decodeRequestBody(t, body)
+	item := m["input"].([]any)[0].(map[string]any)
+	summary, present := item["summary"]
+	if !present {
+		t.Fatalf("summary absent; it is required even when empty (item=%#v)", item)
+	}
+	if got := summary.([]any); len(got) != 0 {
+		t.Errorf("summary = %#v, want []", got)
+	}
+}
+
+// TestEncodeRequest_ReasoningWithoutIDIsDropped documents the degrade for a
+// ThinkingBlock whose provider state predates id preservation (the legacy bare
+// -string encoding, which carried encrypted content and nothing else). There
+// is no valid reasoning item to build without an id, and inventing one would
+// be worse than omitting the item: OpenAI regenerates reasoning server-side,
+// whereas a fabricated id is a guaranteed 400.
+func TestEncodeRequest_ReasoningWithoutIDIsDropped(t *testing.T) {
+	t.Parallel()
+	req := inference.Request{
+		Model: model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
+		Messages: content.AgenticMessages{
+			&content.AIMessage{Message: content.Message{
+				Role: content.RoleAssistant,
+				Blocks: []content.Block{
+					content.NewThinkingBlock("legacy", "", json.RawMessage(`"legacy-blob"`), "openai-responses"),
+					&content.TextBlock{Text: "answer"},
+				},
+			}},
+		},
+	}
+	body, err := openairesponses.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	m := decodeRequestBody(t, body)
+	for i, raw := range m["input"].([]any) {
+		if item := raw.(map[string]any); item["type"] == "reasoning" {
+			t.Errorf("input[%d] is an id-less reasoning item, want it dropped: %#v", i, item)
+		}
 	}
 }

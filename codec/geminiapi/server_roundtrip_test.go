@@ -218,3 +218,51 @@ func TestGeminiServerCodec_SameDialectRoundTrip(t *testing.T) {
 		t.Errorf("Messages[2] = %#v", got.Messages[2])
 	}
 }
+
+// TestGeminiServerCodec_ToolSchemaRoundTrip proves the encoder's choice between
+// FunctionDeclaration's two parameter fields is reversible: whichever field a
+// tool's schema travels in, the same schema comes back out of the decoder.
+//
+// The first case takes the projected `parameters` path (uppercase Gemini Schema
+// on the wire) and the second the verbatim `parametersJsonSchema` path, so the
+// pair also pins the two mappings as exact inverses of one another.
+func TestGeminiServerCodec_ToolSchemaRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		schema string
+	}{
+		{
+			name:   "every type name survives the Gemini Schema projection",
+			schema: `{"type":"object","properties":{"s":{"type":"string"},"n":{"type":"number"},"i":{"type":"integer"},"b":{"type":"boolean"},"z":{"type":"null"},"a":{"type":"array","items":{"type":"string"}},"o":{"type":"object","properties":{"deep":{"type":"string"}}},"u":{"anyOf":[{"type":"string"},{"type":"integer"}]}},"required":["s"]}`,
+		},
+		{
+			name:   "a schema the dialect cannot express survives verbatim",
+			schema: `{"type":"object","properties":{"q":{"type":"string"},"days":{"type":"integer","enum":[1,3,7]}},"required":["q"],"additionalProperties":false}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			body, err := geminiapi.EncodeRequest(inference.Request{
+				Model: model.Model{Name: "gemini-test", Caps: model.Capabilities{Tools: true}},
+				Tools: []inference.Tool{{Name: "t", Description: "d", Schema: json.RawMessage(tc.schema)}},
+			})
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			decoded, err := (geminiapi.Codec{}).DecodeRequest(
+				httpRequestFor(t, "/v1beta/models/gemini-test:generateContent", string(body)))
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v (body=%s)", err, body)
+			}
+			if len(decoded.Request.Tools) != 1 {
+				t.Fatalf("Tools = %#v, want one", decoded.Request.Tools)
+			}
+			assertSameJSON(t, decoded.Request.Tools[0].Schema, json.RawMessage(tc.schema))
+		})
+	}
+}

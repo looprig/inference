@@ -59,14 +59,32 @@ type serverStreamEncoder struct {
 
 var _ codec.StreamEncoder = (*serverStreamEncoder)(nil)
 
+// writeMessageStart emits the leading message_start event. Its `message` is a
+// complete Message — required = [id, type, role, content, model, stop_reason,
+// stop_sequence, stop_details, usage, container] — so it reuses
+// wireMessageResponse (server_encode.go) rather than a second, thinner struct
+// that omitted five of those ten and produced a frame the stream_event schema
+// rejects.
+//
+// What is genuinely unknown this early travels as null, not as an invention:
+// stop_reason, stop_sequence, stop_details and container are all nullable and
+// all nil, because no turn has ended yet. Two members cannot be null and are
+// therefore placeholders, which is the honest description of them:
+//
+//   - model is a non-nullable string, and OpenStream receives no request or
+//     target context (see the doc comment there), so it is empty until Finish
+//     supplies the authoritative value on message_delta.
+//   - usage's input_tokens and output_tokens are non-nullable integers with no
+//     "not counted yet" value, so both are 0. Its five nullable members stay
+//     null for the same reason they do on the non-streaming path.
 func (e *serverStreamEncoder) writeMessageStart() error {
 	return e.writeEvent(eventMessageStart, sseMessageStart{
 		Type: eventMessageStart,
-		Message: sseStartMessage{
+		Message: wireMessageResponse{
 			ID:      "msg_" + randomHex(12),
 			Type:    "message",
 			Role:    roleAssistant,
-			Content: []anthropicBlock{},
+			Content: []responseBlock{},
 			Usage:   wireUsage{},
 		},
 	})
@@ -95,17 +113,39 @@ func (e *serverStreamEncoder) WriteChunk(chunk content.Chunk) error {
 			Delta: sseDelta{Type: deltaText, Text: c.Text},
 		})
 	case *content.ThinkingChunk:
+		if c.ProviderStateFormat == providerStateFormatAnthropicRedacted && len(c.ProviderState) > 0 {
+			data, err := opaqueRedactedToWire(c.ProviderState)
+			if err != nil {
+				return err
+			}
+			return e.writeRedactedThinking(data)
+		}
 		if err := e.ensureBlock(blockKindThinking, 0, "", ""); err != nil {
 			return err
 		}
-		if c.Thinking == "" {
-			return nil
+		if c.Thinking != "" {
+			if err := e.writeEvent(eventContentBlockDelta, sseContentBlockDelta{
+				Type: eventContentBlockDelta, Index: e.openWireIndex,
+				Delta: sseDelta{Type: deltaThinking, Thinking: c.Thinking},
+			}); err != nil {
+				return err
+			}
 		}
-		return e.writeEvent(eventContentBlockDelta, sseContentBlockDelta{
-			Type:  eventContentBlockDelta,
-			Index: e.openWireIndex,
-			Delta: sseDelta{Type: deltaThinking, Thinking: c.Thinking},
-		})
+		if c.Signature != "" {
+			// The streaming counterpart of encodeResponseBlock's check. A
+			// foreign signature is refused here rather than streamed, so a
+			// client cannot receive a differently-scoped signature purely by
+			// asking for SSE.
+			signature, ok := c.SignatureReplayableAs(signatureFormatAnthropic)
+			if !ok {
+				return &ForeignThinkingSignatureError{Format: c.SignatureFormat}
+			}
+			return e.writeEvent(eventContentBlockDelta, sseContentBlockDelta{
+				Type: eventContentBlockDelta, Index: e.openWireIndex,
+				Delta: sseDelta{Type: deltaSignature, Signature: signature},
+			})
+		}
+		return nil
 	case *content.ToolUseChunk:
 		if err := e.ensureBlock(blockKindToolUse, c.Index, c.ID, c.Name); err != nil {
 			return err
@@ -121,6 +161,21 @@ func (e *serverStreamEncoder) WriteChunk(chunk content.Chunk) error {
 	default:
 		return &UnsupportedChunkError{Chunk: unsupportedChunkTypeName(chunk)}
 	}
+}
+
+func (e *serverStreamEncoder) writeRedactedThinking(data string) error {
+	if err := e.closeOpenBlock(); err != nil {
+		return err
+	}
+	index := e.nextWireIndex
+	e.nextWireIndex++
+	if err := e.writeEvent(eventContentBlockStart, sseContentBlockStart{
+		Type: eventContentBlockStart, Index: index,
+		ContentBlock: responseBlock{block: anthropicBlock{Type: blockTypeRedactedThinking, Data: data}},
+	}); err != nil {
+		return err
+	}
+	return e.writeEvent(eventContentBlockStop, sseContentBlockStop{Type: eventContentBlockStop, Index: index})
 }
 
 // ensureBlock makes kind (identified, for tool_use, by the neutral index) the
@@ -158,7 +213,7 @@ func (e *serverStreamEncoder) ensureBlock(kind blockKind, toolIndex int, toolID,
 	if err := e.writeEvent(eventContentBlockStart, sseContentBlockStart{
 		Type:         eventContentBlockStart,
 		Index:        wireIndex,
-		ContentBlock: block,
+		ContentBlock: responseBlock{block: block},
 	}); err != nil {
 		return err
 	}
@@ -192,14 +247,10 @@ func (e *serverStreamEncoder) Finish(result stream.StreamResult) error {
 	}
 
 	stopReason := encodeFinishReason(result.FinishReason)
-	var outputTokens uint64
-	if result.Usage != nil {
-		outputTokens = uint64(result.Usage.OutputTokens)
-	}
 	if err := e.writeEvent(eventMessageDelta, sseMessageDelta{
 		Type:  eventMessageDelta,
 		Delta: sseMessageDeltaInfo{StopReason: &stopReason},
-		Usage: sseMessageDeltaUsage{OutputTokens: outputTokens},
+		Usage: messageDeltaUsage(result.Usage),
 	}); err != nil {
 		return err
 	}
@@ -269,22 +320,20 @@ func unsupportedChunkTypeName(c content.Chunk) string {
 // usagenorm.Count, which cannot marshal a real value.
 
 type sseMessageStart struct {
-	Type    string          `json:"type"`
-	Message sseStartMessage `json:"message"`
+	Type    string              `json:"type"`
+	Message wireMessageResponse `json:"message"`
 }
 
-type sseStartMessage struct {
-	ID      string           `json:"id"`
-	Type    string           `json:"type"`
-	Role    string           `json:"role"`
-	Content []anthropicBlock `json:"content"`
-	Usage   wireUsage        `json:"usage"`
-}
-
+// sseContentBlockStart carries a RESPONSE ContentBlock, exactly as the
+// non-streaming `content` array does — ContentBlockStartEvent.content_block
+// refs the same union — so it marshals through responseBlock. A bare
+// anthropicBlock here emitted a text block with neither `text` nor `citations`
+// and a tool_use block with no `caller`, i.e. the streaming twin of the
+// non-streaming defect.
 type sseContentBlockStart struct {
-	Type         string         `json:"type"`
-	Index        int            `json:"index"`
-	ContentBlock anthropicBlock `json:"content_block"`
+	Type         string        `json:"type"`
+	Index        int           `json:"index"`
+	ContentBlock responseBlock `json:"content_block"`
 }
 
 type sseContentBlockDelta struct {
@@ -297,6 +346,7 @@ type sseDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
+	Signature   string `json:"signature,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 }
 
@@ -311,12 +361,50 @@ type sseMessageDelta struct {
 	Usage sseMessageDeltaUsage `json:"usage"`
 }
 
+// sseMessageDeltaInfo is MessageDelta, required = [container, stop_details,
+// stop_reason, stop_sequence]. Only stop_reason is ever known here; the other
+// three are nullable and stay null, which is the same nothing-to-report
+// statement wireMessageResponse makes on the non-streaming path.
 type sseMessageDeltaInfo struct {
-	StopReason *string `json:"stop_reason"`
+	StopReason   *string          `json:"stop_reason"`
+	StopSequence *string          `json:"stop_sequence"`
+	StopDetails  *json.RawMessage `json:"stop_details"`
+	Container    *json.RawMessage `json:"container"`
 }
 
+// sseMessageDeltaUsage is MessageDeltaUsage, required =
+// [cache_creation_input_tokens, cache_read_input_tokens, input_tokens,
+// output_tokens, output_tokens_details, server_tool_use]. output_tokens is the
+// one non-nullable member; everything else is a pointer so that "the upstream
+// target reported no usage at all" is emitted as null rather than as a zero
+// that claims a measured count of nothing.
 type sseMessageDeltaUsage struct {
-	OutputTokens uint64 `json:"output_tokens"`
+	InputTokens         *uint64              `json:"input_tokens"`
+	OutputTokens        uint64               `json:"output_tokens"`
+	CacheReadTokens     *uint64              `json:"cache_read_input_tokens"`
+	CacheCreationTokens *uint64              `json:"cache_creation_input_tokens"`
+	OutputTokensDetails *wireOutputTokensDet `json:"output_tokens_details"`
+	ServerToolUse       *json.RawMessage     `json:"server_tool_use"`
+}
+
+// messageDeltaUsage builds the terminal usage object. A nil neutral Usage still
+// produces the object — it is required — but with every nullable member null:
+// the gateway measured nothing, and output_tokens is 0 only because the schema
+// gives it no "unknown" spelling.
+func messageDeltaUsage(u *content.Usage) sseMessageDeltaUsage {
+	if u == nil {
+		return sseMessageDeltaUsage{}
+	}
+	input := uint64(u.InputTokens)
+	cacheRead := uint64(u.CacheReadTokens)
+	cacheCreation := uint64(u.CacheCreationTokens)
+	return sseMessageDeltaUsage{
+		InputTokens:         &input,
+		OutputTokens:        uint64(u.OutputTokens),
+		CacheReadTokens:     &cacheRead,
+		CacheCreationTokens: &cacheCreation,
+		OutputTokensDetails: &wireOutputTokensDet{ThinkingTokens: uint64(u.ReasoningTokens)},
+	}
 }
 
 type sseMessageStop struct {

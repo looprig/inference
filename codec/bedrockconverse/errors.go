@@ -1,6 +1,9 @@
 package bedrockconverse
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // UnsupportedBlockError reports a content block that Bedrock Converse cannot
 // represent in the shared request vocabulary.
@@ -19,6 +22,17 @@ func (e *UnsupportedBlockError) Error() string {
 // UnsupportedConversationError reports an unexpected conversation variant.
 type UnsupportedConversationError struct {
 	Conversation string
+}
+
+// ConversationCollisionError reports adjacent neutral turns that Bedrock
+// cannot represent without mixing ordinary user content and toolResult blocks
+// in one Converse message.
+type ConversationCollisionError struct {
+	Reason string
+}
+
+func (e *ConversationCollisionError) Error() string {
+	return "bedrockconverse: conversation collision: " + e.Reason
 }
 
 func (e *UnsupportedConversationError) Error() string {
@@ -118,4 +132,33 @@ func (e *StreamAPIError) Error() string {
 		message += ": " + e.Message
 	}
 	return message
+}
+
+// ForeignReasoningSignatureError reports a reasoning signature this dialect
+// cannot prove it minted, either because another dialect's label is attached
+// (Format names it) or because no label is attached at all (Format is empty).
+//
+// It is a hard error, not a degrade. A reasoning signature is verified by its
+// issuer: measured against api.anthropic.com on 2026-08-13, a verbatim
+// signature is accepted, a tampered one draws HTTP 400, and an EMPTY one draws
+// the same 400. Both degrades therefore lose — forwarding sends a request
+// certain to be rejected, stripping sends an unsigned reasoning block equally
+// certain to be rejected while destroying the only copy of the continuation
+// state. Failing here costs the same turn and names the cause.
+//
+// Converse fronts the same Claude models as the Anthropic Messages API, so the
+// foreign case is an ordinary session moved between endpoints, not an attack.
+type ForeignReasoningSignatureError struct {
+	// Format is the label carried by the signature, or "" when it carries none.
+	Format string
+}
+
+func (e *ForeignReasoningSignatureError) Error() string {
+	origin := "no dialect label"
+	if e.Format != "" {
+		origin = "dialect " + strconv.Quote(e.Format)
+	}
+	return "bedrockconverse: refusing to replay a reasoning signature minted by " + origin +
+		"; this dialect replays only signatures labelled " + strconv.Quote(signatureFormatBedrockConverse) +
+		", and an unsigned reasoning block is rejected too, so the signature can be neither forwarded nor dropped"
 }

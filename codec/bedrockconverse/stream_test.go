@@ -170,6 +170,27 @@ func TestDecodeStream_TextToolReasoningUsageAndTerminal(t *testing.T) {
 	}
 }
 
+func TestDecodeStream_RedactedReasoningPreservesOpaqueState(t *testing.T) {
+	t.Parallel()
+	body := appendFrames(
+		eventFrame("messageStart", `{"role":"assistant"}`),
+		eventFrame("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"redactedContent":"AQID/w=="}}}`),
+		eventFrame("contentBlockStop", `{"contentBlockIndex":0}`),
+		eventFrame("messageStop", `{"stopReason":"end_turn"}`),
+	)
+	chunks, _, _, err := drainStream(t, body)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("terminal error = %v, want EOF", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %#v", chunks)
+	}
+	thinking, ok := chunks[0].(*content.ThinkingChunk)
+	if !ok || string(thinking.ProviderState) != `"AQID/w=="` || thinking.ProviderStateFormat != "bedrock-converse-redacted-thinking" {
+		t.Fatalf("chunk = %#v", chunks[0])
+	}
+}
+
 func TestDecodeStream_ToolInputFragments(t *testing.T) {
 	t.Parallel()
 

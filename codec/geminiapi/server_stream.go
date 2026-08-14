@@ -61,15 +61,35 @@ func (e *serverStreamEncoder) WriteChunk(chunk content.Chunk) error {
 		}
 		part = geminiPart{Text: c.Text}
 	case *content.ThinkingChunk:
-		if c.Thinking == "" {
+		var signature string
+		if c.ProviderStateFormat == providerStateFormatGemini && len(c.ProviderState) > 0 {
+			var err error
+			signature, err = providerStateToThoughtSignature(c.ProviderState)
+			if err != nil {
+				return err
+			}
+		}
+		if c.Thinking == "" && signature == "" {
 			return nil
 		}
-		part = geminiPart{Thought: true, Text: c.Thinking}
+		if c.Thinking == "" {
+			part = geminiPart{Thought: true, ThoughtSignature: signature}
+		} else {
+			part = geminiPart{Thought: true, Text: c.Thinking, ThoughtSignature: signature}
+		}
 	case *content.ToolUseChunk:
 		if c.ID == "" && c.Name == "" && c.InputJSON == "" {
 			return nil
 		}
-		part = geminiPart{FunctionCall: &functionCall{ID: c.ID, Name: c.Name, Args: toolCallArgs(c.InputJSON)}}
+		var sig string
+		if c.ProviderStateFormat == providerStateFormatGemini && len(c.ProviderState) > 0 {
+			var err error
+			sig, err = providerStateToThoughtSignature(c.ProviderState)
+			if err != nil {
+				return err
+			}
+		}
+		part = geminiPart{ThoughtSignature: sig, FunctionCall: &functionCall{ID: wireToolCallID(c.ID), Name: c.Name, Args: toolCallArgs(c.InputJSON)}}
 	default:
 		return &UnsupportedChunkError{Chunk: unsupportedChunkTypeName(chunk)}
 	}

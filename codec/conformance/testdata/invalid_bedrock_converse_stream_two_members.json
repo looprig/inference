@@ -1,0 +1,8 @@
+{
+  "messageStart": {
+    "role": "assistant"
+  },
+  "messageStop": {
+    "stopReason": "end_turn"
+  }
+}

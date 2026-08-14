@@ -49,9 +49,17 @@ type encodeChatChoice struct {
 // choice's `message`. Content is a pointer so an assistant turn with only
 // tool calls can encode `"content":null`, matching real Chat Completions
 // responses.
+//
+// Refusal is a pointer with no omitempty for the same reason:
+// ChatCompletionResponseMessage.required is ["role","content","refusal"], so
+// the member must appear on every response this codec serves — null when the
+// turn was not a refusal, and the block's text (empty string included) when a
+// *content.RefusalBlock is present. An omitted key is an illegal body, not a
+// neutral one.
 type encodeChatMessage struct {
 	Role             string           `json:"role"`
 	Content          *string          `json:"content"`
+	Refusal          *string          `json:"refusal"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []encodeToolCall `json:"tool_calls,omitempty"`
 }
@@ -142,6 +150,8 @@ func buildResponseMessage(blocks []content.Block, ids func() string) (encodeChat
 	var reasoning strings.Builder
 	var text strings.Builder
 	var hasText bool
+	var refusal strings.Builder
+	var hasRefusal bool
 	var calls []encodeToolCall
 
 	for _, b := range blocks {
@@ -151,6 +161,12 @@ func buildResponseMessage(blocks []content.Block, ids func() string) (encodeChat
 		case *content.TextBlock:
 			hasText = true
 			text.WriteString(b.Text)
+		case *content.RefusalBlock:
+			// The response message's own `refusal` member is where this
+			// belongs; serving it as `content` would hand a client the
+			// refusal as ordinary assistant prose.
+			hasRefusal = true
+			refusal.WriteString(b.Text)
 		case *content.ToolUseBlock:
 			id := b.ID
 			if id == "" {
@@ -175,10 +191,16 @@ func buildResponseMessage(blocks []content.Block, ids func() string) (encodeChat
 		s := text.String()
 		contentPtr = &s
 	}
+	var refusalPtr *string
+	if hasRefusal {
+		s := refusal.String()
+		refusalPtr = &s
+	}
 
 	return encodeChatMessage{
 		Role:             roleAssistantWire,
 		Content:          contentPtr,
+		Refusal:          refusalPtr,
 		ReasoningContent: reasoning.String(),
 		ToolCalls:        calls,
 	}, nil

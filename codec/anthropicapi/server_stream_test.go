@@ -232,34 +232,38 @@ func TestStream_UsageOnMessageDelta(t *testing.T) {
 	t.Fatal("no message_delta event found")
 }
 
-// TestStream_SignedThinkingIsNotStreamed documents that ThinkingBlock.Signature
-// is a complete-block-only field (content.ThinkingChunk has no Signature field
-// per core/content/chunk.go), so signature round-trip is only meaningful on the
-// non-streaming WriteResponse path (see server_encode_test.go), not here.
-func TestStream_SignedThinkingIsNotStreamed(t *testing.T) {
+func TestStream_DecodedSignatureAndRedactedThinkingRoundTrip(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	enc, err := (anthropicapi.Codec{}).OpenStream(rec)
 	if err != nil {
 		t.Fatalf("OpenStream() error = %v", err)
 	}
-	if err := enc.WriteChunk(&content.ThinkingChunk{Thinking: "hmm"}); err != nil {
-		t.Fatalf("WriteChunk: %v", err)
+	payloads := [][]byte{
+		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}`),
+		[]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-opaque"}}`),
+		[]byte(`{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"redacted-opaque"}}`),
+	}
+	for _, payload := range payloads {
+		chunks, err := (anthropicapi.Codec{}).DecodeEvent(payload)
+		if err != nil {
+			t.Fatalf("DecodeEvent: %v", err)
+		}
+		for _, chunk := range chunks {
+			if err := enc.WriteChunk(chunk); err != nil {
+				t.Fatalf("WriteChunk: %v", err)
+			}
+		}
 	}
 	if err := enc.Finish(stream.StreamResult{}); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
-	events := parseSSEEvents(t, rec.Body.String())
-	for _, e := range events {
-		if e.Name == "content_block_start" {
-			cb, _ := e.Data["content_block"].(map[string]any)
-			if cb["type"] != "thinking" {
-				continue
-			}
-			if _, has := cb["signature"]; has {
-				t.Errorf("content_block_start carries a signature field on an in-progress thinking block: %v", cb)
-			}
-		}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"signature_delta","signature":"sig-opaque"`) {
+		t.Fatalf("stream omitted signature delta: %s", body)
+	}
+	if !strings.Contains(body, `"type":"redacted_thinking","data":"redacted-opaque"`) {
+		t.Fatalf("stream omitted redacted thinking: %s", body)
 	}
 }
 

@@ -100,7 +100,7 @@ func TestAnthropicServerCodec_SameDialectRoundTrip(t *testing.T) {
 			&content.AIMessage{Message: content.Message{
 				Role: content.RoleAssistant,
 				Blocks: []content.Block{
-					&content.ThinkingBlock{Thinking: "step by step", Signature: signature},
+					content.NewSignedThinkingBlock("step by step", signature, signatureFormatAnthropic, nil, ""),
 					&content.ToolUseBlock{ID: "toolu_1", Name: "calc", Input: json.RawMessage(`{"x":1}`)},
 				},
 			}},

@@ -167,7 +167,7 @@ func TestWriteResponse_SignedThinkingRoundTrip(t *testing.T) {
 		Message: &content.AIMessage{
 			Message: content.Message{
 				Role:   content.RoleAssistant,
-				Blocks: []content.Block{&content.ThinkingBlock{Thinking: "hmm", Signature: sig}},
+				Blocks: []content.Block{content.NewSignedThinkingBlock("hmm", sig, signatureFormatAnthropic, nil, "")},
 			},
 		},
 	}

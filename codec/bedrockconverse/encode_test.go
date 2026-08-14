@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -104,6 +105,356 @@ func TestEncodeRequest_SystemAndMessages(t *testing.T) {
 	}
 }
 
+func TestEncodeRequest_MergesAdjacentOrdinaryUserTurns(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: baseModel(), Messages: content.AgenticMessages{
+		userMessage(&content.TextBlock{Text: "first"}),
+		userMessage(&content.TextBlock{Text: "second"}),
+	}}
+	raw, err := bedrockconverse.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	messages := decodeArray(t, decodeObject(t, raw)["messages"])
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(messages))
+	}
+	blocks := decodeArray(t, messages[0]["content"])
+	if len(blocks) != 2 || asString(t, blocks[0]["text"]) != "first" || asString(t, blocks[1]["text"]) != "second" {
+		t.Fatalf("content = %#v, want both user blocks in order", blocks)
+	}
+}
+
+func TestEncodeRequest_MergesParallelToolResults(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	req := inference.Request{Model: m, Messages: content.AgenticMessages{
+		toolResultMessage("call-1", false, &content.TextBlock{Text: "one"}),
+		toolResultMessage("call-2", false, &content.TextBlock{Text: "two"}),
+	}}
+	raw, err := bedrockconverse.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	messages := decodeArray(t, decodeObject(t, raw)["messages"])
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(messages))
+	}
+	blocks := decodeArray(t, messages[0]["content"])
+	if len(blocks) != 2 || blocks[0]["toolResult"] == nil || blocks[1]["toolResult"] == nil {
+		t.Fatalf("content = %#v, want two toolResult blocks", blocks)
+	}
+}
+
+func TestEncodeRequest_FoldsTransientRuntimeTextIntoFinalToolResult(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	req := inference.Request{
+		Model: m,
+		Messages: content.AgenticMessages{
+			toolResultMessage("call-1", false, &content.TextBlock{Text: "tool bytes"}),
+			userMessage(&content.TextBlock{Text: "runtime\nbytes"}, &content.TextBlock{Text: "second runtime block"}),
+		},
+		TransientMessages: 1,
+	}
+	raw, err := bedrockconverse.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	messages := decodeArray(t, decodeObject(t, raw)["messages"])
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(messages))
+	}
+	blocks := decodeArray(t, messages[0]["content"])
+	if len(blocks) != 1 || blocks[0]["text"] != nil {
+		t.Fatalf("content = %#v, want one pure toolResult block", blocks)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(blocks[0]["toolResult"], &result); err != nil {
+		t.Fatalf("toolResult: %v", err)
+	}
+	resultContent := decodeArray(t, result["content"])
+	if len(resultContent) != 3 {
+		t.Fatalf("len(toolResult.content) = %d, want 3", len(resultContent))
+	}
+	want := []string{"tool bytes", "runtime\nbytes", "second runtime block"}
+	for i, text := range want {
+		if got := asString(t, resultContent[i]["text"]); got != text {
+			t.Errorf("toolResult.content[%d].text = %q, want %q", i, got, text)
+		}
+	}
+}
+
+func TestEncodeRequest_RejectsUserToolResultCollision(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	m.Caps.AcceptsImages = true
+	cases := []struct {
+		name      string
+		messages  content.AgenticMessages
+		transient int
+	}{
+		{
+			// A COMMITTED user turn after tool results is Looprig's own fold
+			// feature and must encode (see the separator tests below). Only the
+			// transient runtime suffix folds into the final tool result, and that
+			// fold is text-only: a non-text transient block still fails closed
+			// rather than being dropped.
+			name: "non-text transient user after tool result",
+			messages: content.AgenticMessages{
+				toolResultMessage("call-1", false, &content.TextBlock{Text: "tool"}),
+				userMessage(&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte("png")}}),
+			},
+			transient: 1,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: tc.messages, TransientMessages: tc.transient})
+			var collision *bedrockconverse.ConversationCollisionError
+			if !errors.As(err, &collision) {
+				t.Fatalf("EncodeRequest() error = %T (%v), want ConversationCollisionError", err, err)
+			}
+		})
+	}
+}
+
+// messageRoles reports the role of every projected Converse message, so a test can
+// assert the whole alternation in one comparison.
+func messageRoles(t *testing.T, messages []map[string]json.RawMessage) []string {
+	t.Helper()
+	roles := make([]string, len(messages))
+	for i, message := range messages {
+		roles[i] = asString(t, message["role"])
+	}
+	return roles
+}
+
+// messageTexts reports the text of every content block of one projected message,
+// failing if any block is not a plain text block.
+func messageTexts(t *testing.T, message map[string]json.RawMessage) []string {
+	t.Helper()
+	blocks := decodeArray(t, message["content"])
+	texts := make([]string, 0, len(blocks))
+	for i, block := range blocks {
+		if block["text"] == nil {
+			t.Fatalf("content[%d] = %#v, want a text block", i, block)
+		}
+		texts = append(texts, asString(t, block["text"]))
+	}
+	return texts
+}
+
+// toolResultTexts reports the text of every block inside the single toolResult of a
+// projected tool-result message.
+func toolResultTexts(t *testing.T, message map[string]json.RawMessage) []string {
+	t.Helper()
+	blocks := decodeArray(t, message["content"])
+	if len(blocks) != 1 || blocks[0]["toolResult"] == nil {
+		t.Fatalf("content = %#v, want exactly one toolResult block", blocks)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(blocks[0]["toolResult"], &result); err != nil {
+		t.Fatalf("toolResult: %v", err)
+	}
+	inner := decodeArray(t, result["content"])
+	texts := make([]string, 0, len(inner))
+	for i, block := range inner {
+		if block["text"] == nil {
+			t.Fatalf("toolResult.content[%d] = %#v, want a text block", i, block)
+		}
+		texts = append(texts, asString(t, block["text"]))
+	}
+	return texts
+}
+
+// assertInsertedSeparator fails unless the message is an assistant turn whose only
+// content is one text block naming Looprig as its author. The naming is the contract:
+// this turn is not model output, and a human reading the request body must be able to
+// see that Looprig put it there.
+func assertInsertedSeparator(t *testing.T, message map[string]json.RawMessage) {
+	t.Helper()
+	if role := asString(t, message["role"]); role != "assistant" {
+		t.Fatalf("separator role = %q, want assistant", role)
+	}
+	texts := messageTexts(t, message)
+	if len(texts) != 1 {
+		t.Fatalf("separator has %d content blocks, want 1", len(texts))
+	}
+	if !strings.Contains(texts[0], "Looprig") {
+		t.Errorf("separator text = %q, want it to name Looprig as the inserter", texts[0])
+	}
+}
+
+// TestEncodeRequest_SeparatesCommittedUserTurnFromToolResults pins the projection of
+// Looprig's fold feature: a user message committed to history while a tool call was
+// still running lands after the tool results, and Converse cannot carry it as-is.
+// The projector inserts an assistant separator turn rather than failing, because the
+// message is already in stored history and a failure here wedges the session forever.
+func TestEncodeRequest_SeparatesCommittedUserTurnFromToolResults(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	m.Caps.AcceptsImages = true
+
+	toolLoop := func(extra ...content.Conversation) content.AgenticMessages {
+		messages := content.AgenticMessages{
+			userMessage(&content.TextBlock{Text: "start"}),
+			assistantMessage(&content.ToolUseBlock{ID: "call-1", Name: "read", Input: []byte(`{"path":"a"}`)}),
+			toolResultMessage("call-1", false, &content.TextBlock{Text: "tool bytes"}),
+		}
+		return append(messages, extra...)
+	}
+
+	t.Run("one folded message", func(t *testing.T) {
+		t.Parallel()
+		raw, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: toolLoop(
+			userMessage(&content.TextBlock{Text: "actually, stop"}),
+		)})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		messages := decodeArray(t, decodeObject(t, raw)["messages"])
+		want := []string{"user", "assistant", "user", "assistant", "user"}
+		if got := messageRoles(t, messages); !reflect.DeepEqual(got, want) {
+			t.Fatalf("roles = %v, want %v", got, want)
+		}
+		// The tool-result turn is byte-identical to the one already sent before the
+		// user typed: the separator is appended after it, never merged into it, so a
+		// cached committed prefix stays reusable.
+		if got := toolResultTexts(t, messages[2]); !reflect.DeepEqual(got, []string{"tool bytes"}) {
+			t.Errorf("toolResult.content = %v, want the tool's own bytes only", got)
+		}
+		assertInsertedSeparator(t, messages[3])
+		if got := messageTexts(t, messages[4]); !reflect.DeepEqual(got, []string{"actually, stop"}) {
+			t.Errorf("folded user turn = %v, want the user's own words as a user turn", got)
+		}
+	})
+
+	t.Run("several folded messages share one separator", func(t *testing.T) {
+		t.Parallel()
+		raw, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: toolLoop(
+			userMessage(&content.TextBlock{Text: "first"}),
+			userMessage(&content.TextBlock{Text: "second"}),
+		)})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		messages := decodeArray(t, decodeObject(t, raw)["messages"])
+		want := []string{"user", "assistant", "user", "assistant", "user"}
+		if got := messageRoles(t, messages); !reflect.DeepEqual(got, want) {
+			t.Fatalf("roles = %v, want %v", got, want)
+		}
+		assertInsertedSeparator(t, messages[3])
+		if got := messageTexts(t, messages[4]); !reflect.DeepEqual(got, []string{"first", "second"}) {
+			t.Errorf("folded user turn = %v, want both folded messages merged into one user turn", got)
+		}
+	})
+
+	t.Run("folded message carrying an image", func(t *testing.T) {
+		t.Parallel()
+		raw, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: toolLoop(
+			userMessage(
+				&content.TextBlock{Text: "look at this"},
+				&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte("png")}},
+			),
+		)})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		messages := decodeArray(t, decodeObject(t, raw)["messages"])
+		if len(messages) != 5 {
+			t.Fatalf("len(messages) = %d, want 5", len(messages))
+		}
+		blocks := decodeArray(t, messages[4]["content"])
+		if len(blocks) != 2 || blocks[0]["text"] == nil || blocks[1]["image"] == nil {
+			t.Fatalf("folded user content = %#v, want text + image", blocks)
+		}
+	})
+
+	t.Run("transient runtime tail joins the folded user turn", func(t *testing.T) {
+		t.Parallel()
+		raw, err := bedrockconverse.EncodeRequest(inference.Request{
+			Model: m,
+			Messages: toolLoop(
+				userMessage(&content.TextBlock{Text: "actually, stop"}),
+				userMessage(&content.TextBlock{Text: "runtime context"}),
+			),
+			TransientMessages: 1,
+		})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		messages := decodeArray(t, decodeObject(t, raw)["messages"])
+		want := []string{"user", "assistant", "user", "assistant", "user"}
+		if got := messageRoles(t, messages); !reflect.DeepEqual(got, want) {
+			t.Fatalf("roles = %v, want %v", got, want)
+		}
+		// Exactly one separator, and the runtime suffix rides the ordinary user turn
+		// rather than being folded into a tool result it no longer follows.
+		assertInsertedSeparator(t, messages[3])
+		if got := toolResultTexts(t, messages[2]); !reflect.DeepEqual(got, []string{"tool bytes"}) {
+			t.Errorf("toolResult.content = %v, want the tool's own bytes only", got)
+		}
+		if got := messageTexts(t, messages[4]); !reflect.DeepEqual(got, []string{"actually, stop", "runtime context"}) {
+			t.Errorf("final user turn = %v, want the folded message then the runtime suffix", got)
+		}
+	})
+
+	t.Run("model reply after the folded turn keeps alternating", func(t *testing.T) {
+		t.Parallel()
+		raw, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: toolLoop(
+			userMessage(&content.TextBlock{Text: "actually, stop"}),
+			assistantMessage(&content.TextBlock{Text: "stopping"}),
+			userMessage(&content.TextBlock{Text: "thanks"}),
+		)})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		messages := decodeArray(t, decodeObject(t, raw)["messages"])
+		want := []string{"user", "assistant", "user", "assistant", "user", "assistant", "user"}
+		if got := messageRoles(t, messages); !reflect.DeepEqual(got, want) {
+			t.Fatalf("roles = %v, want %v", got, want)
+		}
+		assertInsertedSeparator(t, messages[3])
+		if got := messageTexts(t, messages[5]); !reflect.DeepEqual(got, []string{"stopping"}) {
+			t.Errorf("assistant reply = %v, want the model's own reply as its own turn", got)
+		}
+	})
+}
+
+func TestEncodeCountTokensInput_UsesSameConversationProjection(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: baseModel(), Messages: content.AgenticMessages{
+		userMessage(&content.TextBlock{Text: "first"}),
+		userMessage(&content.TextBlock{Text: "second"}),
+	}}
+	requestRaw, err := bedrockconverse.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	countRaw, err := bedrockconverse.EncodeCountTokensInput(req)
+	if err != nil {
+		t.Fatalf("EncodeCountTokensInput() error = %v", err)
+	}
+	requestMessages := decodeObject(t, requestRaw)["messages"]
+	countMessages := decodeObject(t, countRaw)["messages"]
+	if string(requestMessages) != string(countMessages) {
+		t.Fatalf("count messages = %s, request messages = %s", countMessages, requestMessages)
+	}
+}
+
 func TestEncodeRequest_ImagesAndDocuments(t *testing.T) {
 	t.Parallel()
 
@@ -180,13 +531,13 @@ func TestEncodeRequest_ReasoningToolsAndToolResult(t *testing.T) {
 		Model: m,
 		Messages: content.AgenticMessages{
 			assistantMessage(
-				content.NewThinkingBlock("consider", "sig", nil, ""),
+				content.NewSignedThinkingBlock("consider", "sig", signatureFormatBedrockConverse, nil, ""),
 				&content.ToolUseBlock{ID: "call-1", Name: "lookup", Input: json.RawMessage(`{"query":"go"}`)},
 			),
 			toolResultMessage("call-1", true, &content.TextBlock{Text: "not found"}),
 		},
 		Tools:      []inference.Tool{{Name: "lookup", Description: "Find a thing", Schema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`)}},
-		ToolChoice: inference.ToolChoiceRequired,
+		ToolChoice: inference.ToolRequired(),
 	}
 	raw, err := bedrockconverse.EncodeRequest(req)
 	if err != nil {
@@ -255,6 +606,34 @@ func TestEncodeRequest_ReasoningToolsAndToolResult(t *testing.T) {
 	}
 	if _, ok := choice["any"]; !ok {
 		t.Errorf("toolChoice = %#v, want any", choice)
+	}
+}
+
+// TestEncodeRequest_ToolChoiceNamedTool pins the named tool-choice variant.
+// Converse's ToolChoice is a Smithy union, so the member key IS the
+// discriminator: SpecificToolChoice arrives as {"tool":{"name":...}} with name
+// @required.
+func TestEncodeRequest_ToolChoiceNamedTool(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+	raw, err := bedrockconverse.EncodeRequest(inference.Request{
+		Model:    m,
+		Messages: content.AgenticMessages{userMessage(&content.TextBlock{Text: "hi"})},
+		Tools: []inference.Tool{
+			{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: inference.ToolNamed("search"),
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	toolConfig := decodeObject(t, decodeObject(t, raw)["toolConfig"])
+	const want = `{"tool":{"name":"search"}}`
+	if got := string(toolConfig["toolChoice"]); got != want {
+		t.Errorf("toolChoice = %s, want %s", got, want)
 	}
 }
 
@@ -452,10 +831,11 @@ func TestEncodeRequest_RejectsUnsupportedAndMalformedTools(t *testing.T) {
 		req  inference.Request
 	}{
 		{
-			name: "audio",
-			req:  inference.Request{Model: m, Messages: content.AgenticMessages{userMessage(&content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte("audio")})}},
-		},
-		{
+			// Audio is NOT here: Converse's ContentBlock union declares an
+			// `audio` member, so an audio block encodes. Its real limits — the
+			// AudioFormat allowlist, the minimum payload length and the
+			// toolResult union that has no audio member — are in
+			// encode_audio_test.go.
 			name: "remote image",
 			req:  inference.Request{Model: m, Messages: content.AgenticMessages{userMessage(&content.ImageBlock{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{URL: "https://example.test/image.png"}})}},
 		},
@@ -569,4 +949,30 @@ func asFloat(t *testing.T, raw json.RawMessage) float64 {
 		t.Fatalf("json.Unmarshal(float) error = %v; raw = %s", err, raw)
 	}
 	return value
+}
+
+// TestEncodeRequest_RefusalBlockFailsClosed pins the fail-closed encoding of a
+// content.RefusalBlock. Converse reports a decline through the response's
+// stopReason ("guardrail_intervened", "content_filtered"); its ContentBlock
+// union is text|image|document|video|audio|toolUse|toolResult|guardContent|
+// reasoningContent|cachePoint, with no refusal member, and no request field
+// carries one either. Sending it as `text` would replay the model's own
+// decline back to it as something it said.
+func TestEncodeRequest_RefusalBlockFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	_, err := bedrockconverse.EncodeRequest(inference.Request{
+		Model:    baseModel(),
+		Messages: content.AgenticMessages{assistantMessage(&content.RefusalBlock{Text: "I cannot help with that."})},
+	})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	var unsupported *bedrockconverse.UnsupportedBlockError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %v (%T), want *UnsupportedBlockError", err, err)
+	}
+	if !strings.Contains(unsupported.Reason, "refusal") {
+		t.Errorf("Reason = %q, want it to name the refusal limitation", unsupported.Reason)
+	}
 }

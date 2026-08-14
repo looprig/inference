@@ -1,0 +1,169 @@
+{
+  "anthropic": {
+    "create_message_request": {
+      "document": "anthropic/create_message_request.schema.json",
+      "direction": "request",
+      "root": "#/$defs/CreateMessageParams"
+    },
+    "message": {
+      "document": "anthropic/message.schema.json",
+      "direction": "response",
+      "root": "#/$defs/Message"
+    },
+    "stream_event": {
+      "document": "anthropic/stream_event.schema.json",
+      "direction": "response",
+      "root": "#/$defs/MessageStreamEvent",
+      "union": {
+        "style": "property",
+        "property": "type",
+        "members": {
+          "content_block_delta": "#/$defs/ContentBlockDeltaEvent",
+          "content_block_start": "#/$defs/ContentBlockStartEvent",
+          "content_block_stop": "#/$defs/ContentBlockStopEvent",
+          "message_delta": "#/$defs/MessageDeltaEvent",
+          "message_start": "#/$defs/MessageStartEvent",
+          "message_stop": "#/$defs/MessageStopEvent"
+        }
+      }
+    }
+  },
+  "bedrock-converse": {
+    "converse_request": {
+      "document": "bedrock-converse/converse_request.schema.json",
+      "direction": "request",
+      "root": "#/$defs/ConverseRequest"
+    },
+    "converse_response": {
+      "document": "bedrock-converse/converse_response.schema.json",
+      "direction": "response",
+      "root": "#/$defs/ConverseResponse"
+    },
+    "converse_stream_output": {
+      "document": "bedrock-converse/converse_stream_output.schema.json",
+      "direction": "response",
+      "root": "#/$defs/ConverseStreamOutput",
+      "union": {
+        "style": "member-key",
+        "members": {
+          "contentBlockDelta": "#/$defs/ContentBlockDeltaEvent",
+          "contentBlockStart": "#/$defs/ContentBlockStartEvent",
+          "contentBlockStop": "#/$defs/ContentBlockStopEvent",
+          "internalServerException": "#/$defs/InternalServerException",
+          "messageStart": "#/$defs/MessageStartEvent",
+          "messageStop": "#/$defs/MessageStopEvent",
+          "metadata": "#/$defs/ConverseStreamMetadataEvent",
+          "modelStreamErrorException": "#/$defs/ModelStreamErrorException",
+          "serviceUnavailableException": "#/$defs/ServiceUnavailableException",
+          "throttlingException": "#/$defs/ThrottlingException",
+          "validationException": "#/$defs/ValidationException"
+        }
+      }
+    }
+  },
+  "gemini": {
+    "generate_content_request": {
+      "document": "gemini/generate_content_request.schema.json",
+      "direction": "request",
+      "root": "#/$defs/GenerateContentRequest"
+    },
+    "generate_content_response": {
+      "document": "gemini/generate_content_response.schema.json",
+      "direction": "response",
+      "root": "#/$defs/GenerateContentResponse"
+    }
+  },
+  "openai": {
+    "chat_completion": {
+      "document": "openai/chat_completion.schema.json",
+      "direction": "response",
+      "root": "#/$defs/CreateChatCompletionResponse"
+    },
+    "chat_completion_chunk": {
+      "document": "openai/chat_completion_chunk.schema.json",
+      "direction": "response",
+      "root": "#/$defs/CreateChatCompletionStreamResponse"
+    },
+    "chat_completion_request": {
+      "document": "openai/chat_completion_request.schema.json",
+      "direction": "request",
+      "root": "#/$defs/CreateChatCompletionRequest"
+    }
+  },
+  "openai-responses": {
+    "create_response_request": {
+      "document": "openai-responses/create_response_request.schema.json",
+      "direction": "request",
+      "root": "#/$defs/CreateResponse"
+    },
+    "response": {
+      "document": "openai-responses/response.schema.json",
+      "direction": "response",
+      "root": "#/$defs/Response"
+    },
+    "stream_event": {
+      "document": "openai-responses/stream_event.schema.json",
+      "direction": "response",
+      "root": "#/$defs/ResponseStreamEvent",
+      "union": {
+        "style": "property",
+        "property": "type",
+        "members": {
+          "error": "#/$defs/ResponseErrorEvent",
+          "response.audio.delta": "#/$defs/ResponseAudioDeltaEvent",
+          "response.audio.done": "#/$defs/ResponseAudioDoneEvent",
+          "response.audio.transcript.delta": "#/$defs/ResponseAudioTranscriptDeltaEvent",
+          "response.audio.transcript.done": "#/$defs/ResponseAudioTranscriptDoneEvent",
+          "response.code_interpreter_call.completed": "#/$defs/ResponseCodeInterpreterCallCompletedEvent",
+          "response.code_interpreter_call.in_progress": "#/$defs/ResponseCodeInterpreterCallInProgressEvent",
+          "response.code_interpreter_call.interpreting": "#/$defs/ResponseCodeInterpreterCallInterpretingEvent",
+          "response.code_interpreter_call_code.delta": "#/$defs/ResponseCodeInterpreterCallCodeDeltaEvent",
+          "response.code_interpreter_call_code.done": "#/$defs/ResponseCodeInterpreterCallCodeDoneEvent",
+          "response.completed": "#/$defs/ResponseCompletedEvent",
+          "response.content_part.added": "#/$defs/ResponseContentPartAddedEvent",
+          "response.content_part.done": "#/$defs/ResponseContentPartDoneEvent",
+          "response.created": "#/$defs/ResponseCreatedEvent",
+          "response.custom_tool_call_input.delta": "#/$defs/ResponseCustomToolCallInputDeltaEvent",
+          "response.custom_tool_call_input.done": "#/$defs/ResponseCustomToolCallInputDoneEvent",
+          "response.failed": "#/$defs/ResponseFailedEvent",
+          "response.file_search_call.completed": "#/$defs/ResponseFileSearchCallCompletedEvent",
+          "response.file_search_call.in_progress": "#/$defs/ResponseFileSearchCallInProgressEvent",
+          "response.file_search_call.searching": "#/$defs/ResponseFileSearchCallSearchingEvent",
+          "response.function_call_arguments.delta": "#/$defs/ResponseFunctionCallArgumentsDeltaEvent",
+          "response.function_call_arguments.done": "#/$defs/ResponseFunctionCallArgumentsDoneEvent",
+          "response.image_generation_call.completed": "#/$defs/ResponseImageGenCallCompletedEvent",
+          "response.image_generation_call.generating": "#/$defs/ResponseImageGenCallGeneratingEvent",
+          "response.image_generation_call.in_progress": "#/$defs/ResponseImageGenCallInProgressEvent",
+          "response.image_generation_call.partial_image": "#/$defs/ResponseImageGenCallPartialImageEvent",
+          "response.in_progress": "#/$defs/ResponseInProgressEvent",
+          "response.incomplete": "#/$defs/ResponseIncompleteEvent",
+          "response.mcp_call.completed": "#/$defs/ResponseMCPCallCompletedEvent",
+          "response.mcp_call.failed": "#/$defs/ResponseMCPCallFailedEvent",
+          "response.mcp_call.in_progress": "#/$defs/ResponseMCPCallInProgressEvent",
+          "response.mcp_call_arguments.delta": "#/$defs/ResponseMCPCallArgumentsDeltaEvent",
+          "response.mcp_call_arguments.done": "#/$defs/ResponseMCPCallArgumentsDoneEvent",
+          "response.mcp_list_tools.completed": "#/$defs/ResponseMCPListToolsCompletedEvent",
+          "response.mcp_list_tools.failed": "#/$defs/ResponseMCPListToolsFailedEvent",
+          "response.mcp_list_tools.in_progress": "#/$defs/ResponseMCPListToolsInProgressEvent",
+          "response.output_item.added": "#/$defs/ResponseOutputItemAddedEvent",
+          "response.output_item.done": "#/$defs/ResponseOutputItemDoneEvent",
+          "response.output_text.annotation.added": "#/$defs/ResponseOutputTextAnnotationAddedEvent",
+          "response.output_text.delta": "#/$defs/ResponseTextDeltaEvent",
+          "response.output_text.done": "#/$defs/ResponseTextDoneEvent",
+          "response.queued": "#/$defs/ResponseQueuedEvent",
+          "response.reasoning_summary_part.added": "#/$defs/ResponseReasoningSummaryPartAddedEvent",
+          "response.reasoning_summary_part.done": "#/$defs/ResponseReasoningSummaryPartDoneEvent",
+          "response.reasoning_summary_text.delta": "#/$defs/ResponseReasoningSummaryTextDeltaEvent",
+          "response.reasoning_summary_text.done": "#/$defs/ResponseReasoningSummaryTextDoneEvent",
+          "response.reasoning_text.delta": "#/$defs/ResponseReasoningTextDeltaEvent",
+          "response.reasoning_text.done": "#/$defs/ResponseReasoningTextDoneEvent",
+          "response.refusal.delta": "#/$defs/ResponseRefusalDeltaEvent",
+          "response.refusal.done": "#/$defs/ResponseRefusalDoneEvent",
+          "response.web_search_call.completed": "#/$defs/ResponseWebSearchCallCompletedEvent",
+          "response.web_search_call.in_progress": "#/$defs/ResponseWebSearchCallInProgressEvent",
+          "response.web_search_call.searching": "#/$defs/ResponseWebSearchCallSearchingEvent"
+        }
+      }
+    }
+  }
+}

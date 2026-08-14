@@ -1,0 +1,607 @@
+{
+  "$defs": {
+    "ChatCompletionMessageCustomToolCall": {
+      "properties": {
+        "custom": {
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "input"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "custom"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "custom"
+      ],
+      "title": "Custom tool call",
+      "type": "object"
+    },
+    "ChatCompletionMessageToolCall": {
+      "properties": {
+        "function": {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "function"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "function"
+      ],
+      "title": "Function tool call",
+      "type": "object"
+    },
+    "ChatCompletionMessageToolCalls": {
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/ChatCompletionMessageToolCall"
+          },
+          {
+            "$ref": "#/$defs/ChatCompletionMessageCustomToolCall"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "ChatCompletionModeration": {
+      "properties": {
+        "input": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChatCompletionModerationResults"
+            },
+            {
+              "$ref": "#/$defs/ChatCompletionModerationError"
+            }
+          ]
+        },
+        "output": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChatCompletionModerationResults"
+            },
+            {
+              "$ref": "#/$defs/ChatCompletionModerationError"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "type": "object"
+    },
+    "ChatCompletionModerationError": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "error"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ChatCompletionModerationResults": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ModerationResultBody"
+          },
+          "type": "array"
+        },
+        "type": {
+          "enum": [
+            "moderation_results"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "model",
+        "results"
+      ],
+      "type": "object"
+    },
+    "ChatCompletionResponseMessage": {
+      "properties": {
+        "annotations": {
+          "items": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "url_citation"
+                ],
+                "type": "string"
+              },
+              "url_citation": {
+                "properties": {
+                  "end_index": {
+                    "type": "integer"
+                  },
+                  "start_index": {
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "format": "uri",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "end_index",
+                  "start_index",
+                  "url",
+                  "title"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "type",
+              "url_citation"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "format": "unixtime",
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "transcript": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "expires_at",
+                "data",
+                "transcript"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "function_call": {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "enum": [
+            "assistant"
+          ],
+          "type": "string"
+        },
+        "tool_calls": {
+          "$ref": "#/$defs/ChatCompletionMessageToolCalls"
+        }
+      },
+      "required": [
+        "role",
+        "content",
+        "refusal"
+      ],
+      "type": "object"
+    },
+    "ChatCompletionTokenLogprob": {
+      "properties": {
+        "bytes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logprob": {
+          "type": "number"
+        },
+        "token": {
+          "type": "string"
+        },
+        "top_logprobs": {
+          "items": {
+            "properties": {
+              "bytes": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "logprob": {
+                "type": "number"
+              },
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "token",
+              "logprob",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "token",
+        "logprob",
+        "bytes",
+        "top_logprobs"
+      ],
+      "type": "object"
+    },
+    "CompletionUsage": {
+      "properties": {
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens_details": {
+          "properties": {
+            "accepted_prediction_tokens": {
+              "type": "integer"
+            },
+            "audio_tokens": {
+              "type": "integer"
+            },
+            "reasoning_tokens": {
+              "type": "integer"
+            },
+            "rejected_prediction_tokens": {
+              "type": "integer"
+            },
+            "text_tokens": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "prompt_tokens_details": {
+          "properties": {
+            "audio_tokens": {
+              "type": "integer"
+            },
+            "cache_write_tokens": {
+              "type": "integer"
+            },
+            "cached_tokens": {
+              "type": "integer"
+            },
+            "image_tokens": {
+              "type": "integer"
+            },
+            "text_tokens": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "total_tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens"
+      ],
+      "type": "object"
+    },
+    "CreateChatCompletionResponse": {
+      "properties": {
+        "choices": {
+          "items": {
+            "properties": {
+              "finish_reason": {
+                "enum": [
+                  "stop",
+                  "length",
+                  "tool_calls",
+                  "content_filter",
+                  "function_call"
+                ],
+                "type": "string"
+              },
+              "index": {
+                "type": "integer"
+              },
+              "logprobs": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "content": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "$ref": "#/$defs/ChatCompletionTokenLogprob"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "refusal": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "$ref": "#/$defs/ChatCompletionTokenLogprob"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "content",
+                      "refusal"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "message": {
+                "$ref": "#/$defs/ChatCompletionResponseMessage"
+              }
+            },
+            "required": [
+              "finish_reason",
+              "index",
+              "message",
+              "logprobs"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "created": {
+          "format": "unixtime",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "moderation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatCompletionModeration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "object": {
+          "enum": [
+            "chat.completion"
+          ],
+          "type": "string"
+        },
+        "service_tier": {
+          "$ref": "#/$defs/ServiceTier"
+        },
+        "system_fingerprint": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/CompletionUsage"
+        }
+      },
+      "required": [
+        "choices",
+        "created",
+        "id",
+        "model",
+        "object"
+      ],
+      "type": "object"
+    },
+    "ModerationInputType": {
+      "enum": [
+        "text",
+        "image"
+      ],
+      "type": "string"
+    },
+    "ModerationResultBody": {
+      "properties": {
+        "categories": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": "object"
+        },
+        "category_applied_input_types": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/ModerationInputType"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "category_scores": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": "object"
+        },
+        "flagged": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "moderation_result"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "model",
+        "flagged",
+        "categories",
+        "category_scores",
+        "category_applied_input_types"
+      ],
+      "title": "Moderation result",
+      "type": "object"
+    },
+    "ServiceTier": {
+      "anyOf": [
+        {
+          "enum": [
+            "auto",
+            "default",
+            "flex",
+            "scale",
+            "priority",
+            "fast"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$id": "https://schemas.looprig.dev/llm/conformance/openai/chat_completion.schema.json",
+  "$ref": "#/$defs/CreateChatCompletionResponse",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Standalone JSON Schema 2020-12 for the openai chat_completion response body, derived from the openai upstream API description. Generated by codec/conformance/cmd/schemagen; see schema/provenance.json for the source and schema/unenforced.json for what this document does not check.",
+  "title": "openai chat_completion"
+}

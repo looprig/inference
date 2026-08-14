@@ -1,0 +1,82 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "text": "Compare the chart and the report."
+        },
+        {
+          "image": {
+            "format": "png",
+            "source": {
+              "url": "https://example.invalid/chart.png"
+            }
+          }
+        },
+        {
+          "document": {
+            "name": "Quarterly report",
+            "format": "pdf",
+            "source": {
+              "bytes": "JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4+CnN0cmVhbQp4nAMAAAAAAQplbmRzdHJlYW0KZW5kb2JqCg=="
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "toolUse": {
+            "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+            "name": "top_song",
+            "input": {
+              "sign": "WZPZ"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "toolResult": {
+            "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+            "content": [
+              {
+                "text": "Elemental Hotel"
+              }
+            ],
+            "status": "success"
+          }
+        }
+      ]
+    }
+  ],
+  "system": [
+    {
+      "text": "You are terse."
+    }
+  ],
+  "inferenceConfig": {
+    "maxTokens": 1024,
+    "temperature": 0.2
+  },
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "name": "top_song",
+          "inputSchema": {
+            "json": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

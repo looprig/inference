@@ -119,6 +119,7 @@ func TestCodec_DecodeEvent(t *testing.T) {
 		name    string
 		payload string
 		want    []content.Chunk
+		wantErr bool
 	}{
 		{
 			name:    "text delta yields one text chunk",
@@ -130,10 +131,34 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			payload: `{"choices":[{"delta":{"reasoning_content":"let me think"}}]}`,
 			want:    []content.Chunk{&content.ThinkingChunk{Thinking: "let me think"}},
 		},
+		// A delta's content, tool_calls, and the reasoning_content extension are
+		// independent optional members of ChatCompletionStreamResponseDelta —
+		// nothing in the schema makes them mutually exclusive. Every populated
+		// member must reach the accumulator; ordering (reasoning, text, tool
+		// calls) is all the codec decides.
 		{
-			name:    "reasoning takes precedence over content in a single delta",
-			payload: `{"choices":[{"delta":{"reasoning_content":"plan","content":"ignored"}}]}`,
-			want:    []content.Chunk{&content.ThinkingChunk{Thinking: "plan"}},
+			name:    "reasoning and content in one delta both yield chunks",
+			payload: `{"choices":[{"delta":{"reasoning_content":"plan","content":"answer"}}]}`,
+			want: []content.Chunk{
+				&content.ThinkingChunk{Thinking: "plan"},
+				&content.TextChunk{Text: "answer"},
+			},
+		},
+		{
+			name:    "reasoning and tool call in one delta both yield chunks",
+			payload: `{"choices":[{"delta":{"reasoning_content":"plan","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}`,
+			want: []content.Chunk{
+				&content.ThinkingChunk{Thinking: "plan"},
+				&content.ToolUseChunk{Index: 0, ID: "call_1", Name: "read", InputJSON: "{}"},
+			},
+		},
+		{
+			name:    "content and tool call in one delta both yield chunks",
+			payload: `{"choices":[{"delta":{"content":"calling","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}`,
+			want: []content.Chunk{
+				&content.TextChunk{Text: "calling"},
+				&content.ToolUseChunk{Index: 0, ID: "call_1", Name: "read", InputJSON: "{}"},
+			},
 		},
 		{
 			name:    "single tool-call entry yields one tool-use chunk",
@@ -163,9 +188,9 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name:    "malformed JSON is a skip, not an error",
+			name:    "malformed JSON is an error",
 			payload: `not-json`,
-			want:    nil,
+			wantErr: true,
 		},
 		{
 			name:    "empty choices is a skip",
@@ -189,6 +214,12 @@ func TestCodec_DecodeEvent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := openaiapi.Codec{}.DecodeEvent([]byte(tc.payload))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("DecodeEvent error = nil, want malformed-event error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("DecodeEvent returned unexpected error: %v", err)
 			}

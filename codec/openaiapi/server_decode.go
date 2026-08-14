@@ -34,9 +34,9 @@ const (
 	contentTypeText     = "text"
 	contentTypeImageURL = "image_url"
 
-	// toolChoiceAutoValue is the wire "auto" value; "none" and the named-
-	// function object form have no explicit constant since they are only
-	// ever matched by decodeToolChoice's default (rejecting) case.
+	// toolChoiceAutoValue is the wire "auto" value; "none" has no explicit
+	// constant since it is only ever matched by decodeToolChoice's default
+	// (rejecting) case.
 	toolChoiceAutoValue = "auto"
 
 	dataURIPrefix = "data:"
@@ -45,6 +45,10 @@ const (
 	// encode, an absent tool-use input): Chat Completions requires this to
 	// be a JSON object, so an empty/absent neutral value becomes "{}".
 	emptyObject = "{}"
+
+	// nullLiteral is JSON's null, matched textually when a raw member has to be
+	// told apart from a value.
+	nullLiteral = "null"
 )
 
 // matchChatCompletionsRequest reports whether req is a POST
@@ -100,19 +104,24 @@ func checkJSONContentType(req *http.Request) error {
 // dropped: documented benign fields, matching the design's cache_control/
 // metadata precedent for the Anthropic and Responses codecs.
 type wireDecodeRequest struct {
-	Model           string             `json:"model"`
-	Messages        []wireChatMessage  `json:"messages"`
-	Tools           []chatTool         `json:"tools"`
-	ResponseFormat  *responseFormat    `json:"response_format"`
-	ToolChoice      json.RawMessage    `json:"tool_choice"`
-	Temperature     *float64           `json:"temperature"`
-	TopP            *float64           `json:"top_p"`
-	MaxTokens       *int               `json:"max_tokens"`
-	Stop            []string           `json:"stop"`
-	Stream          bool               `json:"stream"`
-	StreamOptions   *chatStreamOptions `json:"stream_options"`
-	ReasoningEffort string             `json:"reasoning_effort"`
-	N               *int               `json:"n"`
+	Model          string            `json:"model"`
+	Messages       []wireChatMessage `json:"messages"`
+	Tools          []chatTool        `json:"tools"`
+	ResponseFormat *responseFormat   `json:"response_format"`
+	ToolChoice     json.RawMessage   `json:"tool_choice"`
+	Temperature    *float64          `json:"temperature"`
+	TopP           *float64          `json:"top_p"`
+	// MaxTokens and MaxCompletionTokens are the deprecated and current
+	// spellings of the same limit. Both are recognized (the strict decode
+	// would otherwise reject the modern name outright), but a body carrying
+	// both is refused rather than silently resolved.
+	MaxTokens           *int               `json:"max_tokens"`
+	MaxCompletionTokens *int               `json:"max_completion_tokens"`
+	Stop                []string           `json:"stop"`
+	Stream              bool               `json:"stream"`
+	StreamOptions       *chatStreamOptions `json:"stream_options"`
+	ReasoningEffort     string             `json:"reasoning_effort"`
+	N                   *int               `json:"n"`
 
 	// Documented benign fields: decoded so a real client sending them is not
 	// rejected outright by DisallowUnknownFields, then never mapped into the
@@ -128,11 +137,18 @@ type wireDecodeRequest struct {
 // interface{}-typed chatMessage.Content (types.go, encode direction only)
 // cannot make that distinction on decode. Name is a documented-benign,
 // decoded-and-ignored field some real clients still attach.
+// Refusal is the message-level refusal ChatCompletionRequestAssistantMessage
+// declares: a harness replaying a turn OpenAI refused sends it back, and with
+// no field for it the strict decode would reject the entire request over one
+// member. It is a *string so an absent/null member is distinguishable from an
+// explanation-free refusal, exactly as on the client-decode side — see
+// chatMessage.Refusal (types.go).
 type wireChatMessage struct {
 	Role             string          `json:"role"`
 	Content          wireChatContent `json:"content"`
 	Name             string          `json:"name"`
 	ReasoningContent string          `json:"reasoning_content"`
+	Refusal          *string         `json:"refusal"`
 	ToolCalls        []toolCall      `json:"tool_calls"`
 	ToolCallID       string          `json:"tool_call_id"`
 }
@@ -269,13 +285,18 @@ func decodeChatCompletionsBody(raw []byte) (req inference.Request, requestedMode
 		tools = append(tools, inference.Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
 	}
 
-	toolChoiceValue, err := decodeToolChoice(wire.ToolChoice)
+	toolChoice, err := decodeToolChoice(wire.ToolChoice)
 	if err != nil {
 		return inference.Request{}, "", false, err
 	}
 
 	sampling := model.Sampling{}
-	if wire.MaxTokens != nil {
+	switch {
+	case wire.MaxTokens != nil && wire.MaxCompletionTokens != nil:
+		return inference.Request{}, "", false, &ServerDecodeError{Reason: "conflicting_token_limit", Detail: "max_tokens and max_completion_tokens are mutually exclusive"}
+	case wire.MaxCompletionTokens != nil:
+		sampling.MaxTokens = wire.MaxCompletionTokens
+	case wire.MaxTokens != nil:
 		sampling.MaxTokens = wire.MaxTokens
 	}
 	if wire.Temperature != nil {
@@ -305,34 +326,51 @@ func decodeChatCompletionsBody(raw []byte) (req inference.Request, requestedMode
 		Messages:   messages,
 		Tools:      tools,
 		Output:     output,
-		ToolChoice: toolChoiceValue,
+		ToolChoice: toolChoice,
 		Override:   &sampling,
 	}
 	return req, wire.Model, wire.Stream, nil
 }
 
-// decodeToolChoice maps the wire tool_choice to the two-state neutral
-// inference.ToolChoice. Chat Completions' "none" choice and the named-
-// function object form are real behavior the neutral vocabulary cannot
-// represent, so both fail closed rather than silently degrading to
-// auto/required.
+// decodeToolChoice maps the wire tool_choice to the neutral
+// inference.ToolChoice. Chat Completions' "none" choice, and the
+// allowed-tools and custom-tool members of the object form, are real behavior
+// the neutral vocabulary cannot represent, so all of them fail closed rather
+// than silently degrading to auto/required.
+//
+// The object form is matched by an allowlist on `type`: a member OpenAI adds
+// later fails closed instead of being mistaken for a function choice.
 func decodeToolChoice(raw json.RawMessage) (inference.ToolChoice, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	}
 	var s string
 	if err := json.Unmarshal(trimmed, &s); err != nil {
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+		return decodeToolChoiceObject(trimmed)
 	}
 	switch s {
 	case toolChoiceAutoValue:
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	case toolChoiceRequired:
-		return inference.ToolChoiceRequired, nil
+		return inference.ToolRequired(), nil
 	default:
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: s}
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: s}
 	}
+}
+
+// decodeToolChoiceObject handles the non-string members of
+// ChatCompletionToolChoiceOption. Only ChatCompletionNamedToolChoice maps:
+// its `function.name` becomes the neutral inference.ToolNamed choice.
+func decodeToolChoiceObject(raw json.RawMessage) (inference.ToolChoice, error) {
+	var wire namedToolChoice
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+	}
+	if wire.Type != toolChoiceTypeFunction || wire.Function.Name == "" {
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+	}
+	return inference.ToolNamed(wire.Function.Name), nil
 }
 
 // parseEffort maps the wire reasoning_effort value to the neutral
@@ -419,6 +457,18 @@ func decodeUserContentBlocks(c wireChatContent) ([]content.Block, error) {
 					return nil, err
 				}
 				out = append(out, img)
+			case contentPartTypeFile:
+				doc, err := decodeFilePart(p.File)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, doc)
+			case contentPartTypeInputAudio:
+				audio, err := decodeInputAudioPart(p.InputAudio)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, audio)
 			default:
 				return nil, &ServerDecodeError{Reason: "unsupported_content_part_type", Detail: p.Type}
 			}
@@ -449,6 +499,8 @@ func decodeAssistantMessage(m wireChatMessage) (*content.AIMessage, error) {
 		blocks = append(blocks, &content.TextBlock{Text: text})
 	}
 
+	blocks = append(blocks, refusalBlocks(m.Refusal)...)
+
 	for _, tc := range m.ToolCalls {
 		if tc.ID == "" {
 			return nil, &ServerDecodeError{Reason: "missing_tool_call_id"}
@@ -466,6 +518,36 @@ func decodeAssistantMessage(m wireChatMessage) (*content.AIMessage, error) {
 	return &content.AIMessage{Message: content.Message{Role: content.RoleAssistant, Blocks: blocks}}, nil
 }
 
+// toolArgumentsPolicy selects what unwrapToolCallArguments does with an
+// `arguments` value it cannot read as an arguments object. The unwrapping
+// itself is direction-independent and lives in ONE function: the request
+// decoder here and the response decoder in decode.go invert the same encoder,
+// and a second copy is how the two drifted apart in the first place (the
+// response path used to hand the quoted literal straight to ToolUseBlock.Input,
+// which encodeAIMessage then quoted a second time).
+type toolArgumentsPolicy int
+
+const (
+	// rejectInvalidToolArguments is the REQUEST direction: this codec acting as
+	// a server, reading a client's body. That is an untrusted API boundary
+	// where a malformed value is a caller defect, so it fails closed with a
+	// typed error naming the field rather than propagating garbage inward.
+	rejectInvalidToolArguments toolArgumentsPolicy = iota
+	// preserveInvalidToolArguments is the RESPONSE direction: a provider's
+	// completion. OpenAI's schema says of this very member, "the model does not
+	// always generate valid JSON ... Validate the arguments in your code before
+	// calling your function" — invalid JSON here is documented MODEL output,
+	// not a protocol violation, and the validation site is the tool dispatcher
+	// (harness loopruntime checks json.Valid and fails the single call, letting
+	// the model correct itself). Rejecting the response would discard a
+	// completed generation — its text, its usage and its other, valid tool
+	// calls — over one hallucinated argument string, and repairing it to "{}"
+	// would be silent repair, showing the model a call it did not make.
+	// Preserving the bytes keeps replay byte-exact and leaves the decision
+	// where the spec puts it.
+	preserveInvalidToolArguments
+)
+
 // decodeToolCallArguments is the untrusted-input inverse of
 // encodeAIMessage's argument-quoting (encode.go): per toolCallFunction's own
 // doc comment, `arguments` is always a JSON-encoded STRING on the wire. A
@@ -473,6 +555,13 @@ func decodeAssistantMessage(m wireChatMessage) (*content.AIMessage, error) {
 // DecodeResponse's tolerance for a provider response. An empty or absent
 // value defaults to "{}"; a malformed value fails closed.
 func decodeToolCallArguments(raw json.RawMessage) (json.RawMessage, error) {
+	return unwrapToolCallArguments(raw, rejectInvalidToolArguments)
+}
+
+// unwrapToolCallArguments turns a wire `arguments` member into the arguments
+// OBJECT a neutral ToolUseBlock.Input carries. Absent, empty and the empty
+// string all become "{}", because Input is an object and "" is not one.
+func unwrapToolCallArguments(raw json.RawMessage, policy toolArgumentsPolicy) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return json.RawMessage(emptyObject), nil
@@ -487,12 +576,24 @@ func decodeToolCallArguments(raw json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(emptyObject), nil
 		}
 		if !json.Valid([]byte(s)) {
+			if policy == preserveInvalidToolArguments {
+				return json.RawMessage(s), nil
+			}
 			return nil, &ServerDecodeError{Reason: "invalid_tool_call_arguments"}
 		}
 		return json.RawMessage(s), nil
 	case '{':
 		return trimmed, nil
 	default:
+		// A JSON null is how some gateways spell "no arguments" on a response;
+		// treat it as absent rather than letting the literal reach Input, where
+		// it is valid JSON but not an object.
+		if policy == preserveInvalidToolArguments && string(trimmed) == nullLiteral {
+			return json.RawMessage(emptyObject), nil
+		}
+		if policy == preserveInvalidToolArguments {
+			return trimmed, nil
+		}
 		return nil, &ServerDecodeError{Reason: "invalid_tool_call_arguments"}
 	}
 }
@@ -516,21 +617,77 @@ func decodeImageURLPart(u *imageURLPart) (*content.ImageBlock, error) {
 	return &content.ImageBlock{Source: content.ImageSource{URL: u.URL}}, nil
 }
 
+// decodeFilePart parses a `file` content part into a DocumentBlock, inverting
+// documentFilePart (encode.go). file_data is spec-typed as a plain string, so
+// both wire forms are accepted: a data: URI yields the document's media type
+// alongside its bytes, a bare base64 payload yields the bytes with no media
+// type. A `file_id` is refused rather than dropped — it names a file in
+// OpenAI's Files API and no neutral block can hold such a handle, so accepting
+// the part would hand the model an attachment the neutral transcript does not
+// contain.
+func decodeFilePart(f *filePart) (*content.DocumentBlock, error) {
+	if f == nil {
+		return nil, &ServerDecodeError{Reason: "missing_file"}
+	}
+	if f.FileID != "" {
+		return nil, &ServerDecodeError{Reason: "unsupported_file_reference", Detail: "file_id"}
+	}
+	if f.FileData == "" {
+		return nil, &ServerDecodeError{Reason: "missing_file_data"}
+	}
+	if strings.HasPrefix(f.FileData, dataURIPrefix) {
+		mediaType, data, err := parseDataURI(f.FileData)
+		if err != nil {
+			return nil, err
+		}
+		return &content.DocumentBlock{MediaType: content.MediaType(mediaType), Name: f.Filename, Data: data}, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(f.FileData)
+	if err != nil {
+		return nil, &ServerDecodeError{Reason: "invalid_file_data", Detail: err.Error()}
+	}
+	return &content.DocumentBlock{Name: f.Filename, Data: data}, nil
+}
+
+// decodeInputAudioPart parses an `input_audio` content part into an
+// AudioBlock, inverting audioInputPart (encode.go). The format is matched
+// against the spec's ["wav","mp3"] enum as an allowlist, so an unlisted value
+// fails closed rather than producing a block whose media type is a guess.
+func decodeInputAudioPart(a *inputAudioPart) (*content.AudioBlock, error) {
+	if a == nil {
+		return nil, &ServerDecodeError{Reason: "missing_input_audio"}
+	}
+	var mediaType content.MediaType
+	switch a.Format {
+	case audioFormatWAV:
+		mediaType = content.MediaTypeAudioWAV
+	case audioFormatMP3:
+		mediaType = content.MediaTypeAudioMPEG
+	default:
+		return nil, &ServerDecodeError{Reason: "unsupported_audio_format", Detail: a.Format}
+	}
+	data, err := base64.StdEncoding.DecodeString(a.Data)
+	if err != nil {
+		return nil, &ServerDecodeError{Reason: "invalid_audio_data", Detail: err.Error()}
+	}
+	return &content.AudioBlock{MediaType: mediaType, Data: data}, nil
+}
+
 func parseDataURI(raw string) (string, []byte, error) {
 	rest := strings.TrimPrefix(raw, dataURIPrefix)
 	comma := strings.IndexByte(rest, ',')
 	if comma < 0 {
-		return "", nil, &ServerDecodeError{Reason: "invalid_image_data_uri"}
+		return "", nil, &ServerDecodeError{Reason: "invalid_data_uri"}
 	}
 	meta := rest[:comma]
 	payload := rest[comma+1:]
 	if !strings.HasSuffix(meta, ";base64") {
-		return "", nil, &ServerDecodeError{Reason: "unsupported_image_data_uri_encoding"}
+		return "", nil, &ServerDecodeError{Reason: "unsupported_data_uri_encoding"}
 	}
 	mediaType := strings.TrimSuffix(meta, ";base64")
 	data, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return "", nil, &ServerDecodeError{Reason: "invalid_image_data", Detail: err.Error()}
+		return "", nil, &ServerDecodeError{Reason: "invalid_data_uri_payload", Detail: err.Error()}
 	}
 	return mediaType, data, nil
 }

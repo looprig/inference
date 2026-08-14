@@ -17,20 +17,11 @@ type Client interface {
 	Stream(ctx context.Context, req Request) (*stream.StreamReader[content.Chunk], error)
 }
 
-// ToolChoice controls whether the model may choose between text and tools or
-// must call a tool. Its zero value preserves the existing automatic behavior.
-type ToolChoice uint8
-
-const (
-	ToolChoiceAuto ToolChoice = iota
-	ToolChoiceRequired
-)
-
 // Request is the provider-neutral inference request. It carries a secret-free
 // Model descriptor for this turn, the per-agent System prompt, the message
 // thread, the count of trailing transient messages, the exposed tools, an
-// optional structured Output contract, and an optional per-call sampling
-// Override (nil means use Model.Sampling).
+// optional structured Output contract, the ToolChoice (zero value: auto), and
+// an optional per-call sampling Override (nil means use Model.Sampling).
 type Request struct {
 	Model             model.Model
 	System            string
@@ -63,13 +54,29 @@ func ValidateRequestFeatures(req Request) error {
 		}
 	}
 
-	switch req.ToolChoice {
-	case ToolChoiceAuto:
-	case ToolChoiceRequired:
+	// The ToolChoice type makes the name inseparable from the named variant,
+	// so the only tool-choice invariants left are the cross-field ones no
+	// type can encode: both are about the request's Tools, which the choice
+	// cannot see.
+	switch req.ToolChoice.mode {
+	case ToolChoiceModeAuto:
+	case ToolChoiceModeRequired:
 		if len(req.Tools) == 0 {
 			return &StructuredOutputConflictError{Feature: "tool_choice_required_without_tools"}
 		}
+	case ToolChoiceModeNamed:
+		// A forced name must name a tool this request actually declares:
+		// every dialect resolves the choice against its own tools array, so
+		// an undeclared name is a guaranteed provider 400 — and no provider
+		// request schema catches it. Checking it here also subsumes the
+		// empty-tools and empty-name cases.
+		if !declaresTool(req.Tools, req.ToolChoice.name) {
+			return &StructuredOutputConflictError{Feature: "tool_choice_tool_undeclared_name"}
+		}
 	default:
+		// Unreachable from outside this package: the discriminant is
+		// unexported. Fails closed so a variant added here later cannot be
+		// silently encoded as auto by codecs that do not recognize it.
 		return &StructuredOutputConflictError{Feature: "tool_choice"}
 	}
 
@@ -102,6 +109,16 @@ func ValidateRequestFeatures(req Request) error {
 		return &StructuredOutputWithToolsUnsupportedError{Model: boundedStructuredDiagnostic(req.Model.Name)}
 	}
 	return nil
+}
+
+// declaresTool reports whether name matches a tool the request exposes.
+func declaresTool(tools []Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // messagesCarryImages reports whether any message in the thread carries an

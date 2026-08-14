@@ -286,7 +286,6 @@ func TestStreamReader_Result(t *testing.T) {
 	t.Parallel()
 
 	errProducer := errors.New("producer failed")
-	invalidUsage := &content.Usage{OutputTokens: 1, ReasoningTokens: 2}
 	tests := []struct {
 		name            string
 		simple          bool
@@ -342,16 +341,6 @@ func TestStreamReader_Result(t *testing.T) {
 				return stream.StreamResult{}, false, errProducer
 			},
 			wantErr:         errProducer,
-			wantResultError: true,
-			wantCalls:       1,
-		},
-		{
-			name:       "invalid producer usage makes EOF non authoritative",
-			nextErrors: []error{io.EOF},
-			producer: func() (stream.StreamResult, bool, error) {
-				return stream.StreamResult{Usage: invalidUsage}, true, nil
-			},
-			wantErr:         &content.UsageValidationError{},
 			wantResultError: true,
 			wantCalls:       1,
 		},
@@ -418,6 +407,40 @@ func TestStreamReader_Result(t *testing.T) {
 	}
 }
 
+// TestStreamReader_ResultKeepsUsageDivergingFromReasoningConvention pins the
+// counts from a live OpenRouter HTTP 200 against nvidia/nemotron-3-ultra-550b-
+// a55b:free: completion_tokens=216 with reasoning_tokens=226. Usage is metrics
+// and the chunks are the product, so a count that disagrees with the documented
+// reasoning-subset convention must reach the caller as reported instead of
+// turning a cleanly finished stream into a failed one.
+func TestStreamReader_ResultKeepsUsageDivergingFromReasoningConvention(t *testing.T) {
+	t.Parallel()
+
+	divergent := content.Usage{OutputTokens: 216, ReasoningTokens: 226}
+	reader := stream.NewStreamReaderWithResult(
+		func() (string, error) { return "", io.EOF },
+		nil,
+		func() (stream.StreamResult, bool, error) {
+			usage := divergent
+			return stream.StreamResult{Usage: &usage, Model: "model-a"}, true, nil
+		},
+	)
+
+	if _, err := reader.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+	got, ok := reader.Result()
+	if !ok {
+		t.Fatal("Result() ok = false; an accounting mismatch must not withdraw terminal metadata")
+	}
+	if got.Usage == nil || *got.Usage != divergent {
+		t.Errorf("Result().Usage = %+v, want %+v", got.Usage, divergent)
+	}
+	if got.Usage.ReasoningWithinOutput() {
+		t.Error("ReasoningWithinOutput() = true, want false for the reported counts")
+	}
+}
+
 func streamErrorHasCause(got error, want error, resultError bool) bool {
 	if !resultError {
 		return errors.Is(got, want)
@@ -425,10 +448,6 @@ func streamErrorHasCause(got error, want error, resultError bool) bool {
 	var streamResultErr *stream.StreamResultError
 	if !errors.As(got, &streamResultErr) {
 		return false
-	}
-	if _, wantUsage := want.(*content.UsageValidationError); wantUsage {
-		var usageErr *content.UsageValidationError
-		return errors.As(streamResultErr.Cause, &usageErr)
 	}
 	return streamResultErr.Cause == want
 }
@@ -607,7 +626,7 @@ func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
 		{name: "ordinary sentinel cause remains visible to errors Is", cause: errStreamMetadata, wantIs: errStreamMetadata},
 		{
 			name:        "typed non EOF cause remains visible to errors As",
-			cause:       &content.UsageValidationError{Field: content.UsageFieldReasoningTokens, Reason: content.UsageValidationReasonReasoningExceedsOutput},
+			cause:       &content.UsageOverflowError{Field: content.UsageFieldReasoningTokens, Left: 1, Right: 2},
 			wantUsageAs: true,
 		},
 	}
@@ -636,9 +655,9 @@ func TestStreamReader_ResultErrorIsNotEOF(t *testing.T) {
 				if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
 					t.Errorf("Next() call %d error = %v, want errors.Is cause %v", call, err, tt.wantIs)
 				}
-				var usageErr *content.UsageValidationError
+				var usageErr *content.UsageOverflowError
 				if got := errors.As(err, &usageErr); got != tt.wantUsageAs {
-					t.Errorf("Next() call %d errors.As UsageValidationError = %v, want %v", call, got, tt.wantUsageAs)
+					t.Errorf("Next() call %d errors.As UsageOverflowError = %v, want %v", call, got, tt.wantUsageAs)
 				}
 			}
 			if _, ok := reader.Result(); ok {

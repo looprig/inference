@@ -1,0 +1,219 @@
+{
+  "comment": "Exact record of github.com/santhosh-tekuri/jsonschema/v6 behaviour on the OPTIONAL format-assertion cases of the official JSON-Schema-Test-Suite (draft2020-12). Draft 2020-12 makes \"format\" an annotation unless a validator opts in; the conformance gate deliberately does NOT opt in, so none of the divergences listed here weaken it. They are pinned so that a regression, an improvement, or a suite refresh all show up as a test failure instead of passing unnoticed. Regenerate by re-running TestOptionalFormatAssertionSupport and transcribing the reported difference. At the recorded suite revision: 762 cases executed, 119 unsupported.",
+  "files": {
+    "optional/format/date-time.json": {
+      "cases": 33,
+      "unsupported": []
+    },
+    "optional/format/date.json": {
+      "cases": 81,
+      "unsupported": []
+    },
+    "optional/format/duration.json": {
+      "cases": 52,
+      "unsupported": [
+        "validation of duration strings / hours and seconds cannot appear without minutes",
+        "validation of duration strings / years and days cannot appear without months"
+      ]
+    },
+    "optional/format/ecmascript-regex.json": {
+      "cases": 12,
+      "unsupported": [
+        "ECMA 262 character classes and escapes / a control escape \\cA is valid ECMA 262",
+        "ECMA 262 character classes and escapes / a negated empty character class is valid ECMA 262",
+        "ECMA 262 character classes and escapes / an empty character class is valid ECMA 262",
+        "ECMA 262 lookbehind is valid, including variable width / a variable-width lookbehind (ES2018)",
+        "ECMA 262 named groups and backreferences are valid / an ECMA 262 named backreference \\k<name>",
+        "Python-specific regular expression syntax is not valid ECMA 262 / Python named group (?P<name>...) is not ECMA 262",
+        "\\a is not an ECMA 262 control escape / when used as a pattern",
+        "global inline flag groups are not valid ECMA 262 / a single global inline flag (?i)",
+        "global inline flag groups are not valid ECMA 262 / multiple global inline flags (?ims)"
+      ]
+    },
+    "optional/format/email.json": {
+      "cases": 27,
+      "unsupported": [
+        "validation of e-mail addresses / local part is required"
+      ]
+    },
+    "optional/format/hostname.json": {
+      "cases": 64,
+      "unsupported": [
+        "validation of A-label (punycode) host names / Arabic-Indic digits mixed with Extended Arabic-Indic digits",
+        "validation of A-label (punycode) host names / Begins with a Nonspacing Mark",
+        "validation of A-label (punycode) host names / Begins with a Spacing Combining Mark",
+        "validation of A-label (punycode) host names / Begins with an Enclosing Mark",
+        "validation of A-label (punycode) host names / Exceptions that are DISALLOWED, left-to-right chars",
+        "validation of A-label (punycode) host names / Exceptions that are DISALLOWED, right-to-left chars",
+        "validation of A-label (punycode) host names / Greek KERAIA not followed by Greek",
+        "validation of A-label (punycode) host names / Greek KERAIA not followed by anything",
+        "validation of A-label (punycode) host names / Hebrew GERESH not preceded by Hebrew",
+        "validation of A-label (punycode) host names / Hebrew GERESH not preceded by anything",
+        "validation of A-label (punycode) host names / Hebrew GERSHAYIM not preceded by Hebrew",
+        "validation of A-label (punycode) host names / Hebrew GERSHAYIM not preceded by anything",
+        "validation of A-label (punycode) host names / KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han",
+        "validation of A-label (punycode) host names / KATAKANA MIDDLE DOT with no other characters",
+        "validation of A-label (punycode) host names / MIDDLE DOT with no following 'l'",
+        "validation of A-label (punycode) host names / MIDDLE DOT with no preceding 'l'",
+        "validation of A-label (punycode) host names / MIDDLE DOT with nothing following",
+        "validation of A-label (punycode) host names / MIDDLE DOT with nothing preceding",
+        "validation of A-label (punycode) host names / ZERO WIDTH JOINER not preceded by Virama",
+        "validation of A-label (punycode) host names / ZERO WIDTH JOINER not preceded by anything",
+        "validation of A-label (punycode) host names / contains \"--\" in the 3rd and 4th position",
+        "validation of A-label (punycode) host names / contains illegal char U+302E Hangul single dot tone mark",
+        "validation of A-label (punycode) host names / invalid Punycode",
+        "validation of host names / trailing dot"
+      ]
+    },
+    "optional/format/idn-email.json": {
+      "cases": 18,
+      "unsupported": [
+        "validation of an internationalized e-mail addresses / a fullwidth commercial at is not a local-part separator",
+        "validation of an internationalized e-mail addresses / an invalid e-mail/idn e-mail address"
+      ]
+    },
+    "optional/format/idn-hostname.json": {
+      "cases": 90,
+      "unsupported": [
+        "validation of internationalized host names / A-label that decodes to a Bidi rule violation is invalid",
+        "validation of internationalized host names / A-label that decodes to a disallowed code point is invalid",
+        "validation of internationalized host names / A-label that decodes to only ASCII is invalid",
+        "validation of internationalized host names / Arabic-Indic digits mixed with Extended Arabic-Indic digits",
+        "validation of internationalized host names / Begins with a Nonspacing Mark",
+        "validation of internationalized host names / Begins with a Spacing Combining Mark",
+        "validation of internationalized host names / Begins with an Enclosing Mark",
+        "validation of internationalized host names / Bidi domain name with a digit-first label is invalid",
+        "validation of internationalized host names / Exceptions that are DISALLOWED, left-to-right chars",
+        "validation of internationalized host names / Exceptions that are DISALLOWED, right-to-left chars",
+        "validation of internationalized host names / Greek KERAIA not followed by Greek",
+        "validation of internationalized host names / Greek KERAIA not followed by anything",
+        "validation of internationalized host names / Hebrew GERESH not preceded by Hebrew",
+        "validation of internationalized host names / Hebrew GERESH not preceded by anything",
+        "validation of internationalized host names / Hebrew GERSHAYIM not preceded by Hebrew",
+        "validation of internationalized host names / Hebrew GERSHAYIM not preceded by anything",
+        "validation of internationalized host names / KATAKANA MIDDLE DOT with no Hiragana, Katakana, or Han",
+        "validation of internationalized host names / KATAKANA MIDDLE DOT with no other characters",
+        "validation of internationalized host names / MIDDLE DOT with no following 'l'",
+        "validation of internationalized host names / MIDDLE DOT with no preceding 'l'",
+        "validation of internationalized host names / MIDDLE DOT with nothing following",
+        "validation of internationalized host names / MIDDLE DOT with nothing preceding",
+        "validation of internationalized host names / U-label contains \"--\" in the 3rd and 4th position",
+        "validation of internationalized host names / U-label ends with a dash",
+        "validation of internationalized host names / U-label starts and ends with a dash",
+        "validation of internationalized host names / U-label starts with a dash",
+        "validation of internationalized host names / ZERO WIDTH JOINER not preceded by Virama",
+        "validation of internationalized host names / ZERO WIDTH JOINER not preceded by anything",
+        "validation of internationalized host names / a U-label whose A-label form is longer than 63 octets is invalid",
+        "validation of internationalized host names / a name longer than 253 characters is invalid",
+        "validation of internationalized host names / a single label of 64 characters is too long",
+        "validation of internationalized host names / contains illegal char U+302E Hangul single dot tone mark",
+        "validation of internationalized host names / empty label between two dots is invalid",
+        "validation of internationalized host names / empty string",
+        "validation of internationalized host names / illegal first char U+302E Hangul single dot tone mark",
+        "validation of internationalized host names / invalid Punycode",
+        "validation of internationalized host names / invalid label, correct Punycode",
+        "validation of internationalized host names / label starting with a digit before a right-to-left letter is invalid",
+        "validation of internationalized host names / left-to-right label containing a right-to-left letter is invalid",
+        "validation of internationalized host names / non-canonical Punycode that does not re-encode to itself is invalid",
+        "validation of internationalized host names / right-to-left label mixing both digit types is invalid",
+        "validation of internationalized host names / zero width non-joiner must pass at every occurrence",
+        "validation of separators in internationalized host names / leading dot",
+        "validation of separators in internationalized host names / leading fullwidth full stop",
+        "validation of separators in internationalized host names / leading halfwidth ideographic full stop",
+        "validation of separators in internationalized host names / leading ideographic full stop",
+        "validation of separators in internationalized host names / single dot",
+        "validation of separators in internationalized host names / single fullwidth full stop",
+        "validation of separators in internationalized host names / single halfwidth ideographic full stop",
+        "validation of separators in internationalized host names / single ideographic full stop",
+        "validation of separators in internationalized host names / trailing dot",
+        "validation of separators in internationalized host names / trailing fullwidth full stop",
+        "validation of separators in internationalized host names / trailing halfwidth ideographic full stop",
+        "validation of separators in internationalized host names / trailing ideographic full stop"
+      ]
+    },
+    "optional/format/ipv4.json": {
+      "cases": 41,
+      "unsupported": [
+        "validation of IP addresses / plus sign is invalid"
+      ]
+    },
+    "optional/format/ipv6.json": {
+      "cases": 40,
+      "unsupported": []
+    },
+    "optional/format/iri-reference.json": {
+      "cases": 13,
+      "unsupported": []
+    },
+    "optional/format/iri.json": {
+      "cases": 24,
+      "unsupported": [
+        "validation of IRIs / an IPvFuture host with an uppercase version letter is valid"
+      ]
+    },
+    "optional/format/json-pointer.json": {
+      "cases": 40,
+      "unsupported": []
+    },
+    "optional/format/regex.json": {
+      "cases": 8,
+      "unsupported": []
+    },
+    "optional/format/relative-json-pointer.json": {
+      "cases": 25,
+      "unsupported": []
+    },
+    "optional/format/time.json": {
+      "cases": 47,
+      "unsupported": []
+    },
+    "optional/format/unknown.json": {
+      "cases": 7,
+      "unsupported": []
+    },
+    "optional/format/uri-reference.json": {
+      "cases": 28,
+      "unsupported": [
+        "validation of URI References / a double quote in a path",
+        "validation of URI References / more than one at-sign in the authority",
+        "validation of URI References / square brackets outside an authority",
+        "validation of URI References / unescaped non US-ASCII characters"
+      ]
+    },
+    "optional/format/uri-template.json": {
+      "cases": 38,
+      "unsupported": [
+        "format: uri-template / a default value in a varspec is invalid",
+        "format: uri-template / a double dot in a variable name is invalid",
+        "format: uri-template / a four-digit prefix max-length is valid",
+        "format: uri-template / a space in a literal is invalid",
+        "format: uri-template / a trailing comma in the variable list is invalid",
+        "format: uri-template / an empty expression is invalid",
+        "format: uri-template / an empty varspec inside the variable list is invalid",
+        "format: uri-template / an operator in place of the first varspec is invalid",
+        "format: uri-template / form style query expansion operator",
+        "format: uri-template / fragment expansion operator",
+        "format: uri-template / path segment expansion operator"
+      ]
+    },
+    "optional/format/uri.json": {
+      "cases": 46,
+      "unsupported": [
+        "validation of URIs / invalid \" character",
+        "validation of URIs / invalid <> characters",
+        "validation of URIs / invalid SPACE character",
+        "validation of URIs / invalid ^ character",
+        "validation of URIs / invalid ` character",
+        "validation of URIs / invalid backslash character",
+        "validation of URIs / invalid {} characters",
+        "validation of URIs / invalid | character",
+        "validation of URIs / square brackets are not allowed in a path segment",
+        "validation of URIs / unescaped non US-ASCII characters"
+      ]
+    },
+    "optional/format/uuid.json": {
+      "cases": 28,
+      "unsupported": []
+    }
+  }
+}

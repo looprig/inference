@@ -1,0 +1,28 @@
+{
+  "model": "gpt-4.1",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Compare the chart and the report."
+        },
+        {
+          "type": "input_image",
+          "detail": "auto",
+          "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        },
+        {
+          "type": "input_file",
+          "filename": "report.pdf",
+          "file_data": "data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4+CnN0cmVhbQp4nAMAAAAAAQplbmRzdHJlYW0KZW5kb2JqCg=="
+        }
+      ]
+    }
+  ],
+  "max_output_tokens": 1024,
+  "temperature": 0.2,
+  "store": false
+}

@@ -9,6 +9,13 @@ type Capabilities struct {
 	StructuredOutput          bool
 	StructuredOutputWithTools bool
 
+	// ThinkingDialect names which reasoning request shape this model accepts.
+	// It is meaningful only alongside Thinking, and its zero value means the
+	// catalogue has not described the model — see the ThinkingDialect doc for
+	// why that is not a default. A codec that can emit more than one thinking
+	// shape reads this instead of matching on the model name.
+	ThinkingDialect ThinkingDialect
+
 	// PromptCaching marks an endpoint that honors explicit cache_control
 	// breakpoints (Anthropic API, Bedrock-Anthropic). It is deliberately a
 	// per-model capability, not derived from the API format: a third-party

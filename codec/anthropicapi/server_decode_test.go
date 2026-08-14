@@ -272,10 +272,11 @@ func TestDecodeRequest_ToolChoice(t *testing.T) {
 		want           inference.ToolChoice
 		wantError      bool
 	}{
-		{name: "absent", toolChoiceJSON: ``, want: inference.ToolChoiceAuto},
-		{name: "auto", toolChoiceJSON: `,"tool_choice":{"type":"auto"}`, want: inference.ToolChoiceAuto},
-		{name: "any", toolChoiceJSON: `,"tool_choice":{"type":"any"}`, want: inference.ToolChoiceRequired},
-		{name: "tool (unsupported)", toolChoiceJSON: `,"tool_choice":{"type":"tool","name":"x"}`, wantError: true},
+		{name: "absent", toolChoiceJSON: ``, want: inference.ToolAuto()},
+		{name: "auto", toolChoiceJSON: `,"tool_choice":{"type":"auto"}`, want: inference.ToolAuto()},
+		{name: "any", toolChoiceJSON: `,"tool_choice":{"type":"any"}`, want: inference.ToolRequired()},
+		{name: "tool", toolChoiceJSON: `,"tool_choice":{"type":"tool","name":"x"}`, want: inference.ToolNamed("x")},
+		{name: "tool without a name (unsupported)", toolChoiceJSON: `,"tool_choice":{"type":"tool"}`, wantError: true},
 		{name: "none (unsupported)", toolChoiceJSON: `,"tool_choice":{"type":"none"}`, wantError: true},
 	}
 	for _, tc := range cases {
@@ -444,8 +445,19 @@ func TestDecodeRequest_UnknownMaterialFieldFails(t *testing.T) {
 		body string
 	}{
 		{name: "top-level unknown field", body: `{"model":"m","max_tokens":8,"messages":[],"top_k":5}`},
-		{name: "unknown block field (citations)", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","citations":[]}]}]}`},
-		{name: "unrecognized block type (redacted_thinking)", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"redacted_thinking","data":"x"}]}]}`},
+		// `citations` is deliberately NOT listed here any more: RequestTextBlock
+		// declares it, real Anthropic assistant turns always carry it, and
+		// rejecting it was a live HTTP 400 on a body Anthropic's own request
+		// schema admits. See TestDecodeRequest_ResponseOnlyBlockMembers for what
+		// it now does instead. A field no request shape declares still fails.
+		{name: "unknown block field", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","display":"omitted"}]}]}`},
+		{name: "citations on a non-text block", body: `{"model":"m","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s","citations":null}]}]}`},
+		{name: "caller on a non-tool_use block", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","caller":{"type":"direct"}}]}]}`},
+		// redacted_thinking is deliberately NOT listed here: the gateway serves
+		// that block itself, so it must decode. See
+		// TestServerRoundTrip_RedactedThinkingNonStreaming. A provider-hosted
+		// block the neutral vocabulary cannot hold still fails closed.
+		{name: "unrecognized block type (server_tool_use)", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}]}]}`},
 		{name: "unrecognized block type (document)", body: `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":[{"type":"document"}]}]}`},
 		{name: "thinking config unknown field (budget_tokens)", body: `{"model":"m","max_tokens":8,"thinking":{"type":"adaptive","budget_tokens":1024},"output_config":{"effort":"low"},"messages":[]}`},
 	}
@@ -455,6 +467,64 @@ func TestDecodeRequest_UnknownMaterialFieldFails(t *testing.T) {
 			_, err := anthropicapi.Codec{}.DecodeRequest(newDecodeRequest(tc.body))
 			if err == nil {
 				t.Error("DecodeRequest() error = nil, want error")
+			}
+		})
+	}
+}
+
+// TestDecodeRequest_ResponseOnlyBlockMembers pins the ingress half of the
+// citations/caller widening. ResponseTextBlock.citations and
+// ResponseToolUseBlock.caller are REQUIRED on every assistant turn Anthropic
+// returns and DECLARED (optional) on the request side, so a client replaying
+// such a turn must be accepted — the shapes the neutral vocabulary can hold
+// losslessly — while the shapes it cannot hold still fail closed by name rather
+// than decoding into a block that silently forgot them.
+func TestDecodeRequest_ResponseOnlyBlockMembers(t *testing.T) {
+	t.Parallel()
+
+	accepted := []struct {
+		name  string
+		block string
+	}{
+		{name: "citations null", block: `{"type":"text","text":"hi","citations":null}`},
+		{name: "citations empty", block: `{"type":"text","text":"hi","citations":[]}`},
+		{name: "caller direct", block: `{"type":"tool_use","id":"toolu_1","name":"t","input":{},"caller":{"type":"direct"}}`},
+		{name: "caller null", block: `{"type":"tool_use","id":"toolu_1","name":"t","input":{},"caller":null}`},
+	}
+	for _, tc := range accepted {
+		t.Run("accepted/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"model":"m","max_tokens":8,"messages":[{"role":"assistant","content":[` + tc.block + `]}]}`
+			if _, err := (anthropicapi.Codec{}).DecodeRequest(newDecodeRequest(body)); err != nil {
+				t.Fatalf("DecodeRequest() error = %v, want nil", err)
+			}
+		})
+	}
+
+	refused := []struct {
+		name  string
+		block string
+	}{
+		{
+			// content.TextBlock has nowhere to put a citation, so accepting it
+			// would discard the spans the assistant attributed its text to.
+			name:  "populated citations",
+			block: `{"type":"text","text":"hi","citations":[{"type":"char_location","cited_text":"x","document_index":0,"document_title":null,"start_char_index":0,"end_char_index":1,"file_id":null}]}`,
+		},
+		{
+			// A server-tool caller marks a call Anthropic's own hosted tool
+			// issued; content.ToolUseBlock records no issuer, so decoding it
+			// would hand a server-side call to the client to execute.
+			name:  "server tool caller",
+			block: `{"type":"tool_use","id":"toolu_1","name":"t","input":{},"caller":{"type":"code_execution_20250825","tool_id":"srvtoolu_1"}}`,
+		},
+	}
+	for _, tc := range refused {
+		t.Run("refused/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"model":"m","max_tokens":8,"messages":[{"role":"assistant","content":[` + tc.block + `]}]}`
+			if _, err := (anthropicapi.Codec{}).DecodeRequest(newDecodeRequest(body)); err == nil {
+				t.Fatal("DecodeRequest() error = nil, want error")
 			}
 		})
 	}

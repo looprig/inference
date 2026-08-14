@@ -46,7 +46,6 @@ func TestAnthropicStreamResult(t *testing.T) {
 		wantReason    stream.FinishReason
 		wantErr       bool
 		interrupt     bool
-		wantNoResult  bool
 		wantStreamErr bool
 		wantChunks    int
 	}{
@@ -74,7 +73,6 @@ func TestAnthropicStreamResult(t *testing.T) {
 		{name: "negative delta count fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":-1}}\n\n", wantErr: true},
 		{name: "out-of-range delta count fails", body: "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":18446744073709551616}}\n\n", wantErr: true},
 		{name: "transport interruption rejects collected trailer", body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n", interrupt: true},
-		{name: "raw EOF without message_stop rejects collected trailer", body: "data: {\"type\":\"message_start\",\"message\":{\"model\":\"partial\",\"usage\":{\"input_tokens\":1}}}\n\n", wantNoResult: true},
 		{
 			name: "error event after partial content is terminal",
 			body: "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n" +
@@ -157,12 +155,6 @@ func TestAnthropicStreamResult(t *testing.T) {
 				t.Fatalf("emitted chunks = %d, want %d", chunks, tt.wantChunks)
 			}
 			got, ok := stream.Result()
-			if tt.wantNoResult {
-				if ok {
-					t.Fatalf("Result() = %+v, true after raw EOF without message_stop", got)
-				}
-				return
-			}
 			if !ok {
 				t.Fatal("Result() unavailable after clean EOF")
 			}
@@ -173,6 +165,122 @@ func TestAnthropicStreamResult(t *testing.T) {
 				t.Errorf("Result usage = %+v, want %+v", got.Usage, tt.wantUsage)
 			}
 			assertAnthropicUsageSnapshot(t, stream, got.Usage)
+		})
+	}
+}
+
+// TestAnthropicStream_MalformedFrameIsTerminal is the stream-level counterpart to
+// TestCodec_DecodeEvent_MalformedJSONIsAnError. A truncated SSE frame must abort
+// the stream with a typed decode error and withhold the result trailer — the
+// previous behavior silently dropped the frame, so a stream that lost content
+// mid-flight still reported an authoritative clean success once message_stop
+// arrived. The message_stop below deliberately follows the truncated frame: it
+// must never be reached.
+func TestAnthropicStream_MalformedFrameIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":8,\"output_tokens\":0}}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n" +
+		// A real text delta frame cut off mid-transmission.
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	reader, err := (anthropicapi.Codec{}).DecodeStream(resp)
+	if err != nil {
+		t.Fatalf("DecodeStream() error = %v", err)
+	}
+	defer reader.Close()
+
+	chunks := 0
+	for {
+		_, err = reader.Next()
+		if err == nil {
+			chunks++
+			continue
+		}
+		break
+	}
+	if chunks != 1 {
+		t.Errorf("chunks emitted before the truncated frame = %d, want 1", chunks)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatal("Next() = EOF, want a terminal decode failure on the truncated frame")
+	}
+	var decodeErr *anthropicapi.StreamEventDecodeError
+	if !errors.As(err, &decodeErr) {
+		t.Fatalf("Next() error = %T %v, want *StreamEventDecodeError", err, err)
+	}
+	if got, ok := reader.Result(); ok {
+		t.Fatalf("Result() = %+v, true after a truncated frame; a lossy stream must not report success", got)
+	}
+}
+
+// anthropicEvent renders one reference-shaped Anthropic SSE frame: the Messages
+// streaming transport names every event on an `event:` line and repeats the
+// name inside the JSON payload's `type` member, which is the one this codec
+// reads.
+func anthropicEvent(name, data string) string {
+	return "event: " + name + "\ndata: " + data + "\n\n"
+}
+
+// TestAnthropicStream_EOFWithoutMessageStopFails locks the terminal gate. The
+// Anthropic Messages stream declares MessageStopEvent (`type` const
+// "message_stop") as a member of the MessageStreamEvent discriminated union and
+// emits it last; there is no other end-of-generation marker on the wire, since
+// the transport's own EOF is exactly what a dropped connection also produces. A
+// body that stops before message_stop is therefore a truncated answer, and
+// reporting it as a completed turn presents partial content as complete.
+func TestAnthropicStream_EOFWithoutMessageStopFails(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "content deltas cut off mid-message",
+			body: anthropicEvent("message_start", `{"type":"message_start","message":{"id":"msg_014p7gG3wDgGV9EUtLvnow3U","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":472,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`) +
+				anthropicEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+				anthropicEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`),
+		},
+		{
+			name: "message_delta trailer but no message_stop",
+			body: anthropicEvent("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":25,"output_tokens":1}}}`) +
+				anthropicEvent("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+				anthropicEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":15}}`),
+		},
+		{
+			name: "empty body",
+			body: "",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tc.body))}
+			reader, err := (anthropicapi.Codec{}).DecodeStream(resp)
+			if err != nil {
+				t.Fatalf("DecodeStream() error = %v", err)
+			}
+			defer reader.Close()
+
+			for err == nil {
+				_, err = reader.Next()
+			}
+			if errors.Is(err, io.EOF) {
+				t.Fatal("stream ended with a clean EOF; no message_stop was ever seen")
+			}
+			var streamErr *anthropicapi.StreamDecodeError
+			if !errors.As(err, &streamErr) {
+				t.Fatalf("Next() error = %T %v, want *StreamDecodeError", err, err)
+			}
+			if got, ok := reader.Result(); ok {
+				t.Errorf("Result() = %+v, true for a stream that never terminated", got)
+			}
 		})
 	}
 }

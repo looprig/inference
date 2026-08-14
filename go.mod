@@ -1,11 +1,13 @@
 module github.com/looprig/inference
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/looprig/core v0.5.1
 	github.com/looprig/credentials v0.1.0
 	github.com/looprig/secrets v0.1.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	go.yaml.in/yaml/v3 v3.0.5
 )
 
 require (
@@ -43,7 +45,6 @@ require (
 	go.opentelemetry.io/otel v1.45.0 // indirect
 	go.opentelemetry.io/otel/metric v1.45.0 // indirect
 	go.opentelemetry.io/otel/trace v1.45.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260810151157-a8b543ca52da // indirect

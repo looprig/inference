@@ -113,12 +113,16 @@ func TestEncodeRequest_PromptCachingPrecedesTransientSuffix(t *testing.T) {
 	}
 	body := decodeObj(t, data)
 	msgs := messagesOf(t, body)
-	if len(msgs) != 2 {
-		t.Fatalf("message count = %d, want 2", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1 projected user turn", len(msgs))
 	}
-	requireEphemeral(t, blocksOf(t, msgs[0])[0])
-	if cc := cacheControlOf(t, blocksOf(t, msgs[1])[0]); cc != nil {
-		t.Errorf("transient message unexpectedly carries cache_control: %v", cc)
+	blocks := blocksOf(t, msgs[0])
+	if len(blocks) != 2 {
+		t.Fatalf("block count = %d, want committed and transient text", len(blocks))
+	}
+	requireEphemeral(t, blocks[0])
+	if cc := cacheControlOf(t, blocks[1]); cc != nil {
+		t.Errorf("transient block unexpectedly carries cache_control: %v", cc)
 	}
 }
 
@@ -179,12 +183,16 @@ func TestEncodeRequest_PromptCachingBoundarySurvivesSystemMessageFold(t *testing
 	requireEphemeral(t, sysBlocks[0])
 
 	msgs := messagesOf(t, body)
-	if len(msgs) != 2 {
-		t.Fatalf("message count = %d, want 2", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1 projected user turn", len(msgs))
 	}
-	requireEphemeral(t, blocksOf(t, msgs[0])[0])
-	if cc := cacheControlOf(t, blocksOf(t, msgs[1])[0]); cc != nil {
-		t.Errorf("transient message unexpectedly carries cache_control: %v", cc)
+	blocks := blocksOf(t, msgs[0])
+	if len(blocks) != 2 {
+		t.Fatalf("block count = %d, want committed and transient text", len(blocks))
+	}
+	requireEphemeral(t, blocks[0])
+	if cc := cacheControlOf(t, blocks[1]); cc != nil {
+		t.Errorf("transient block unexpectedly carries cache_control: %v", cc)
 	}
 }
 
@@ -278,7 +286,7 @@ func TestEncodeRequest_PromptCachingSkipsThinkingTail(t *testing.T) {
 		Model: cachingModel(),
 		Messages: content.AgenticMessages{
 			userMsg(textBlock("q")),
-			aiMsg(textBlock("answer"), &content.ThinkingBlock{Thinking: "hmm", Signature: "sig"}),
+			aiMsg(textBlock("answer"), content.NewSignedThinkingBlock("hmm", "sig", signatureFormatAnthropic, nil, "")),
 		},
 	}
 	data, err := anthropicapi.EncodeRequest(req, false)
@@ -290,6 +298,26 @@ func TestEncodeRequest_PromptCachingSkipsThinkingTail(t *testing.T) {
 	lastBlocks := blocksOf(t, msgs[len(msgs)-1])
 	if cc := cacheControlOf(t, lastBlocks[len(lastBlocks)-1]); cc != nil {
 		t.Error("thinking block must not carry cache_control")
+	}
+	requireEphemeral(t, lastBlocks[len(lastBlocks)-2])
+}
+
+func TestEncodeRequest_PromptCachingSkipsRedactedThinkingTail(t *testing.T) {
+	t.Parallel()
+
+	redacted := content.NewThinkingBlock("", "", json.RawMessage(`"opaque"`), "anthropic-redacted-thinking")
+	req := inference.Request{Model: cachingModel(), Messages: content.AgenticMessages{
+		userMsg(textBlock("q")),
+		aiMsg(textBlock("answer"), redacted),
+	}}
+	data, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	msgs := messagesOf(t, decodeObj(t, data))
+	lastBlocks := blocksOf(t, msgs[len(msgs)-1])
+	if cc := cacheControlOf(t, lastBlocks[len(lastBlocks)-1]); cc != nil {
+		t.Error("redacted thinking block must not carry cache_control")
 	}
 	requireEphemeral(t, lastBlocks[len(lastBlocks)-2])
 }

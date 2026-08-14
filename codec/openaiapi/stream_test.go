@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -121,7 +122,7 @@ func TestNewStream_TextChunks(t *testing.T) {
 				t.Fatalf("got %d chunks, want %d: %v", len(got), len(tc.wantTexts), got)
 			}
 			for i, want := range tc.wantTexts {
-				if got[i] != want {
+				if !reflect.DeepEqual(got[i], want) {
 					t.Errorf("chunk[%d]: got %q, want %q", i, got[i], want)
 				}
 			}
@@ -291,7 +292,7 @@ func TestNewStream_ToolCallChunks(t *testing.T) {
 				t.Fatalf("got %d chunks, want %d: %+v", len(got), len(tc.want), got)
 			}
 			for i, want := range tc.want {
-				if got[i] != want {
+				if !reflect.DeepEqual(got[i], want) {
 					t.Errorf("chunk[%d] = %+v, want %+v", i, got[i], want)
 				}
 			}
@@ -416,23 +417,20 @@ func TestNewStream_BodyClosed(t *testing.T) {
 	}
 }
 
-func TestNewStream_MalformedJSON(t *testing.T) {
+func TestNewStream_MalformedJSONIsError(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		body     string
-		wantText string
+		name string
+		body string
 	}{
 		{
-			name:     "malformed line skipped, valid line yielded",
-			body:     "data: not-json\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
-			wantText: "ok",
+			name: "malformed line before valid line",
+			body: "data: not-json\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
 		},
 		{
-			name:     "multiple malformed lines then valid",
-			body:     "data: {\n\ndata: }\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"good\"}}]}\n\ndata: [DONE]\n\n",
-			wantText: "good",
+			name: "multiple malformed lines",
+			body: "data: {\n\ndata: }\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"good\"}}]}\n\ndata: [DONE]\n\n",
 		},
 	}
 
@@ -443,16 +441,9 @@ func TestNewStream_MalformedJSON(t *testing.T) {
 			stream := openaiapi.NewStream(io.NopCloser(strings.NewReader(tc.body)))
 			defer stream.Close()
 
-			chunk, err := stream.Next()
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			c, ok := chunk.(*content.TextChunk)
-			if !ok {
-				t.Fatalf("expected *content.TextChunk, got %T", chunk)
-			}
-			if c.Text != tc.wantText {
-				t.Errorf("got text %q, want %q", c.Text, tc.wantText)
+			_, err := stream.Next()
+			if err == nil || errors.Is(err, io.EOF) {
+				t.Fatalf("Next() error = %v, want malformed-event error", err)
 			}
 		})
 	}
@@ -504,14 +495,13 @@ func TestStreamUsageResult(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		body         string
-		wantUsage    *content.Usage
-		wantModel    string
-		wantReason   stream.FinishReason
-		wantErr      bool
-		interrupt    bool
-		wantNoResult bool
+		name       string
+		body       string
+		wantUsage  *content.Usage
+		wantModel  string
+		wantReason stream.FinishReason
+		wantErr    bool
+		interrupt  bool
 	}{
 		{
 			name: "usage-only terminal frame is metadata not content",
@@ -543,7 +533,6 @@ func TestStreamUsageResult(t *testing.T) {
 		{name: "out-of-range count fails", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":18446744073709551616}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "inconsistent prompt details fail", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\ndata: [DONE]\n\n", wantErr: true},
 		{name: "transport interruption rejects collected trailer", body: "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n", interrupt: true},
-		{name: "raw EOF without DONE rejects collected trailer", body: "data: {\"model\":\"partial\",\"choices\":[],\"usage\":{\"prompt_tokens\":1}}\n\n", wantNoResult: true},
 	}
 
 	for _, tt := range tests {
@@ -594,12 +583,6 @@ func TestStreamUsageResult(t *testing.T) {
 				t.Fatalf("emitted chunks = %d, want 0", chunks)
 			}
 			got, ok := stream.Result()
-			if tt.wantNoResult {
-				if ok {
-					t.Fatalf("Result() = %+v, true after raw EOF without DONE", got)
-				}
-				return
-			}
 			if !ok {
 				t.Fatal("Result() unavailable after clean EOF")
 			}
@@ -611,6 +594,95 @@ func TestStreamUsageResult(t *testing.T) {
 			}
 			assertUsageSnapshot(t, stream, got.Usage)
 		})
+	}
+}
+
+// TestNewStream_EOFWithoutTerminalFails locks the terminal gate. Chat
+// Completions carries two end-of-generation signals, and a truncated stream has
+// neither: CreateChatCompletionRequest.stream documents the stream as
+// "terminated by a `data: [DONE]` message", and every choice in
+// CreateChatCompletionStreamResponse carries a required, nullable finish_reason
+// that goes non-null on the chunk where that choice stops. A body that just
+// ends carries no evidence the model finished, so reporting it as a completed
+// turn presents partial content as complete.
+func TestNewStream_EOFWithoutTerminalFails(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "content chunks cut off mid-message",
+			body: "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1749000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n" +
+				"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1749000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+		},
+		{
+			name: "usage trailer but no finish_reason and no DONE",
+			body: "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1749000000,\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"total_tokens\":13}}\n\n",
+		},
+		{
+			name: "empty body",
+			body: "",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reader := openaiapi.NewStream(io.NopCloser(strings.NewReader(tc.body)))
+			defer reader.Close()
+
+			var err error
+			for err == nil {
+				_, err = reader.Next()
+			}
+			if errors.Is(err, io.EOF) {
+				t.Fatal("stream ended with a clean EOF; neither a finish_reason nor [DONE] was ever seen")
+			}
+			var streamErr *openaiapi.StreamDecodeError
+			if !errors.As(err, &streamErr) {
+				t.Fatalf("Next() error = %T %v, want *StreamDecodeError", err, err)
+			}
+			if got, ok := reader.Result(); ok {
+				t.Errorf("Result() = %+v, true for a stream that never terminated", got)
+			}
+		})
+	}
+}
+
+// TestNewStream_FinishReasonWithoutDoneIsTerminal is the other half of the
+// gate. [DONE] is a transport convention OpenAI documents in prose but never
+// models in its schema, while finish_reason is a required member of every
+// streamed choice; OpenAI-compatible gateways routinely send the second and
+// omit the first. A choice that reported why it stopped is authoritative
+// evidence the generation completed, so the stream ends cleanly and keeps its
+// finish reason.
+func TestNewStream_FinishReasonWithoutDoneIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1749000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1749000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+
+	reader := openaiapi.NewStream(io.NopCloser(strings.NewReader(body)))
+	defer reader.Close()
+
+	for {
+		_, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %T %v, want a clean stream", err, err)
+		}
+	}
+	result, ok := reader.Result()
+	if !ok {
+		t.Fatal("Result() ok = false, want the trailer of a stream whose choice reported finish_reason")
+	}
+	if result.FinishReason != stream.FinishReasonStop || result.Model != "gpt-4o" {
+		t.Errorf("Result() = %+v, want stop/gpt-4o", result)
 	}
 }
 
@@ -651,4 +723,103 @@ func usageEqual(got, want *content.Usage) bool {
 		return got == nil && want == nil
 	}
 	return *got == *want
+}
+
+// TestNewStream_ErrorObjectIsError covers a well-formed provider error object
+// arriving over an HTTP 200 stream. ErrorResponse ({"error": Error}) is the
+// spec's error envelope, and OpenAI-compatible gateways (OpenRouter documents
+// this explicitly) deliver it inside an otherwise successful streaming
+// response rather than on a non-2xx status, where transport's
+// APIErrorFromResponse would have caught it. Swallowing it turns an upstream
+// rate limit into a clean, empty, successful turn. This is distinct from the
+// malformed-JSON case above: the frame parses perfectly, it just says "error".
+func TestNewStream_ErrorObjectIsError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "error object with a numeric code and a finish_reason choice",
+			body: "data: {\"error\":{\"code\":429,\"message\":\"upstream rate limited\"},\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "spec-shaped error envelope with no choices",
+			body: "data: {\"error\":{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"too long\",\"param\":null}}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "error arrives after content has already streamed",
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"error\":{\"type\":\"server_error\",\"code\":null,\"message\":\"boom\",\"param\":null}}\n\ndata: [DONE]\n\n",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openaiapi.NewStream(io.NopCloser(strings.NewReader(tc.body)))
+			defer s.Close()
+
+			var err error
+			for err == nil {
+				_, err = s.Next()
+			}
+			if errors.Is(err, io.EOF) {
+				t.Fatal("stream ended cleanly, want a surfaced provider error")
+			}
+			var apiErr *openaiapi.StreamAPIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("Next() error = %v (%T), want *openaiapi.StreamAPIError", err, err)
+			}
+		})
+	}
+}
+
+// TestNewStream_ErrorObjectCarriesCodeAndMessage locks the diagnostic payload
+// retained from the provider's Error object.
+func TestNewStream_ErrorObjectCarriesCodeAndMessage(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"error\":{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"too long\",\"param\":null}}\n\ndata: [DONE]\n\n"
+	s := openaiapi.NewStream(io.NopCloser(strings.NewReader(body)))
+	defer s.Close()
+
+	var err error
+	for err == nil {
+		_, err = s.Next()
+	}
+	var apiErr *openaiapi.StreamAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next() error = %v (%T), want *openaiapi.StreamAPIError", err, err)
+	}
+	if apiErr.Code != "context_length_exceeded" {
+		t.Errorf("Code = %q, want context_length_exceeded", apiErr.Code)
+	}
+	if apiErr.Message != "too long" {
+		t.Errorf("Message = %q, want %q", apiErr.Message, "too long")
+	}
+}
+
+// TestNewStream_NullErrorMemberIsNotAnError guards the opposite failure: some
+// gateways send an explicit "error":null alongside real content, and that must
+// stay a clean stream.
+func TestNewStream_NullErrorMemberIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"error\":null,\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
+	s := openaiapi.NewStream(io.NopCloser(strings.NewReader(body)))
+	defer s.Close()
+
+	chunk, err := s.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want the text chunk", err)
+	}
+	text, ok := chunk.(*content.TextChunk)
+	if !ok || text.Text != "hi" {
+		t.Fatalf("Next() = %#v, want TextChunk{hi}", chunk)
+	}
+	if _, err := s.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
 }

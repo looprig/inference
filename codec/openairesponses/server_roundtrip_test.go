@@ -106,7 +106,11 @@ func TestResponsesServerCodec_SatisfiesContract(t *testing.T) {
 func TestResponsesServerCodec_SameDialectRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	providerState := json.RawMessage(`"opaque-encrypted-blob"`)
+	// The provider state is the whole replayable reasoning item: the encrypted
+	// blob plus the item id ReasoningItem requires. (It was previously a bare
+	// JSON string; an item replayed without its id is rejected outright, so
+	// the id has to travel with the blob.)
+	providerState := json.RawMessage(`{"id":"rs_1","encrypted_content":"opaque-encrypted-blob"}`)
 	original := inference.Request{
 		Model:  model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
 		System: "be terse",
@@ -159,12 +163,18 @@ func TestResponsesServerCodec_SameDialectRoundTrip(t *testing.T) {
 	if tb.Thinking != "step by step" {
 		t.Errorf("Thinking = %q", tb.Thinking)
 	}
-	var opaque string
-	if err := json.Unmarshal(tb.ProviderState, &opaque); err != nil {
-		t.Fatalf("ProviderState not a JSON string: %v", err)
+	var state struct {
+		ID               string `json:"id"`
+		EncryptedContent string `json:"encrypted_content"`
 	}
-	if opaque != "opaque-encrypted-blob" {
-		t.Errorf("ProviderState = %q, want %q (byte-for-byte replay)", opaque, "opaque-encrypted-blob")
+	if err := json.Unmarshal(tb.ProviderState, &state); err != nil {
+		t.Fatalf("ProviderState = %s: %v", tb.ProviderState, err)
+	}
+	if state.EncryptedContent != "opaque-encrypted-blob" {
+		t.Errorf("ProviderState.encrypted_content = %q, want %q (byte-for-byte replay)", state.EncryptedContent, "opaque-encrypted-blob")
+	}
+	if state.ID != "rs_1" {
+		t.Errorf("ProviderState.id = %q, want rs_1 (the reasoning item's required id)", state.ID)
 	}
 
 	tu, ok := ai.Blocks[1].(*content.ToolUseBlock)

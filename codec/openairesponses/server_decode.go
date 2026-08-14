@@ -7,6 +7,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
@@ -115,6 +119,11 @@ func decodeResponsesBody(raw []byte) (req inference.Request, requestedModel stri
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return inference.Request{}, "", false, &ServerDecodeError{Reason: "trailing_data"}
 	}
+	// The one level DisallowUnknownFields above cannot reach. See
+	// rejectUnknownContentPartMembers.
+	if err := rejectUnknownContentPartMembers(raw); err != nil {
+		return inference.Request{}, "", false, err
+	}
 
 	if wire.Model == "" {
 		return inference.Request{}, "", false, &ServerDecodeError{Reason: "missing_model"}
@@ -139,7 +148,7 @@ func decodeResponsesBody(raw []byte) (req inference.Request, requestedModel stri
 		tools = append(tools, inference.Tool{Name: t.Name, Description: t.Description, Schema: t.Parameters})
 	}
 
-	toolChoiceValue, err := decodeToolChoice(wire.ToolChoice)
+	toolChoice, err := decodeToolChoice(wire.ToolChoice)
 	if err != nil {
 		return inference.Request{}, "", false, err
 	}
@@ -172,7 +181,7 @@ func decodeResponsesBody(raw []byte) (req inference.Request, requestedModel stri
 		Messages:   messages,
 		Tools:      tools,
 		Output:     output,
-		ToolChoice: toolChoiceValue,
+		ToolChoice: toolChoice,
 		Override:   &sampling,
 	}
 	return req, wire.Model, wire.Stream, nil
@@ -183,26 +192,41 @@ func isPresentNonNull(raw json.RawMessage) bool {
 	return len(trimmed) > 0 && string(trimmed) != "null"
 }
 
-// decodeToolChoice maps the wire tool_choice to the two-state neutral
-// inference.ToolChoice. Responses' "none" choice and the named-function
-// object form are real behavior the neutral vocabulary cannot represent, so
-// both fail closed rather than silently degrading to auto/required.
+// decodeToolChoice maps the wire tool_choice to the neutral
+// inference.ToolChoice. Responses' "none" choice, and the
+// hosted/MCP/custom/allowed-tools members of ToolChoiceParam, are real
+// behavior the neutral vocabulary cannot represent, so all of them fail closed
+// rather than silently degrading to auto/required.
 func decodeToolChoice(raw json.RawMessage) (inference.ToolChoice, error) {
 	if !isPresentNonNull(raw) {
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+		return decodeToolChoiceObject(raw)
 	}
 	switch s {
 	case toolChoiceAuto:
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	case toolChoiceRequired:
-		return inference.ToolChoiceRequired, nil
+		return inference.ToolRequired(), nil
 	default:
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: s}
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: s}
 	}
+}
+
+// decodeToolChoiceObject handles the object members of ToolChoiceParam. Only
+// ToolChoiceFunction maps; the `type` allowlist means a member OpenAI adds
+// later fails closed instead of being mistaken for a function choice.
+func decodeToolChoiceObject(raw json.RawMessage) (inference.ToolChoice, error) {
+	var wire namedToolChoice
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+	}
+	if wire.Type != toolTypeFunction || wire.Name == "" {
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: "object form"}
+	}
+	return inference.ToolNamed(wire.Name), nil
 }
 
 // parseEffort maps the wire reasoning.effort value to the neutral
@@ -261,7 +285,15 @@ func decodeInputItems(items []wireItem) ([]content.Conversation, error) {
 	}
 
 	for _, item := range items {
-		switch item.Type {
+		// An empty type is the EasyInputMessage form, whose only required
+		// members are role and content; the discriminator is optional there,
+		// so a role-bearing item with no type is a message, not an unknown
+		// item type.
+		itemType := item.Type
+		if itemType == "" && item.Role != "" {
+			itemType = itemTypeMessage
+		}
+		switch itemType {
 		case itemTypeMessage:
 			blocks, conv, err := decodeMessageItem(item)
 			if err != nil {
@@ -285,7 +317,7 @@ func decodeInputItems(items []wireItem) ([]content.Conversation, error) {
 			pendingAI = append(pendingAI, &content.ToolUseBlock{ID: item.CallID, Name: item.Name, Input: args})
 
 		case itemTypeReasoning:
-			pendingAI = append(pendingAI, decodeReasoningItem(item.Summary, item.EncryptedContent))
+			pendingAI = append(pendingAI, decodeReasoningItem(item.ID, item.Summary, item.EncryptedContent))
 
 		case itemTypeFunctionCallOutput:
 			flushAI()
@@ -305,6 +337,106 @@ func decodeInputItems(items []wireItem) ([]content.Conversation, error) {
 	return out, nil
 }
 
+// benignContentPartMembers are content-part members this codec accepts and
+// then drops, so that rejectUnknownContentPartMembers does not turn them into
+// a 400. The bar is the same one wireDecodeRequest applies at the request
+// level to parallel_tool_calls, include and metadata: the member must be
+// something the caller cannot observe the loss of in the reply.
+//
+// prompt_cache_breakpoint qualifies. It is a provider-side cache hint, not
+// content and not a semantic instruction; the gateway has no cache of its own
+// to place a breakpoint in, and a reply generated without one is the same
+// reply. Nothing else does — a member that could change what the model is
+// asked, or what it is asked about, belongs in wireContentPart or in a
+// rejection.
+var benignContentPartMembers = map[string]bool{
+	"prompt_cache_breakpoint": true,
+}
+
+// knownContentPartMembers is the set of members an ingress content part may
+// carry: everything wireContentPart models, plus the benign set. It is derived
+// from the struct's own tags rather than written out, because a hand-kept
+// second list is exactly the kind of copy that drifts the first time a member
+// is added.
+var knownContentPartMembers = sync.OnceValue(func() map[string]bool {
+	known := make(map[string]bool, len(benignContentPartMembers)+8)
+	for member := range benignContentPartMembers {
+		known[member] = true
+	}
+	t := reflect.TypeFor[wireContentPart]()
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			known[name] = true
+		}
+	}
+	return known
+})
+
+// rejectUnknownContentPartMembers holds every `input[*].content[*]` object to
+// the members this codec models. It exists because the ingress decode's
+// DisallowUnknownFields reaches the request level and the item level — wireItem
+// has no hand-written UnmarshalJSON, so the parent decoder's setting still
+// applies to it — and then stops dead at wireItemContent.UnmarshalJSON, whose
+// plain json.Unmarshal is opaque to it. Content parts were the one ingress
+// level that accepted anything.
+//
+// That is not a cosmetic gap. `{"type":"input_text","txet":"hello"}` decoded
+// to an EMPTY text block and a 200: the client's whole prompt was dropped and
+// nothing said so. Fail closed instead, per this module's rule that a silently
+// degraded request is worse than a rejected one.
+//
+// It is deliberately NOT fixed by tightening wireItemContent.UnmarshalJSON,
+// which would tighten the client response-decode path with it; see the type's
+// own comment in types.go for why that direction must stay lenient. This pass
+// runs on the raw request body precisely so that the strictness has a
+// direction.
+func rejectUnknownContentPartMembers(raw []byte) error {
+	var envelope struct {
+		Input []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+	// A body that does not even shred into this shape has already been
+	// rejected by the strict decode in decodeResponsesBody, which owns every
+	// malformed-body diagnostic. This pass only ever ADDS a rejection.
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	for _, item := range envelope.Input {
+		trimmed := bytes.TrimSpace(item.Content)
+		if len(trimmed) == 0 || trimmed[0] != '[' {
+			// Absent, null, or the bare-string EasyInputMessage form, none of
+			// which has members to check.
+			continue
+		}
+		var parts []json.RawMessage
+		if err := json.Unmarshal(trimmed, &parts); err != nil {
+			return nil
+		}
+		known := knownContentPartMembers()
+		for _, part := range parts {
+			var members map[string]json.RawMessage
+			if err := json.Unmarshal(part, &members); err != nil {
+				return nil
+			}
+			var unknown []string
+			for member := range members {
+				if !known[member] {
+					unknown = append(unknown, member)
+				}
+			}
+			if len(unknown) > 0 {
+				// Sorted, because map iteration order would otherwise make the
+				// diagnostic for a part with two bad members differ per run.
+				slices.Sort(unknown)
+				return &ServerDecodeError{Reason: "unknown_content_part_member", Detail: strings.Join(unknown, ", ")}
+			}
+		}
+	}
+	return nil
+}
+
 // decodeMessageItem decodes one `message` input item. A user/system/developer
 // role produces a complete Conversation turn directly (returned as conv); an
 // assistant role instead returns its decoded blocks for the caller to fold
@@ -312,19 +444,19 @@ func decodeInputItems(items []wireItem) ([]content.Conversation, error) {
 func decodeMessageItem(item wireItem) (blocks []content.Block, conv content.Conversation, err error) {
 	switch item.Role {
 	case roleUser:
-		b, err := decodeUserContentParts(item.Content)
+		b, err := decodeUserContentParts(item.Content.parts(contentTypeInputText))
 		if err != nil {
 			return nil, nil, err
 		}
 		return nil, &content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: b}}, nil
 	case roleSystem, roleDeveloper:
-		b, err := decodeSystemContentParts(item.Content)
+		b, err := decodeSystemContentParts(item.Content.parts(contentTypeInputText))
 		if err != nil {
 			return nil, nil, err
 		}
 		return nil, &content.SystemMessage{Message: content.Message{Role: content.RoleSystem, Blocks: b}}, nil
 	case roleAssistant:
-		b, err := decodeAssistantContentParts(item.Content)
+		b, err := decodeAssistantContentParts(item.Content.parts(contentTypeOutputText))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -346,6 +478,12 @@ func decodeUserContentParts(parts []wireContentPart) ([]content.Block, error) {
 				return nil, err
 			}
 			out = append(out, img)
+		case contentTypeInputFile:
+			doc, err := decodeInputFile(p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, doc)
 		default:
 			return nil, &ServerDecodeError{Reason: "unsupported_content_part_type", Detail: p.Type}
 		}
@@ -364,13 +502,22 @@ func decodeSystemContentParts(parts []wireContentPart) ([]content.Block, error) 
 	return out, nil
 }
 
+// decodeAssistantContentParts decodes a replayed assistant message's content.
+// A `refusal` part is accepted alongside output_text: a harness replaying a
+// turn OpenAI refused sends it back verbatim, and rejecting the part would fail
+// the whole request over one member. It becomes the same *content.RefusalBlock
+// the response decoder produces for it — see refusalBlocks (decode.go).
 func decodeAssistantContentParts(parts []wireContentPart) ([]content.Block, error) {
 	out := make([]content.Block, 0, len(parts))
 	for _, p := range parts {
-		if p.Type != contentTypeOutputText {
+		switch p.Type {
+		case contentTypeOutputText:
+			out = append(out, &content.TextBlock{Text: p.Text})
+		case contentTypeRefusal:
+			out = append(out, refusalBlocks(p.Refusal)...)
+		default:
 			return nil, &ServerDecodeError{Reason: "unsupported_content_part_type", Detail: p.Type}
 		}
-		out = append(out, &content.TextBlock{Text: p.Text})
 	}
 	return out, nil
 }

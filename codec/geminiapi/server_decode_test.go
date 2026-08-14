@@ -3,13 +3,16 @@ package geminiapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
+	model "github.com/looprig/inference/model"
 )
 
 // newDecodeRequest builds an httptest request for the non-streaming
@@ -259,6 +262,127 @@ func TestServerDecode_FileDataImage(t *testing.T) {
 	}
 }
 
+// An inlineData part is not necessarily an image: the same Blob carries audio
+// and documents, distinguished only by its mimeType. Decoding all three as
+// ImageBlocks (as this decoder once did) is a silent corruption of the block
+// type, so the mime chooses the block — which is also what closes the round trip
+// with the encoder, whose document and audio parts are the very same Blob.
+func TestServerDecode_InlineDataMIMEChoosesTheBlockType(t *testing.T) {
+	t.Parallel()
+
+	c, req := decodeReq(t, "m", `{
+		"contents": [{"role":"user","parts":[
+			{"inlineData":{"mimeType":"audio/wav","data":"aGVsbG8="}},
+			{"inlineData":{"mimeType":"application/pdf","data":"aGVsbG8="}},
+			{"inlineData":{"mimeType":"text/markdown","data":"aGVsbG8="}},
+			{"inlineData":{"mimeType":"image/png","data":"aGVsbG8="}}
+		]}]
+	}`)
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	blocks := decoded.Request.Messages[0].(*content.UserMessage).Blocks
+	if len(blocks) != 4 {
+		t.Fatalf("Blocks len = %d, want 4", len(blocks))
+	}
+
+	audio, ok := blocks[0].(*content.AudioBlock)
+	if !ok {
+		t.Fatalf("Blocks[0] = %T, want *content.AudioBlock", blocks[0])
+	}
+	if audio.MediaType != content.MediaTypeAudioWAV || string(audio.Data) != "hello" {
+		t.Errorf("audio = %#v", audio)
+	}
+	for i, wantMediaType := range map[int]content.MediaType{1: content.MediaTypeDocumentPDF, 2: content.MediaTypeDocumentMarkdown} {
+		doc, ok := blocks[i].(*content.DocumentBlock)
+		if !ok {
+			t.Fatalf("Blocks[%d] = %T, want *content.DocumentBlock", i, blocks[i])
+		}
+		if doc.MediaType != wantMediaType || string(doc.Data) != "hello" {
+			t.Errorf("document = %#v, want media type %q", doc, wantMediaType)
+		}
+	}
+	if _, ok := blocks[3].(*content.ImageBlock); !ok {
+		t.Fatalf("Blocks[3] = %T, want *content.ImageBlock", blocks[3])
+	}
+}
+
+// A fileData part is a URI, and only ImageBlock has a URL source in the neutral
+// vocabulary. Audio and document blocks carry bytes and nothing else, so a
+// fileUri with one of their mime types cannot be decoded without inventing a
+// source — it fails closed instead of arriving as an ImageBlock whose media type
+// says audio.
+func TestServerDecode_FileDataRejectsMIMEItCannotRepresent(t *testing.T) {
+	t.Parallel()
+
+	c, req := decodeReq(t, "m", `{
+		"contents": [{"role":"user","parts":[{"fileData":{"mimeType":"audio/mpeg","fileUri":"https://generativelanguage.googleapis.com/v1beta/files/abc"}}]}]
+	}`)
+	_, err := c.DecodeRequest(req)
+	var decodeErr *geminiapi.ServerDecodeError
+	if !errors.As(err, &decodeErr) {
+		t.Fatalf("DecodeRequest() error = %v (%T), want *geminiapi.ServerDecodeError", err, err)
+	}
+}
+
+// TestServerCodec_MediaRoundTrip closes the loop the two directions form: a
+// request encoded from document and audio blocks decodes back into the same
+// block types, media types and bytes. The one deliberate asymmetry is a
+// document that arrived as extracted text, which travels as Part.text (per
+// Blob's own instruction not to send text as raw bytes) and therefore returns
+// as a TextBlock — the content survives, the document framing does not.
+func TestServerCodec_MediaRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	pdf := []byte("%PDF-1.7\n")
+	wav := []byte("RIFF\x00\x00\x00\x00WAVE")
+	original := inference.Request{
+		Model: model.Model{Name: "gemini-test"},
+		Messages: content.AgenticMessages{userMsg(
+			&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Data: pdf},
+			&content.AudioBlock{MediaType: content.MediaTypeAudioWAV, Data: wav},
+			&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Text: "extracted"},
+		)},
+	}
+
+	body, err := geminiapi.EncodeRequest(original)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	c, req := decodeReq(t, "gemini-test", string(body))
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v (body=%s)", err, body)
+	}
+
+	blocks := decoded.Request.Messages[0].(*content.UserMessage).Blocks
+	if len(blocks) != 3 {
+		t.Fatalf("Blocks len = %d, want 3", len(blocks))
+	}
+	doc, ok := blocks[0].(*content.DocumentBlock)
+	if !ok {
+		t.Fatalf("Blocks[0] = %T, want *content.DocumentBlock", blocks[0])
+	}
+	if doc.MediaType != content.MediaTypeDocumentPDF || !bytes.Equal(doc.Data, pdf) {
+		t.Errorf("document = %#v, want the pdf bytes back verbatim", doc)
+	}
+	audio, ok := blocks[1].(*content.AudioBlock)
+	if !ok {
+		t.Fatalf("Blocks[1] = %T, want *content.AudioBlock", blocks[1])
+	}
+	if audio.MediaType != content.MediaTypeAudioWAV || !bytes.Equal(audio.Data, wav) {
+		t.Errorf("audio = %#v, want the wav bytes back verbatim", audio)
+	}
+	text, ok := blocks[2].(*content.TextBlock)
+	if !ok {
+		t.Fatalf("Blocks[2] = %T, want *content.TextBlock", blocks[2])
+	}
+	if text.Text != "extracted" {
+		t.Errorf("text = %q, want extracted", text.Text)
+	}
+}
+
 func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 	t.Parallel()
 	c, req := decodeReq(t, "m", `{
@@ -273,8 +397,138 @@ func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 	if len(decoded.Request.Tools) != 1 || decoded.Request.Tools[0].Name != "get_weather" {
 		t.Errorf("Tools = %#v", decoded.Request.Tools)
 	}
-	if decoded.Request.ToolChoice != inference.ToolChoiceRequired {
-		t.Errorf("ToolChoice = %v, want ToolChoiceRequired", decoded.Request.ToolChoice)
+	if decoded.Request.ToolChoice != inference.ToolRequired() {
+		t.Errorf("ToolChoice = %v, want ToolRequired()", decoded.Request.ToolChoice)
+	}
+}
+
+// TestServerDecode_AllowedFunctionNames covers the mode-ANY-plus-allowlist
+// form. A single allowed name is exactly the neutral named choice; an
+// allowlist with more than one member restricts the model in a way the neutral
+// vocabulary cannot express, so it fails closed instead of being silently
+// widened back to an unrestricted ToolRequired.
+func TestServerDecode_AllowedFunctionNames(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		toolConfig string
+		want       inference.ToolChoice
+		wantError  bool
+	}{
+		{
+			name:       "one allowed name",
+			toolConfig: `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["get_weather"]}}`,
+			want:       inference.ToolNamed("get_weather"),
+		},
+		{
+			name:       "empty allowlist is unrestricted",
+			toolConfig: `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":[]}}`,
+			want:       inference.ToolRequired(),
+		},
+		{
+			name:       "two allowed names",
+			toolConfig: `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["a","b"]}}`,
+			wantError:  true,
+		},
+		{
+			name:       "allowlist on AUTO",
+			toolConfig: `{"functionCallingConfig":{"mode":"AUTO","allowedFunctionNames":["a"]}}`,
+			wantError:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, "m", `{
+				"contents": [],
+				"tools": [{"functionDeclarations":[{"name":"get_weather","parameters":{"type":"object"}}]}],
+				"toolConfig": `+tc.toolConfig+`
+			}`)
+			decoded, err := c.DecodeRequest(req)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("DecodeRequest() error = nil, want rejection of %s", tc.toolConfig)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if decoded.Request.ToolChoice != tc.want {
+				t.Errorf("ToolChoice = %v, want %v", decoded.Request.ToolChoice, tc.want)
+			}
+		})
+	}
+}
+
+// TestServerDecode_FunctionDeclarationParameterFields covers both of
+// FunctionDeclaration's mutually exclusive parameter fields on the way IN.
+//
+// parametersJsonSchema became reachable when the encoder started using it, and
+// a decoder that reads only `parameters` would drop such a tool's schema
+// entirely. `parameters` is Gemini's dialect, so its uppercase type names are
+// mapped back to JSON Schema's. A declaration setting both fields is illegal
+// per Google and is refused rather than resolved by guesswork.
+func TestServerDecode_FunctionDeclarationParameterFields(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parametersJsonSchema is taken verbatim", func(t *testing.T) {
+		t.Parallel()
+		schema := `{"type":"object","properties":{"q":{"type":"string"}},"additionalProperties":false}`
+		c, req := decodeReq(t, "m", `{
+			"contents": [],
+			"tools": [{"functionDeclarations":[{"name":"search","parametersJsonSchema":`+schema+`}]}]
+		}`)
+		decoded, err := c.DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest() error = %v", err)
+		}
+		if len(decoded.Request.Tools) != 1 {
+			t.Fatalf("Tools = %#v, want one", decoded.Request.Tools)
+		}
+		assertSameJSON(t, decoded.Request.Tools[0].Schema, json.RawMessage(schema))
+	})
+
+	t.Run("Gemini's uppercase types are mapped back to JSON Schema", func(t *testing.T) {
+		t.Parallel()
+		c, req := decodeReq(t, "m", `{
+			"contents": [],
+			"tools": [{"functionDeclarations":[{"name":"get_weather","parameters":{"type":"OBJECT","properties":{"city":{"type":"STRING"},"days":{"type":"ARRAY","items":{"type":"INTEGER"}}},"required":["city"]}}]}]
+		}`)
+		decoded, err := c.DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest() error = %v", err)
+		}
+		if len(decoded.Request.Tools) != 1 {
+			t.Fatalf("Tools = %#v, want one", decoded.Request.Tools)
+		}
+		want := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"},"days":{"type":"array","items":{"type":"integer"}}},"required":["city"]}`)
+		assertSameJSON(t, decoded.Request.Tools[0].Schema, want)
+	})
+
+	t.Run("both fields at once is refused", func(t *testing.T) {
+		t.Parallel()
+		c, req := decodeReq(t, "m", `{
+			"contents": [],
+			"tools": [{"functionDeclarations":[{"name":"search","parameters":{"type":"OBJECT"},"parametersJsonSchema":{"type":"object"}}]}]
+		}`)
+		if _, err := c.DecodeRequest(req); err == nil {
+			t.Fatal("DecodeRequest() error = nil, want the mutually exclusive fields refused")
+		}
+	})
+}
+
+func assertSameJSON(t *testing.T, got, want json.RawMessage) {
+	t.Helper()
+	var gotValue, wantValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("unmarshal got %s: %v", got, err)
+	}
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("unmarshal want %s: %v", want, err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Errorf("schema = %s, want %s", got, want)
 	}
 }
 

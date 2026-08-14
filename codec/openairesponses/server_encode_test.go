@@ -151,3 +151,46 @@ func TestServerEncode_WriteErrorShape(t *testing.T) {
 		t.Error("error.message empty")
 	}
 }
+
+// TestServerEncode_OutputItemsCarryRequiredIDAndStatus covers the response
+// direction of the shared item builder. A response's `output` entries are
+// OutputMessage / ReasoningItem values, whose required members include an id
+// (and, for OutputMessage, a status). Unlike the request direction — which
+// has no id to supply and therefore uses the EasyInputMessage form — the
+// server is the authority producing the response, so it synthesizes ids the
+// same way it already does for function_call items.
+func TestServerEncode_OutputItemsCarryRequiredIDAndStatus(t *testing.T) {
+	t.Parallel()
+	c := openairesponses.Codec{}
+	rec := httptest.NewRecorder()
+	resp := &inference.Response{
+		Message: &content.AIMessage{
+			Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
+				content.NewThinkingBlock("step 1", "", json.RawMessage(`"opaque-xyz"`), "openai-responses"),
+				&content.TextBlock{Text: "hello"},
+			}},
+		},
+		FinishReason: stream.FinishReasonStop,
+	}
+	if err := c.WriteResponse(rec, resp); err != nil {
+		t.Fatalf("WriteResponse() error = %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for i, raw := range m["output"].([]any) {
+		item := raw.(map[string]any)
+		if id, _ := item["id"].(string); id == "" {
+			t.Errorf("output[%d] (%v) has no id: %#v", i, item["type"], item)
+		}
+		if item["type"] == "message" {
+			if status, _ := item["status"].(string); status != "completed" {
+				t.Errorf("output[%d] status = %#v, want completed", i, item["status"])
+			}
+			if _, present := item["content"].([]any); !present {
+				t.Errorf("output[%d] content = %#v, want the output_text array form", i, item["content"])
+			}
+		}
+	}
+}

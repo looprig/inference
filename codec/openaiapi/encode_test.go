@@ -159,7 +159,7 @@ func TestEncodeRequestStructuredOutputWithTools(t *testing.T) {
 	req := inference.Request{
 		Model:      structuredModel(true),
 		Output:     structuredOutput(),
-		ToolChoice: inference.ToolChoiceRequired,
+		ToolChoice: inference.ToolRequired(),
 		Tools: []inference.Tool{{
 			Name:        "lookup",
 			Description: "Look up a value",
@@ -197,6 +197,36 @@ func TestEncodeRequestStructuredOutputWithTools(t *testing.T) {
 	tool := wire.Tools[0]
 	if tool.Type != "function" || tool.Function.Name != req.Tools[0].Name || tool.Function.Description != req.Tools[0].Description || string(tool.Function.Parameters) != string(req.Tools[0].Schema) {
 		t.Errorf("tool changed on combined request: %+v", tool)
+	}
+}
+
+// TestEncodeRequestNamedToolChoice pins the named tool-choice variant.
+// ChatCompletionNamedToolChoice nests the name one level deeper than the
+// Responses dialect does: {"type":"function","function":{"name":...}}, with
+// type, function and function.name all required.
+func TestEncodeRequestNamedToolChoice(t *testing.T) {
+	t.Parallel()
+
+	body, err := openaiapi.EncodeRequest(inference.Request{
+		Model: structuredModel(false),
+		Tools: []inference.Tool{
+			{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: inference.ToolNamed("search"),
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var wire struct {
+		ToolChoice json.RawMessage `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	const want = `{"type":"function","function":{"name":"search"}}`
+	if string(wire.ToolChoice) != want {
+		t.Errorf("tool_choice = %s, want %s", wire.ToolChoice, want)
 	}
 }
 
@@ -283,6 +313,14 @@ func TestEncodeRequestStructuredOutputStreamParity(t *testing.T) {
 	}
 }
 
+// TestEncodeRequestNilOutputByteShape pins the byte shape of the emptiest
+// legal-to-attempt request. `messages` is spec-typed as an array with no null
+// alternative, so a Go nil slice must still marshal as [] — this test
+// previously asserted `"messages":null`, which is a type error on the wire
+// however few servers bother to reject it. (The array being EMPTY is a
+// separate matter: CreateChatCompletionRequest.messages carries minItems 1, so
+// a caller passing no messages at all is still sending something OpenAI will
+// refuse. That is the caller's error to make, not a reason to emit null.)
 func TestEncodeRequestNilOutputByteShape(t *testing.T) {
 	t.Parallel()
 
@@ -290,7 +328,7 @@ func TestEncodeRequestNilOutputByteShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRequest() error = %v", err)
 	}
-	const want = `{"model":"m","messages":null}`
+	const want = `{"model":"m","messages":[]}`
 	if string(body) != want {
 		t.Errorf("EncodeRequest() = %s, want byte-identical %s", body, want)
 	}
@@ -701,6 +739,42 @@ func TestEncodeRequest_ToolResultErrorReachesModel(t *testing.T) {
 }
 
 // --- TestEncodeRequest_Tools ---
+
+// TestEncodeRequest_ToolWithoutSchemaSendsAnEmptyObjectSchema pins the
+// parameterless-tool case. FunctionObject.parameters is spec-typed `object`
+// with no null alternative, so passing an inference.Tool with no Schema
+// through verbatim produced `"parameters":null` — a body OpenAI's own schema
+// rejects. openairesponses already substituted {"type":"object"} here
+// (schemaOrDefault); this dialect did not, and the two must agree.
+func TestEncodeRequest_ToolWithoutSchemaSendsAnEmptyObjectSchema(t *testing.T) {
+	t.Parallel()
+
+	body, err := openaiapi.EncodeRequest(inference.Request{
+		Model:    model.Model{Name: "m"},
+		Messages: content.AgenticMessages{userMsg(textBlock("hello"))},
+		Tools:    []inference.Tool{{Name: "ping", Description: "no arguments"}},
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+
+	var decoded struct {
+		Tools []struct {
+			Function struct {
+				Parameters json.RawMessage `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(decoded.Tools) != 1 {
+		t.Fatalf("tools = %d, want 1\n%s", len(decoded.Tools), body)
+	}
+	if got := string(decoded.Tools[0].Function.Parameters); got != `{"type":"object"}` {
+		t.Errorf("parameters = %s, want {\"type\":\"object\"}", got)
+	}
+}
 
 func TestEncodeRequest_Tools(t *testing.T) {
 	t.Parallel()
@@ -1158,5 +1232,87 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- TestEncodeRequest_MaxCompletionTokens ---
+
+// TestEncodeRequest_MaxCompletionTokens locks the token-limit field selection.
+// OpenAI's own spec marks CreateChatCompletionRequest.max_tokens deprecated and
+// "not compatible with o-series models", replacing it with
+// max_completion_tokens; gpt-5 / o-series reject a request carrying max_tokens.
+// The two fields are therefore selected on the model's advertised Thinking
+// capability rather than migrated unconditionally: openaiapi is the shared Chat
+// dialect for the OpenAI-compatible ecosystem, and older llama.cpp / Ollama
+// builds still accept only max_tokens. Exactly one of the two is ever emitted.
+func TestEncodeRequest_MaxCompletionTokens(t *testing.T) {
+	t.Parallel()
+
+	maxTok := 256
+
+	cases := []struct {
+		name      string
+		caps      model.Capabilities
+		wantKey   string
+		absentKey string
+	}{
+		{
+			name:      "thinking model uses max_completion_tokens",
+			caps:      model.Capabilities{Thinking: true},
+			wantKey:   "max_completion_tokens",
+			absentKey: "max_tokens",
+		},
+		{
+			name:      "non-thinking model keeps deprecated max_tokens",
+			caps:      model.Capabilities{},
+			wantKey:   "max_tokens",
+			absentKey: "max_completion_tokens",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := inference.Request{
+				Model: model.Model{Name: "m", Caps: tc.caps, Sampling: model.Sampling{MaxTokens: &maxTok}},
+			}
+			body, err := openaiapi.EncodeRequest(req, false)
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			raw := mustDecode(t, body)
+			got, ok := raw[tc.wantKey]
+			if !ok {
+				t.Fatalf("%s absent, want present (body=%s)", tc.wantKey, body)
+			}
+			var v int
+			if err := json.Unmarshal(got, &v); err != nil {
+				t.Fatalf("unmarshal %s: %v", tc.wantKey, err)
+			}
+			if v != maxTok {
+				t.Errorf("%s = %d, want %d", tc.wantKey, v, maxTok)
+			}
+			if _, present := raw[tc.absentKey]; present {
+				t.Errorf("%s must not be emitted alongside %s (body=%s)", tc.absentKey, tc.wantKey, body)
+			}
+		})
+	}
+}
+
+// TestEncodeRequest_MaxCompletionTokensOmittedWhenUnset confirms neither
+// token-limit field appears when the effective sampling carries no limit.
+func TestEncodeRequest_MaxCompletionTokensOmittedWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	req := inference.Request{Model: model.Model{Name: "m", Caps: model.Capabilities{Thinking: true}}}
+	body, err := openaiapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, body)
+	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+		if _, present := raw[key]; present {
+			t.Errorf("%s present with no MaxTokens set (body=%s)", key, body)
+		}
 	}
 }

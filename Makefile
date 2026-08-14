@@ -1,4 +1,4 @@
-.PHONY: test fmt fmt-check lint vuln verify secure fuzz
+.PHONY: test fmt fmt-check lint vuln verify secure fuzz conformance-schemas
 
 # Module's own package dirs, excluding vendor/ and the nested .worktrees/ modules
 # (go list ./... stops at nested module boundaries and skips vendor).
@@ -41,3 +41,16 @@ secure: lint vuln
 
 fuzz:
 	@echo "Usage: go test -fuzz=FuzzXxx ./path/to/pkg -fuzztime=30s"
+
+# Re-derive the provider conformance schemas from the upstream API descriptions.
+# This is the ONLY supported way to change codec/conformance/schema: the tree,
+# its provenance record and its unenforced-constraint report are all generated
+# together, so a hand edit would desynchronise them. The command downloads each
+# source from the URL recorded in provenance.json, so upstream drift lands as a
+# reviewable git diff in the hashes and the schemas.
+CONFORMANCE_SPECS ?= /tmp/looprig-inference-conformance-specs
+conformance-schemas:
+	go run ./codec/conformance/cmd/schemagen \
+		-fetch \
+		-specs $(CONFORMANCE_SPECS) \
+		-out codec/conformance/schema

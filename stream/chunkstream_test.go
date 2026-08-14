@@ -114,6 +114,227 @@ func TestFramesToChunks_MapError(t *testing.T) {
 	}
 }
 
+// countingFrameSource yields each payload as one frame and counts reads,
+// including the read that reports EOF, so a test can prove which frames the
+// adapter did and did not consume.
+func countingFrameSource(datas []string, reads *int) *stream.StreamReader[stream.StreamFrame] {
+	index := 0
+	return stream.NewStreamReader(func() (stream.StreamFrame, error) {
+		*reads++
+		if index >= len(datas) {
+			return stream.StreamFrame{}, io.EOF
+		}
+		data := datas[index]
+		index++
+		return stream.StreamFrame{Data: []byte(data)}, nil
+	}, nil)
+}
+
+// drainErrorMapper fails on "bad", fails on "partial" while handing back the
+// chunk it had already decoded, ends the stream on "[DONE]", splits "a,b" into
+// two chunks, and otherwise emits the frame's payload as text.
+func drainErrorMapper(boom error) func(stream.StreamFrame) ([]content.Chunk, error) {
+	return func(frame stream.StreamFrame) ([]content.Chunk, error) {
+		switch data := string(frame.Data); data {
+		case "bad":
+			return nil, boom
+		case "partial":
+			return []content.Chunk{&content.TextChunk{Text: "salvaged"}}, boom
+		case "[DONE]":
+			return nil, io.EOF
+		case "a,b":
+			return []content.Chunk{&content.TextChunk{Text: "a"}, &content.TextChunk{Text: "b"}}, nil
+		default:
+			return []content.Chunk{&content.TextChunk{Text: data}}, nil
+		}
+	}
+}
+
+// TestFramesToChunks_DrainBeforeMapError pins the drain-then-fail contract for
+// non-EOF mapper errors. A malformed frame remains an error, but it costs only
+// the frames after it: everything decoded before it still reaches the caller,
+// and the error arrives once that content is drained. Silent total loss of a
+// generation is replaced by partial content followed by an explicit failure.
+func TestFramesToChunks_DrainBeforeMapError(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("malformed frame")
+	mapFrame := drainErrorMapper(boom)
+
+	tests := []struct {
+		name      string
+		datas     []string
+		wantTexts []string
+		wantErr   error
+		wantReads int
+	}{
+		{
+			name:      "two good frames drain before the malformed one fails",
+			datas:     []string{"one", "two", "bad", "three"},
+			wantTexts: []string{"one", "two"},
+			wantErr:   boom,
+			wantReads: 3,
+		},
+		{
+			name:      "a buffered multi chunk frame drains before the malformed one fails",
+			datas:     []string{"a,b", "bad"},
+			wantTexts: []string{"a", "b"},
+			wantErr:   boom,
+			wantReads: 2,
+		},
+		{
+			name:      "an error on the very first frame has nothing to drain",
+			datas:     []string{"bad", "one"},
+			wantErr:   boom,
+			wantReads: 1,
+		},
+		{
+			name:      "chunks handed back with the error drain before it",
+			datas:     []string{"partial", "one"},
+			wantTexts: []string{"salvaged"},
+			wantErr:   boom,
+			wantReads: 1,
+		},
+		{
+			name:      "a terminal event before a bad frame still ends the stream cleanly",
+			datas:     []string{"one", "[DONE]", "bad"},
+			wantTexts: []string{"one"},
+			wantReads: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			reads := 0
+			reader := stream.FramesToChunks(countingFrameSource(tt.datas, &reads), mapFrame)
+
+			var gotTexts []string
+			var finalErr error
+			for {
+				chunk, err := reader.Next()
+				if err != nil {
+					finalErr = err
+					break
+				}
+				text, ok := chunk.(*content.TextChunk)
+				if !ok {
+					t.Fatalf("chunk type = %T, want *content.TextChunk", chunk)
+				}
+				gotTexts = append(gotTexts, text.Text)
+			}
+			if tt.wantErr == nil {
+				if !errors.Is(finalErr, io.EOF) {
+					t.Fatalf("final error = %v, want io.EOF", finalErr)
+				}
+			} else {
+				if !errors.Is(finalErr, tt.wantErr) {
+					t.Fatalf("final error = %v, want %v", finalErr, tt.wantErr)
+				}
+				if errors.Is(finalErr, io.EOF) {
+					t.Fatalf("final error = %v matches io.EOF; a truncated stream must not look complete", finalErr)
+				}
+			}
+			if len(gotTexts) != len(tt.wantTexts) {
+				t.Fatalf("texts = %v, want %v", gotTexts, tt.wantTexts)
+			}
+			for i := range tt.wantTexts {
+				if gotTexts[i] != tt.wantTexts[i] {
+					t.Errorf("text[%d] = %q, want %q", i, gotTexts[i], tt.wantTexts[i])
+				}
+			}
+			if reads != tt.wantReads {
+				t.Errorf("frame reads = %d, want %d", reads, tt.wantReads)
+			}
+		})
+	}
+}
+
+// TestFramesToChunks_MapErrorIsPermanent proves a drained mid-stream error is
+// never lost: it is the terminal outcome for every later Next, it never
+// authorizes terminal metadata, and a caller that stops reading the moment the
+// drained content runs out cannot mistake the truncated stream for a complete
+// one.
+func TestFramesToChunks_MapErrorIsPermanent(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("malformed frame")
+	reads := 0
+	producerCalls := 0
+	reader := stream.FramesToChunksWithResult(
+		countingFrameSource([]string{"one", "bad"}, &reads),
+		drainErrorMapper(boom),
+		func() (stream.StreamResult, bool, error) {
+			producerCalls++
+			return stream.StreamResult{Model: "must-not-appear", FinishReason: stream.FinishReasonStop}, true, nil
+		},
+	)
+
+	chunk, err := reader.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want the first decoded chunk", err)
+	}
+	if text, ok := chunk.(*content.TextChunk); !ok || text.Text != "one" {
+		t.Fatalf("first chunk = %#v, want text %q", chunk, "one")
+	}
+	// A caller could stop here. The stream must not look complete.
+	if got, ok := reader.Result(); ok {
+		t.Fatalf("Result() = %+v, true after drained content; want unavailable", got)
+	}
+
+	_, err = reader.Next()
+	if !errors.Is(err, boom) {
+		t.Fatalf("Next() error = %v, want %v", err, boom)
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, again := reader.Next(); !errors.Is(again, boom) {
+			t.Fatalf("Next() #%d after failure = %v, want a repeated %v", attempt+2, again, boom)
+		}
+	}
+	if got, ok := reader.Result(); ok {
+		t.Fatalf("Result() = %+v, true after a mid-stream error; want unavailable", got)
+	}
+	if producerCalls != 0 {
+		t.Errorf("terminal metadata producer calls = %d, want 0 after a mid-stream error", producerCalls)
+	}
+	if reads != 2 {
+		t.Errorf("frame reads = %d, want 2; frames after the failure must not be consumed", reads)
+	}
+}
+
+// TestFramesToChunks_MapErrorOutranksTerminalGate keeps a mid-stream decode
+// failure and a missing-terminal gate from masking each other. The gate fires
+// only at clean EOF and reports that a stream ended early; a mapper error names
+// the frame that actually broke, so it is the more specific outcome and must be
+// what the caller sees.
+func TestFramesToChunks_MapErrorOutranksTerminalGate(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("malformed frame")
+	gate := errors.New("ended before a terminal event")
+	reads := 0
+	reader := stream.FramesToChunksWithResult(
+		countingFrameSource([]string{"one", "bad"}, &reads),
+		drainErrorMapper(boom),
+		func() (stream.StreamResult, bool, error) { return stream.StreamResult{}, false, gate },
+	)
+
+	if _, err := reader.Next(); err != nil {
+		t.Fatalf("Next() error = %v, want the first decoded chunk", err)
+	}
+	_, err := reader.Next()
+	if !errors.Is(err, boom) {
+		t.Fatalf("Next() error = %v, want the specific mapper failure %v", err, boom)
+	}
+	if errors.Is(err, gate) {
+		t.Fatalf("Next() error = %v; the terminal gate masked the mapper failure", err)
+	}
+	if _, ok := reader.Result(); ok {
+		t.Error("Result() authorized after a mid-stream error")
+	}
+}
+
 func TestFramesToChunks_Result(t *testing.T) {
 	t.Parallel()
 
@@ -188,15 +409,41 @@ func TestFramesToChunks_Result(t *testing.T) {
 			wantFrameReads: 1,
 		},
 		{
-			name:   "mapper non EOF error leaks neither chunks nor result",
+			name:   "mapper non EOF error drains its chunks then leaks no result",
 			frames: []stream.StreamFrame{{Data: []byte("bad")}},
 			adapterResult: func() (stream.StreamResult, bool, error) {
 				return stream.StreamResult{Model: "must-not-appear"}, true, nil
 			},
 			mapFrame: func(stream.StreamFrame) ([]content.Chunk, error) {
-				return []content.Chunk{&content.TextChunk{Text: "must-not-appear"}}, errMap
+				return []content.Chunk{&content.TextChunk{Text: "salvaged"}}, errMap
 			},
+			wantTexts:      []string{"salvaged"},
 			wantErr:        errMap,
+			wantFrameReads: 1,
+		},
+		{
+			// The adapter's own terminal metadata passes through the same path as
+			// the frame source's. These are the live counts from an OpenRouter
+			// HTTP 200 against nvidia/nemotron-3-ultra-550b-a55b:free —
+			// completion_tokens=216 with reasoning_tokens=226 — which used to turn
+			// a delivered answer into a stream failure.
+			name:   "adapter usage diverging from the reasoning convention still authorizes metadata",
+			frames: []stream.StreamFrame{{Data: []byte("terminal")}},
+			adapterResult: func() (stream.StreamResult, bool, error) {
+				return stream.StreamResult{
+					Usage:        &content.Usage{OutputTokens: 216, ReasoningTokens: 226},
+					FinishReason: stream.FinishReasonStop,
+				}, true, nil
+			},
+			mapFrame: func(stream.StreamFrame) ([]content.Chunk, error) {
+				return []content.Chunk{&content.TextChunk{Text: "answer"}}, io.EOF
+			},
+			wantTexts: []string{"answer"},
+			wantResult: stream.StreamResult{
+				Usage:        &content.Usage{OutputTokens: 216, ReasoningTokens: 226},
+				FinishReason: stream.FinishReasonStop,
+			},
+			wantResultOK:   true,
 			wantFrameReads: 1,
 		},
 		{

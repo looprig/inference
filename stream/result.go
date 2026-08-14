@@ -94,11 +94,10 @@ func readStreamResult(producer StreamResultProducer) (StreamResult, bool, error)
 	if !ok {
 		return StreamResult{}, false, nil
 	}
-	result = cloneStreamResult(result)
-	if result.Usage != nil {
-		if err := result.Usage.Validate(); err != nil {
-			return StreamResult{}, false, &StreamResultError{Cause: err}
-		}
-	}
-	return result, true, nil
+	// Terminal usage is passed through unexamined. It is metrics about a stream
+	// that has already delivered its chunks, so no property of it can justify
+	// withdrawing the result: a provider that reports more reasoning tokens than
+	// output tokens has an accounting bug, not an invalid stream. See
+	// content.Usage.ReasoningTokens.
+	return cloneStreamResult(result), true, nil
 }

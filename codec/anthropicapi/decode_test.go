@@ -2,12 +2,14 @@ package anthropicapi_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/anthropicapi"
 	failure "github.com/looprig/inference/failure"
+	model "github.com/looprig/inference/model"
 	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
@@ -16,6 +18,29 @@ import (
 func TestDecodeResponse_CompileTimeCheck(t *testing.T) {
 	t.Parallel()
 	var _ func([]byte) (*inference.Response, error) = anthropicapi.DecodeResponse
+}
+
+func TestDecodeResponse_RedactedThinkingPreservesOpaqueState(t *testing.T) {
+	t.Parallel()
+	resp, err := anthropicapi.DecodeResponse([]byte(`{"type":"message","role":"assistant","model":"claude","content":[{"type":"redacted_thinking","data":"opaque+/="}],"stop_reason":"tool_use"}`))
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	thinking, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok {
+		t.Fatalf("block = %T, want ThinkingBlock", resp.Message.Blocks[0])
+	}
+	if got := string(thinking.ProviderState); got != `"opaque+/="` || thinking.ProviderStateFormat != "anthropic-redacted-thinking" {
+		t.Fatalf("opaque state = %s/%q", got, thinking.ProviderStateFormat)
+	}
+	req := inference.Request{Model: model.Model{Name: "claude"}, Messages: content.AgenticMessages{aiMsg(thinking)}}
+	raw, err := anthropicapi.EncodeRequest(req, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	if !strings.Contains(string(raw), `{"type":"redacted_thinking","data":"opaque+/="}`) {
+		t.Fatalf("replay body = %s", raw)
+	}
 }
 
 func TestDecodeResponseFinishReason(t *testing.T) {
@@ -77,11 +102,22 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "absent usage is unknown", want: nil},
 		{name: "present zero is known", usageField: `,"usage":{}`, want: &content.Usage{}},
 		{name: "cache categories are disjoint", usageField: `,"usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}`, want: &content.Usage{InputTokens: 5, OutputTokens: 6, CacheReadTokens: 3, CacheCreationTokens: 2}},
+		{name: "thinking tokens are an output subset", usageField: `,"usage":{"input_tokens":5,"output_tokens":6,"output_tokens_details":{"thinking_tokens":4}}`, want: &content.Usage{InputTokens: 5, OutputTokens: 6, ReasoningTokens: 4}},
 		{name: "negative input", usageField: `,"usage":{"input_tokens":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative},
 		{name: "negative output", usageField: `,"usage":{"output_tokens":-1}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonNegative},
 		{name: "negative cache read", usageField: `,"usage":{"cache_read_input_tokens":-1}`, wantField: usage.UsageNormalizationFieldCacheReadTokens, wantReason: usage.UsageNormalizationReasonNegative},
 		{name: "negative cache creation", usageField: `,"usage":{"cache_creation_input_tokens":-1}`, wantField: usage.UsageNormalizationFieldCacheCreationTokens, wantReason: usage.UsageNormalizationReasonNegative},
-		{name: "null cache creation", usageField: `,"usage":{"cache_creation_input_tokens":null}`, wantField: usage.UsageNormalizationFieldCacheCreationTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "negative thinking", usageField: `,"usage":{"output_tokens_details":{"thinking_tokens":-1}}`, wantField: usage.UsageNormalizationFieldReasoningTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		// Anthropic declares both cache counts as anyOf[{integer, minimum 0},
+		// {null}] with "default": null, so null is the documented value for a
+		// turn that neither read nor wrote a cache. It normalizes to zero.
+		{name: "null cache creation is zero", usageField: `,"usage":{"cache_creation_input_tokens":null}`, want: &content.Usage{}},
+		{name: "null cache read is zero", usageField: `,"usage":{"cache_read_input_tokens":null}`, want: &content.Usage{}},
+		// The relaxation is scoped to the two nullable members: input_tokens and
+		// output_tokens are declared type: integer with no null branch, so an
+		// explicit null there is still malformed.
+		{name: "null input is still an error", usageField: `,"usage":{"input_tokens":null}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "null output is still an error", usageField: `,"usage":{"output_tokens":null}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonNull},
 		{name: "fractional input", usageField: `,"usage":{"input_tokens":1.5}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonFractional},
 		{name: "out of range output", usageField: `,"usage":{"output_tokens":9223372036854775808}`, wantField: usage.UsageNormalizationFieldOutputTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
 	}
@@ -215,14 +251,14 @@ func TestDecodeResponse(t *testing.T) {
 			wantOutputTokens: 2,
 		},
 		{
-			name: "unknown block types are skipped",
+			name: "redacted thinking is preserved and unknown block types are skipped",
 			body: []byte(`{
 				"id":"msg_5","type":"message","role":"assistant","model":"claude-opus-4-8",
-				"content":[{"type":"redacted_thinking","data":"..."},{"type":"text","text":"visible"}],
+				"content":[{"type":"redacted_thinking","data":"..."},{"type":"future_block"},{"type":"text","text":"visible"}],
 				"usage":{"input_tokens":1,"output_tokens":1}
 			}`),
 			wantModel:        "claude-opus-4-8",
-			wantTypes:        []content.BlockType{content.TypeText},
+			wantTypes:        []content.BlockType{content.TypeThinking, content.TypeText},
 			wantText:         "visible",
 			wantInputTokens:  1,
 			wantOutputTokens: 1,

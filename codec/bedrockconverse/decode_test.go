@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/bedrockconverse"
 	"github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
@@ -54,6 +55,28 @@ func TestDecodeResponse_ContentUsageAndFinishReason(t *testing.T) {
 	}
 	if response.FinishReason != stream.FinishReasonToolUse {
 		t.Errorf("FinishReason = %q, want tool_use", response.FinishReason)
+	}
+}
+
+func TestDecodeResponse_RedactedReasoningRoundTrips(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"output":{"message":{"role":"assistant","content":[{"reasoningContent":{"redactedContent":"AQID/w=="}}]}},"stopReason":"tool_use"}`)
+	resp, err := bedrockconverse.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	thinking, ok := resp.Message.Blocks[0].(*content.ThinkingBlock)
+	if !ok || string(thinking.ProviderState) != `"AQID/w=="` || thinking.ProviderStateFormat != "bedrock-converse-redacted-thinking" {
+		t.Fatalf("block = %#v", resp.Message.Blocks[0])
+	}
+	m := baseModel()
+	m.Caps.Thinking = true
+	raw, err := bedrockconverse.EncodeRequest(inference.Request{Model: m, Messages: content.AgenticMessages{assistantMessage(thinking)}})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	if !strings.Contains(string(raw), `"redactedContent":"AQID/w=="`) {
+		t.Fatalf("replay body = %s", raw)
 	}
 }
 
@@ -155,6 +178,86 @@ func TestDecodeResponse_InvalidUsageCounts(t *testing.T) {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
 			body := []byte(`{"output":{"message":{"role":"assistant","content":[]}},"usage":{"inputTokens":` + raw + `}}`)
+			_, err := bedrockconverse.DecodeResponse(body)
+			if err == nil {
+				t.Fatal("DecodeResponse() error = nil, want usage normalization error")
+			}
+			var normalizationErr *usage.UsageNormalizationError
+			if !errors.As(err, &normalizationErr) {
+				t.Fatalf("error = %T (%v), want UsageNormalizationError", err, err)
+			}
+		})
+	}
+}
+
+// TestDecodeResponse_OptionalCacheCountsNeverDiscardAGeneration pins the rule
+// that an accounting field must never discard a completed generation. AWS marks
+// only inputTokens, outputTokens and totalTokens @required on
+// com.amazonaws.bedrockruntime#TokenUsage; cacheReadInputTokens and
+// cacheWriteInputTokens carry no @required trait, so a conforming response may
+// omit them or send them as null. Either shape must normalize to zero and leave
+// the model's answer intact — the identical treatment codec/anthropicapi gives
+// the identical two fields.
+func TestDecodeResponse_OptionalCacheCountsNeverDiscardAGeneration(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		usage string
+	}{
+		{
+			name:  "both cache counts null",
+			usage: `{"inputTokens":10,"outputTokens":8,"totalTokens":18,"cacheReadInputTokens":null,"cacheWriteInputTokens":null}`,
+		},
+		{
+			name:  "cache read null, cache write present",
+			usage: `{"inputTokens":10,"outputTokens":8,"totalTokens":18,"cacheReadInputTokens":null,"cacheWriteInputTokens":3}`,
+		},
+		{
+			name:  "both cache counts absent",
+			usage: `{"inputTokens":10,"outputTokens":8,"totalTokens":18}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"output":{"message":{"role":"assistant","content":[{"text":"answer"}]}},"stopReason":"end_turn","usage":` + tc.usage + `}`)
+			response, err := bedrockconverse.DecodeResponse(body)
+			if err != nil {
+				t.Fatalf("DecodeResponse() error = %v, want the generation preserved", err)
+			}
+			if response.Message == nil || len(response.Message.Blocks) != 1 {
+				t.Fatalf("Message = %#v, want the answer block", response.Message)
+			}
+			if got := response.Message.Blocks[0].(*content.TextBlock).Text; got != "answer" {
+				t.Errorf("text = %q, want answer", got)
+			}
+			if response.Usage == nil {
+				t.Fatal("Usage = nil, want normalized usage")
+			}
+			if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 8 {
+				t.Errorf("usage = %#v, want the required counts preserved", response.Usage)
+			}
+			if response.Usage.CacheReadTokens != 0 {
+				t.Errorf("CacheReadTokens = %d, want 0 for an absent/null optional count", response.Usage.CacheReadTokens)
+			}
+		})
+	}
+}
+
+// TestDecodeResponse_InvalidOptionalCacheCountsStillReject proves the fix is a
+// null/absent allowance, not a loss of validation: a present, non-null cache
+// count keeps every strict numeric rule.
+func TestDecodeResponse_InvalidOptionalCacheCountsStillReject(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{"-1", "1.5", `"1"`, "true"}
+	for _, raw := range cases {
+		raw := raw
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"output":{"message":{"role":"assistant","content":[]}},"usage":{"inputTokens":10,"outputTokens":8,"cacheReadInputTokens":` + raw + `}}`)
 			_, err := bedrockconverse.DecodeResponse(body)
 			if err == nil {
 				t.Fatal("DecodeResponse() error = nil, want usage normalization error")

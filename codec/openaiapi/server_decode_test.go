@@ -224,8 +224,8 @@ func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 	if len(decoded.Request.Tools) != 1 || decoded.Request.Tools[0].Name != "get_weather" {
 		t.Errorf("Tools = %#v", decoded.Request.Tools)
 	}
-	if decoded.Request.ToolChoice != inference.ToolChoiceRequired {
-		t.Errorf("ToolChoice = %v, want ToolChoiceRequired", decoded.Request.ToolChoice)
+	if decoded.Request.ToolChoice != inference.ToolRequired() {
+		t.Errorf("ToolChoice = %v, want ToolRequired()", decoded.Request.ToolChoice)
 	}
 }
 
@@ -237,11 +237,40 @@ func TestServerDecode_RejectsToolChoiceNone(t *testing.T) {
 	}
 }
 
-func TestServerDecode_RejectsToolChoiceObjectForm(t *testing.T) {
+// TestServerDecode_NamedToolChoice covers the ChatCompletionNamedToolChoice
+// object form, which the neutral vocabulary now represents as a named choice
+// plus a name.
+func TestServerDecode_NamedToolChoice(t *testing.T) {
 	t.Parallel()
 	c, req := decodeReq(t, `{"model":"m","tool_choice":{"type":"function","function":{"name":"f"}},"messages":[]}`)
-	if _, err := c.DecodeRequest(req); err == nil {
-		t.Fatal("DecodeRequest() error = nil, want rejection of named tool_choice object")
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	if decoded.Request.ToolChoice != inference.ToolNamed("f") {
+		t.Errorf("ToolChoice = %v, want ToolNamed(f)", decoded.Request.ToolChoice)
+	}
+}
+
+// TestServerDecode_RejectsUnrepresentableToolChoiceObjects keeps the object
+// forms outside the neutral vocabulary failing closed. The custom-tool and
+// allowed-tools members of ChatCompletionToolChoiceOption are real wire shapes
+// with no neutral spelling, so they must not degrade into a function choice.
+func TestServerDecode_RejectsUnrepresentableToolChoiceObjects(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"custom tool":           `{"type":"custom","custom":{"name":"f"}}`,
+		"allowed tools":         `{"type":"allowed_tools","mode":"required","tools":[]}`,
+		"function with no name": `{"type":"function","function":{}}`,
+	}
+	for name, toolChoice := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, `{"model":"m","tool_choice":`+toolChoice+`,"messages":[]}`)
+			if _, err := c.DecodeRequest(req); err == nil {
+				t.Fatalf("DecodeRequest() error = nil, want rejection of %s", toolChoice)
+			}
+		})
 	}
 }
 
@@ -374,5 +403,50 @@ func TestServerDecode_MalformedBodyNeverPanics(t *testing.T) {
 	}()
 	if _, err := c.DecodeRequest(req); err == nil {
 		t.Fatal("DecodeRequest() error = nil, want rejection of malformed body")
+	}
+}
+
+// TestServerDecode_MaxCompletionTokens covers the ingress half of the
+// deprecated-max_tokens migration. decodeChatCompletionsBody runs with
+// DisallowUnknownFields, so a client sending the modern (and, for o-series,
+// mandatory) max_completion_tokens spelling must be recognized rather than
+// failed closed as an unknown field; it maps to the same neutral
+// Sampling.MaxTokens as the legacy name.
+func TestServerDecode_MaxCompletionTokens(t *testing.T) {
+	t.Parallel()
+	c, req := decodeReq(t, `{
+		"model": "gpt-test",
+		"messages": [{"role":"user","content":"hi"}],
+		"max_completion_tokens": 512
+	}`)
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	if decoded.Request.Override == nil {
+		t.Fatal("Override = nil, want MaxTokens 512")
+	}
+	got := decoded.Request.Override.MaxTokens
+	if got == nil {
+		t.Fatal("Override.MaxTokens = nil, want 512")
+	}
+	if *got != 512 {
+		t.Errorf("Override.MaxTokens = %d, want 512", *got)
+	}
+}
+
+// TestServerDecode_MaxTokensConflict rejects a body carrying both token-limit
+// spellings: they are mutually exclusive on the wire and picking one silently
+// would let a client smuggle a different limit past review.
+func TestServerDecode_MaxTokensConflict(t *testing.T) {
+	t.Parallel()
+	c, req := decodeReq(t, `{
+		"model": "gpt-test",
+		"messages": [{"role":"user","content":"hi"}],
+		"max_tokens": 16,
+		"max_completion_tokens": 512
+	}`)
+	if _, err := c.DecodeRequest(req); err == nil {
+		t.Fatal("DecodeRequest() error = nil, want conflict error")
 	}
 }

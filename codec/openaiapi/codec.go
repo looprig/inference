@@ -80,53 +80,69 @@ func (Codec) DecodeResponse(body []byte) (*inference.Response, error) {
 }
 
 // DecodeEvent decodes one already-de-framed SSE data payload into the chunk(s) it
-// yields. It is tolerant by contract (matching NewStream): malformed JSON, an
-// event with no choices, and role-only/empty deltas return (nil, nil) — a skip,
-// not an error — while a single delta line carrying multiple tool-call entries
-// returns all of them. DecodeEvent is stateless: cross-event tool-argument
+// yields. Unknown valid shapes with no choices and role-only/empty deltas are
+// skipped; malformed JSON is an error. A single delta carrying multiple tool-call entries
+// returns all of them, and a delta combining reasoning, text, and/or tool calls returns
+// a chunk for each. DecodeEvent is stateless: cross-event tool-argument
 // assembly happens downstream in the stream accumulator, not here.
 func (Codec) DecodeEvent(event []byte) ([]content.Chunk, error) {
 	return decodeEvent(event)
 }
 
 // decodeEvent is the single per-event decoder shared by Codec.DecodeEvent and
-// NewStream. NewStream drives it one SSE line at a time (buffering the
-// multi-tool-call case and draining one chunk per Next()); Codec.DecodeEvent
-// hands it a de-framed payload directly. Precedence — reasoning, then text, then
-// tool calls — is preserved from the original NewStream loop, so at most one kind
-// of chunk is produced per event.
+// NewStream. NewStream drives it one SSE line at a time (buffering multi-chunk
+// events and draining one chunk per Next()); Codec.DecodeEvent hands it a
+// de-framed payload directly.
+//
+// A delta's reasoning_content, content, and tool_calls are independent
+// optional members — the schema makes none of them exclusive, and real
+// providers do combine them (a reasoning model emitting its last summary
+// fragment in the same delta as the tool call it decided on). Every populated
+// member therefore yields its chunk; reasoning, then text, then tool calls is
+// only an emission ORDER, never a precedence that discards the rest.
 func decodeEvent(payload []byte) ([]content.Chunk, error) {
 	var ev sseChunk
 	if err := json.Unmarshal(payload, &ev); err != nil {
-		return nil, nil // skip malformed lines
+		return nil, &StreamEventDecodeError{Err: err}
 	}
 	if len(ev.Choices) == 0 {
 		return nil, nil
 	}
 	delta := ev.Choices[0].Delta
 
+	var out []content.Chunk
 	if delta.ReasoningContent != "" {
-		return []content.Chunk{&content.ThinkingChunk{Thinking: delta.ReasoningContent}}, nil
+		// Index is deliberately left at zero. Chat Completions carries reasoning
+		// as a single `reasoning_content` delta stream on one choice, with no
+		// per-block index on the wire — unlike Responses, whose reasoning items
+		// each have an output_index. Every fragment therefore belongs to one
+		// reasoning block, which is exactly what folding at index 0 produces.
+		out = append(out, &content.ThinkingChunk{Thinking: delta.ReasoningContent})
 	}
 	if delta.Content != "" {
-		return []content.Chunk{&content.TextChunk{Text: delta.Content}}, nil
+		out = append(out, &content.TextChunk{Text: delta.Content})
 	}
-	if len(delta.ToolCalls) > 0 {
-		var out []content.Chunk
-		for _, tc := range delta.ToolCalls {
-			// Drop wholly-empty entries (no id, name, or argument fragment).
-			if tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" {
-				continue
-			}
-			out = append(out, &content.ToolUseChunk{
-				Index:     tc.Index,
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				InputJSON: tc.Function.Arguments,
-			})
+	// ChatCompletionStreamResponseDelta carries `refusal` as its own delta
+	// channel, so it becomes a RefusalChunk — which folds into the same
+	// *content.RefusalBlock the non-streaming decoder produces for the same
+	// response (streamaccumulator.Refusal). A non-empty test rather than a
+	// presence test is all this shape allows: the delta's `refusal` is a plain
+	// string, and an empty one is what every non-refusal delta carries.
+	if delta.Refusal != "" {
+		out = append(out, &content.RefusalChunk{Text: delta.Refusal})
+	}
+	for _, tc := range delta.ToolCalls {
+		// Drop wholly-empty entries (no id, name, or argument fragment).
+		if tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" {
+			continue
 		}
-		return out, nil
+		out = append(out, &content.ToolUseChunk{
+			Index:     tc.Index,
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			InputJSON: tc.Function.Arguments,
+		})
 	}
-	// Empty delta (role-only or finish): no chunk.
-	return nil, nil
+	// An empty delta (role-only or finish) yields no chunk.
+	return out, nil
 }

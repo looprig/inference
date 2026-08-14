@@ -29,6 +29,7 @@ type Model struct {
 // Rules:
 //   - Name must be non-empty.
 //   - StructuredOutputWithTools requires both Tools and StructuredOutput.
+//   - ThinkingDialect must be a known dialect, and naming one requires Thinking.
 //   - Known context limits must not contradict the shared context window.
 //   - An empty BaseURL is allowed — it is a wildcard bound by the client at the trust
 //     boundary, not a claim.
@@ -45,6 +46,18 @@ func (m Model) Validate() error {
 		return &ValidationError{
 			Field:  "Caps.StructuredOutputWithTools",
 			Reason: "requires both Tools and StructuredOutput",
+		}
+	}
+	if !m.Caps.ThinkingDialect.Valid() {
+		return &ValidationError{
+			Field:  "Caps.ThinkingDialect",
+			Reason: "must be one of \"\" (undeclared), \"adaptive\", or \"budget\"",
+		}
+	}
+	if m.Caps.ThinkingDialect != ThinkingDialectUnknown && !m.Caps.Thinking {
+		return &ValidationError{
+			Field:  "Caps.ThinkingDialect",
+			Reason: "requires Thinking",
 		}
 	}
 	if err := m.Limits.Validate(); err != nil {
@@ -138,8 +151,22 @@ func WithTools() ModelOption { return func(m *Model) { m.Caps.Tools = true } }
 // WithImages marks the model as accepting image inputs.
 func WithImages() ModelOption { return func(m *Model) { m.Caps.AcceptsImages = true } }
 
-// WithThinking marks the model as supporting extended thinking.
+// WithThinking marks the model as supporting extended thinking WITHOUT saying
+// which request shape it accepts. Prefer WithThinkingDialect: a codec that can
+// emit more than one thinking shape fails closed on an undeclared dialect
+// rather than guessing (see ThinkingDialect).
 func WithThinking() ModelOption { return func(m *Model) { m.Caps.Thinking = true } }
+
+// WithThinkingDialect marks the model as supporting extended thinking and
+// declares which request shape it accepts. Like WithStructuredOutputWithTools
+// it sets its own prerequisite, so a caller cannot declare a dialect on a model
+// that is not marked thinking-capable.
+func WithThinkingDialect(d ThinkingDialect) ModelOption {
+	return func(m *Model) {
+		m.Caps.Thinking = true
+		m.Caps.ThinkingDialect = d
+	}
+}
 
 // WithPromptCaching marks the endpoint as honoring explicit cache_control
 // breakpoints (see Capabilities.PromptCaching).

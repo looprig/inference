@@ -60,17 +60,33 @@ func normalizeUsage(wire *messageUsage) (*usage.Usage, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheRead, err := wire.CacheReadTokens.TokenCount(usagenorm.FieldCacheReadTokens)
+	// Anthropic declares both cache counts as anyOf[{integer, minimum 0}, {null}]
+	// with "default": null, so a conforming response carries them as null on
+	// every turn that read from or wrote to no cache. OptionalTokenCount maps
+	// null to zero while keeping the strict numeric validation for present
+	// values; TokenCount would reject the documented default and discard an
+	// otherwise complete response over an accounting field.
+	cacheRead, err := wire.CacheReadTokens.OptionalTokenCount(usagenorm.FieldCacheReadTokens)
 	if err != nil {
 		return nil, err
 	}
-	cacheCreation, err := wire.CacheCreationTokens.TokenCount(usagenorm.FieldCacheCreationTokens)
+	cacheCreation, err := wire.CacheCreationTokens.OptionalTokenCount(usagenorm.FieldCacheCreationTokens)
 	if err != nil {
 		return nil, err
 	}
-	usage := usage.Usage{InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation}
-	if err := usagenorm.ValidateUsage(usage); err != nil {
-		return nil, err
+	var reasoning content.TokenCount
+	if wire.OutputTokensDetails != nil {
+		reasoning, err = wire.OutputTokensDetails.ThinkingTokens.TokenCount(usagenorm.FieldReasoningTokens)
+		if err != nil {
+			return nil, err
+		}
+	}
+	usage := usage.Usage{
+		InputTokens:         input,
+		OutputTokens:        output,
+		CacheReadTokens:     cacheRead,
+		CacheCreationTokens: cacheCreation,
+		ReasoningTokens:     reasoning,
 	}
 	return &usage, nil
 }
@@ -83,9 +99,24 @@ func decodeBlocks(blocks []anthropicBlock) []content.Block {
 	for _, b := range blocks {
 		switch b.Type {
 		case blockTypeText:
+			// Anthropic permits empty text in responses but requires request text
+			// to contain at least one character. Empty text has no semantic state
+			// to preserve, so retaining it would make an otherwise legal assistant
+			// turn impossible to replay on the next request.
+			if b.Text == "" {
+				continue
+			}
 			out = append(out, &content.TextBlock{Text: b.Text})
 		case blockTypeThinking:
-			out = append(out, &content.ThinkingBlock{Thinking: b.Thinking, Signature: b.Signature})
+			// The signature is stamped with THIS dialect as it comes off the
+			// wire. Anthropic verifies it cryptographically, and Bedrock
+			// Converse serves the same models with a structurally identical
+			// block, so provenance is the only thing that keeps the two apart
+			// once the block is in the neutral transcript.
+			out = append(out, content.NewSignedThinkingBlock(
+				b.Thinking, b.Signature, signatureFormatFor(b.Signature), nil, ""))
+		case blockTypeRedactedThinking:
+			out = append(out, content.NewThinkingBlock("", "", opaqueRedactedState(b.Data), providerStateFormatAnthropicRedacted))
 		case blockTypeToolUse:
 			out = append(out, &content.ToolUseBlock{ID: b.ID, Name: b.Name, Input: b.Input})
 		default:

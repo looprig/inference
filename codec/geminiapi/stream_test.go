@@ -74,13 +74,20 @@ func TestGeminiStreamResult(t *testing.T) {
 		{name: "split function call then length overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n", wantReason: stream.FinishReasonLength, wantChunks: 1},
 		{name: "split function call then safety overrides tool use", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: stream.FinishReasonContentFilter, wantChunks: 1},
 		{name: "safety finish is provider-neutral", body: "data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}\n\n", wantReason: stream.FinishReasonContentFilter},
-		{name: "missing trailers remains clean", body: "data: {\"candidates\":[]}\n\n"},
+		// A terminated stream that carries no model/usage trailers is clean; a
+		// stream that carries no TERMINAL is not, and is covered by
+		// TestDecodeStream_EOFWithoutTerminalFails (streamintegrity_test.go).
+		{name: "missing trailers remains clean", body: "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n", wantReason: stream.FinishReasonStop},
 		{name: "null count fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":null}}\n\n", wantErr: true},
 		{name: "malformed count type fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":\"many\"}}\n\n", wantErr: true},
 		{name: "fractional count fails", body: "data: {\"usageMetadata\":{\"candidatesTokenCount\":1.2}}\n\n", wantErr: true},
 		{name: "negative count fails", body: "data: {\"usageMetadata\":{\"thoughtsTokenCount\":-1}}\n\n", wantErr: true},
 		{name: "out-of-range count fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":18446744073709551616}}\n\n", wantErr: true},
-		{name: "inconsistent total fails", body: "data: {\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":2}}\n\n", wantErr: true},
+		// A totalTokenCount that does not reconcile with the components this codec
+		// models is tolerated. Gemini repeats usageMetadata on every frame, so a
+		// fatal reconciliation aborted the stream on frame 1 — discarding a
+		// generation over an accounting field. See normalizeUsage in decode.go.
+		{name: "inconsistent total is tolerated", body: "data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":2}}\n\n", wantUsage: &content.Usage{InputTokens: 2, OutputTokens: 1}, wantReason: stream.FinishReasonStop},
 		{name: "transport interruption rejects collected trailer", body: "data: {\"usageMetadata\":{\"promptTokenCount\":1}}\n\n", interrupt: true},
 	}
 

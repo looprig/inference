@@ -80,7 +80,7 @@ func TestRequest_Fields(t *testing.T) {
 		TransientMessages: 1,
 		Tools:             []inference.Tool{{Name: "search"}},
 		Output:            &inference.OutputSchema{Name: "answer"},
-		ToolChoice:        inference.ToolChoiceRequired,
+		ToolChoice:        inference.ToolRequired(),
 		Override:          override,
 	}
 
@@ -99,8 +99,8 @@ func TestRequest_Fields(t *testing.T) {
 	if req.Output == nil || req.Output.Name != "answer" {
 		t.Errorf("Request.Output = %+v, want output named answer", req.Output)
 	}
-	if req.ToolChoice != inference.ToolChoiceRequired {
-		t.Errorf("Request.ToolChoice = %d, want ToolChoiceRequired", req.ToolChoice)
+	if req.ToolChoice != inference.ToolRequired() {
+		t.Errorf("Request.ToolChoice = %v, want ToolRequired()", req.ToolChoice)
 	}
 	if req.Override == nil || req.Override.Temperature == nil || *req.Override.Temperature != 0.2 {
 		t.Errorf("Request.Override = %+v, want Temperature 0.2", req.Override)
@@ -114,8 +114,70 @@ func TestRequest_Fields(t *testing.T) {
 	if def.Output != nil {
 		t.Errorf("zero-value Request.Output = %+v, want nil", def.Output)
 	}
-	if def.ToolChoice != inference.ToolChoiceAuto {
-		t.Errorf("zero-value Request.ToolChoice = %d, want ToolChoiceAuto", def.ToolChoice)
+	if def.ToolChoice != inference.ToolAuto() {
+		t.Errorf("zero-value Request.ToolChoice = %v, want ToolAuto()", def.ToolChoice)
+	}
+}
+
+// TestToolChoiceVariants pins the constructed vocabulary: the zero value is
+// auto, the forced tool name is reachable only through the named variant, and
+// a ToolChoice is comparable so callers can keep using ==.
+func TestToolChoiceVariants(t *testing.T) {
+	t.Parallel()
+
+	var zero inference.ToolChoice
+	if zero != inference.ToolAuto() {
+		t.Errorf("zero ToolChoice = %v, want ToolAuto()", zero)
+	}
+	if zero.Mode() != inference.ToolChoiceModeAuto {
+		t.Errorf("zero ToolChoice.Mode() = %v, want ToolChoiceAuto", zero.Mode())
+	}
+
+	tests := []struct {
+		name      string
+		choice    inference.ToolChoice
+		wantMode  inference.ToolChoiceMode
+		wantName  string
+		wantNamed bool
+	}{
+		{name: "auto", choice: inference.ToolAuto(), wantMode: inference.ToolChoiceModeAuto},
+		{name: "required", choice: inference.ToolRequired(), wantMode: inference.ToolChoiceModeRequired},
+		{
+			name:      "named",
+			choice:    inference.ToolNamed("search"),
+			wantMode:  inference.ToolChoiceModeNamed,
+			wantName:  "search",
+			wantNamed: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.choice.Mode(); got != tt.wantMode {
+				t.Errorf("Mode() = %v, want %v", got, tt.wantMode)
+			}
+			gotName, gotNamed := tt.choice.Named()
+			if gotName != tt.wantName || gotNamed != tt.wantNamed {
+				t.Errorf("Named() = %q, %t, want %q, %t", gotName, gotNamed, tt.wantName, tt.wantNamed)
+			}
+		})
+	}
+
+	// ToolChoice must stay comparable: Request literals and assertions across
+	// the workspace use ==, and a future multi-name variant carrying a slice
+	// would silently end that. Built through separate locals because
+	// staticcheck reads a literal self-comparison as SA4000 and cannot see
+	// that comparability itself is the property under test.
+	firstNamed, secondNamed := inference.ToolNamed("a"), inference.ToolNamed("a")
+	if firstNamed != secondNamed {
+		t.Error("ToolNamed(a) != ToolNamed(a), want equal values")
+	}
+	if inference.ToolNamed("a") == inference.ToolNamed("b") {
+		t.Error("ToolNamed(a) == ToolNamed(b), want distinct values")
+	}
+	if inference.ToolRequired() == inference.ToolAuto() {
+		t.Error("ToolRequired() == ToolAuto(), want distinct values")
 	}
 }
 
@@ -231,19 +293,39 @@ func TestValidateRequestFeatures(t *testing.T) {
 		},
 		{
 			name:                "required tool choice without tools",
-			req:                 inference.Request{ToolChoice: inference.ToolChoiceRequired},
+			req:                 inference.Request{ToolChoice: inference.ToolRequired()},
 			wantConflict:        true,
 			wantConflictFeature: "tool_choice_required_without_tools",
 		},
 		{
 			name: "required tool choice with tools",
-			req:  inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolChoiceRequired},
+			req:  inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolRequired()},
 		},
 		{
-			name:                "unknown tool choice",
-			req:                 inference.Request{ToolChoice: inference.ToolChoice(99)},
+			name: "named tool choice naming a declared tool",
+			req:  inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolNamed("search")},
+		},
+		{
+			name:                "named tool choice without tools",
+			req:                 inference.Request{ToolChoice: inference.ToolNamed("search")},
 			wantConflict:        true,
-			wantConflictFeature: "tool_choice",
+			wantConflictFeature: "tool_choice_tool_undeclared_name",
+		},
+		{
+			name:                "named tool choice naming an undeclared tool",
+			req:                 inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolNamed("other")},
+			wantConflict:        true,
+			wantConflictFeature: "tool_choice_tool_undeclared_name",
+		},
+		{
+			// The empty name is the one defective named choice a constructor
+			// can still build. It needs no error code of its own: no request
+			// may declare an unnamed tool, so the declared-tool check is what
+			// rejects it, and the diagnostic it produces is the true one.
+			name:                "named tool choice with an empty name",
+			req:                 inference.Request{Tools: []inference.Tool{tool}, ToolChoice: inference.ToolNamed("")},
+			wantConflict:        true,
+			wantConflictFeature: "tool_choice_tool_undeclared_name",
 		},
 		{
 			name: "invalid schema propagates shared validation error",

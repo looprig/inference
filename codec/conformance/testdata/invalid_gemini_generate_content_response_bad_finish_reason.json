@@ -1,0 +1,35 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "The forecast for Oslo is 4 degrees celsius."
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "DONE",
+      "index": 0,
+      "safetyRatings": [
+        {
+          "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+          "probability": "NEGLIGIBLE"
+        }
+      ]
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 11,
+    "candidatesTokenCount": 21,
+    "totalTokenCount": 32,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 11
+      }
+    ]
+  },
+  "modelVersion": "gemini-2.0-flash",
+  "responseId": "vTGdaPjRK8SGz7IPy4nc0Qg"
+}

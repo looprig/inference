@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -227,6 +228,108 @@ func TestEncodeRequest_SystemAndMessages(t *testing.T) {
 	}
 }
 
+func TestEncodeRequest_ProjectsConversationTurns(t *testing.T) {
+	t.Parallel()
+
+	m := baseModel()
+	m.Caps.Tools = true
+
+	t.Run("adjacent ordinary user messages merge in order", func(t *testing.T) {
+		t.Parallel()
+		data, err := anthropicapi.EncodeRequest(inference.Request{
+			Model: m,
+			Messages: content.AgenticMessages{
+				userMsg(textBlock("first")),
+				userMsg(textBlock("second")),
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("EncodeRequest: %v", err)
+		}
+		messages := messagesOf(t, decodeObj(t, data))
+		if len(messages) != 1 || asString(t, messages[0]["role"]) != "user" {
+			t.Fatalf("messages = %v, want one user turn", messages)
+		}
+		blocks := blocksOf(t, messages[0])
+		if len(blocks) != 2 || asString(t, blocks[0]["text"]) != "first" || asString(t, blocks[1]["text"]) != "second" {
+			t.Fatalf("blocks = %v, want first then second", blocks)
+		}
+	})
+
+	t.Run("parallel tool results share one user turn", func(t *testing.T) {
+		t.Parallel()
+		data, err := anthropicapi.EncodeRequest(inference.Request{
+			Model: m,
+			Messages: content.AgenticMessages{
+				userMsg(textBlock("start")),
+				aiMsg(
+					&content.ToolUseBlock{ID: "toolu_1", Name: "lookup", Input: json.RawMessage(`{"q":"one"}`)},
+					&content.ToolUseBlock{ID: "toolu_2", Name: "lookup", Input: json.RawMessage(`{"q":"two"}`)},
+				),
+				toolResultMsg("toolu_1", false, textBlock("one")),
+				toolResultMsg("toolu_2", false, textBlock("two")),
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("EncodeRequest: %v", err)
+		}
+		messages := messagesOf(t, decodeObj(t, data))
+		if len(messages) != 3 {
+			t.Fatalf("len(messages) = %d, want 3", len(messages))
+		}
+		blocks := blocksOf(t, messages[2])
+		if len(blocks) != 2 || asString(t, blocks[0]["tool_use_id"]) != "toolu_1" || asString(t, blocks[1]["tool_use_id"]) != "toolu_2" {
+			t.Fatalf("tool-result blocks = %v, want both results in call order", blocks)
+		}
+	})
+
+	t.Run("transient runtime text follows tool results without another user turn", func(t *testing.T) {
+		t.Parallel()
+		data, err := anthropicapi.EncodeRequest(inference.Request{
+			Model: m,
+			Messages: content.AgenticMessages{
+				userMsg(textBlock("start")),
+				aiMsg(&content.ToolUseBlock{ID: "toolu_1", Name: "lookup", Input: json.RawMessage(`{"q":"one"}`)}),
+				toolResultMsg("toolu_1", false, textBlock("one")),
+				userMsg(textBlock("runtime context")),
+			},
+			TransientMessages: 1,
+		}, false)
+		if err != nil {
+			t.Fatalf("EncodeRequest: %v", err)
+		}
+		messages := messagesOf(t, decodeObj(t, data))
+		if len(messages) != 3 {
+			t.Fatalf("len(messages) = %d, want 3", len(messages))
+		}
+		blocks := blocksOf(t, messages[2])
+		if len(blocks) != 2 || asString(t, blocks[0]["type"]) != "tool_result" || asString(t, blocks[1]["type"]) != "text" {
+			t.Fatalf("final user blocks = %v, want tool_result then runtime text", blocks)
+		}
+		contentBlocks := asObjs(t, blocks[0]["content"])
+		if len(contentBlocks) != 1 || asString(t, contentBlocks[0]["text"]) != "one" {
+			t.Fatalf("tool_result content = %v, want only the tool's result", contentBlocks)
+		}
+		if got := asString(t, blocks[1]["text"]); got != "runtime context" {
+			t.Fatalf("runtime text = %q, want runtime context", got)
+		}
+	})
+
+	t.Run("ordinary user content before a tool result fails locally", func(t *testing.T) {
+		t.Parallel()
+		_, err := anthropicapi.EncodeRequest(inference.Request{
+			Model: m,
+			Messages: content.AgenticMessages{
+				userMsg(textBlock("ordinary user content")),
+				toolResultMsg("toolu_1", false, textBlock("result")),
+			},
+		}, false)
+		if err == nil {
+			t.Fatal("EncodeRequest accepted text before tool_result in one user turn")
+		}
+	})
+}
+
 // --- TestEncodeRequest_Tools ----------------------------------------------
 
 func TestEncodeRequest_Tools(t *testing.T) {
@@ -305,12 +408,13 @@ func TestEncodeRequest_StructuredOutput(t *testing.T) {
 
 	m := structuredModel(true)
 	m.Caps.Thinking = true
+	m.Caps.ThinkingDialect = model.ThinkingDialectAdaptive
 	m.Sampling.Effort = model.EffortHigh
 	req := inference.Request{
 		Model:      m,
 		Messages:   content.AgenticMessages{userMsg(textBlock("hi"))},
 		Output:     structuredOutput(),
-		ToolChoice: inference.ToolChoiceRequired,
+		ToolChoice: inference.ToolRequired(),
 		Tools: []inference.Tool{{
 			Name:        "lookup",
 			Description: "Look something up",
@@ -450,6 +554,39 @@ func TestEncodeRequest_ToolChoiceAutoIsOmitted(t *testing.T) {
 	}
 }
 
+// TestEncodeRequest_ToolChoiceNamedTool pins the named tool-choice variant:
+// Anthropic's ToolChoiceTool is `{"type":"tool","name":...}` with both
+// properties required and additionalProperties:false, so the object carries
+// exactly those two keys.
+func TestEncodeRequest_ToolChoiceNamedTool(t *testing.T) {
+	t.Parallel()
+
+	m := structuredModel(false)
+	m.Caps.Tools = true
+	got, err := anthropicapi.EncodeRequest(inference.Request{
+		Model:    m,
+		Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
+		Tools: []inference.Tool{
+			{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: inference.ToolNamed("search"),
+	}, false)
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	toolChoice := decodeObj(t, decodeObj(t, got)["tool_choice"])
+	if len(toolChoice) != 2 {
+		t.Errorf("tool_choice fields = %v, want only type and name", toolChoice)
+	}
+	if choiceType := asString(t, toolChoice["type"]); choiceType != "tool" {
+		t.Errorf("tool_choice.type = %q, want tool", choiceType)
+	}
+	if name := asString(t, toolChoice["name"]); name != "search" {
+		t.Errorf("tool_choice.name = %q, want search", name)
+	}
+}
+
 // --- TestEncodeRequest_Images ---------------------------------------------
 
 func TestEncodeRequest_Images(t *testing.T) {
@@ -540,6 +677,10 @@ func TestEncodeRequest_EffortThinking(t *testing.T) {
 			t.Parallel()
 			m := baseModel()
 			m.Caps.Thinking = tc.thinkingCap
+			// This table measures the effort→wire mapping of ONE dialect; which
+			// dialect a model gets, and what an undeclared one does, is
+			// encode_thinking_dialect_test.go's subject.
+			m.Caps.ThinkingDialect = model.ThinkingDialectAdaptive
 			m.Sampling = model.Sampling{Effort: tc.effort}
 			req := inference.Request{Model: m, Messages: content.AgenticMessages{userMsg(textBlock("hi"))}}
 			data, err := anthropicapi.EncodeRequest(req, false)
@@ -620,6 +761,7 @@ func TestEncodeRequest_ThinkingOmitsSampling(t *testing.T) {
 			t.Parallel()
 			m := baseModel()
 			m.Caps.Thinking = tc.thinkingCap
+			m.Caps.ThinkingDialect = model.ThinkingDialectAdaptive
 			// Both temperature and top_p are set on every case so absence is the
 			// codec's reconciliation, not a missing input.
 			m.Sampling = model.Sampling{Temperature: f64ptr(0.7), TopP: f64ptr(0.9), Effort: tc.effort}
@@ -789,7 +931,7 @@ func TestEncodeRequest_Blocks(t *testing.T) {
 	}{
 		{
 			name:     "assistant text + thinking + tool_use",
-			conv:     aiMsg(&content.TextBlock{Text: "sure"}, &content.ThinkingBlock{Thinking: "reason", Signature: "sig"}, &content.ToolUseBlock{ID: "toolu_1", Name: "run", Input: json.RawMessage(`{"x":1}`)}),
+			conv:     aiMsg(&content.TextBlock{Text: "sure"}, content.NewSignedThinkingBlock("reason", "sig", signatureFormatAnthropic, nil, ""), &content.ToolUseBlock{ID: "toolu_1", Name: "run", Input: json.RawMessage(`{"x":1}`)}),
 			wantRole: "assistant",
 			assert: func(t *testing.T, blocks []map[string]json.RawMessage) {
 				if len(blocks) != 3 {
@@ -882,6 +1024,13 @@ func TestEncodeRequest_Blocks(t *testing.T) {
 
 // --- TestEncodeRequest_Errors ---------------------------------------------
 
+// TestEncodeRequest_Errors covers the generic unsupported-block fallback. Audio
+// and document blocks no longer arrive here: document is a real
+// RequestDocumentBlock and audio has a typed error naming the format's own
+// limitation, both exercised in encode_document_test.go. A bare
+// ToolResultBlock nested inside a message keeps the fallback itself covered —
+// the neutral vocabulary allows it, and the dialect carries tool results as
+// their own turn rather than as a nested block.
 func TestEncodeRequest_Errors(t *testing.T) {
 	t.Parallel()
 
@@ -891,13 +1040,11 @@ func TestEncodeRequest_Errors(t *testing.T) {
 		wantBlock bool
 	}{
 		{
-			name:      "audio block is unsupported",
-			messages:  content.AgenticMessages{userMsg(&content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}})},
-			wantBlock: true,
-		},
-		{
-			name:      "document block is unsupported",
-			messages:  content.AgenticMessages{userMsg(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Data: []byte{1}})},
+			name: "nested tool-result block is unsupported",
+			messages: content.AgenticMessages{userMsg(&content.ToolResultBlock{
+				ToolUseID: "toolu_nested",
+				Content:   []content.Block{&content.TextBlock{Text: "result"}},
+			})},
 			wantBlock: true,
 		},
 	}
@@ -915,5 +1062,30 @@ func TestEncodeRequest_Errors(t *testing.T) {
 				t.Errorf("error = %v, want *UnsupportedBlockError", err)
 			}
 		})
+	}
+}
+
+// TestEncodeRequest_RefusalBlockFailsClosed pins the fail-closed encoding of a
+// content.RefusalBlock. Anthropic reports a refusal as RESPONSE metadata —
+// stop_reason "refusal" with a RefusalStopDetails object — and its request
+// document declares no refusal content block of any kind. There is therefore
+// nothing to route a replayed refusal to, and inventing one (text, or a
+// system note) would show the model its own decline as something it said.
+func TestEncodeRequest_RefusalBlockFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	_, err := anthropicapi.EncodeRequest(inference.Request{
+		Model:    baseModel(),
+		Messages: content.AgenticMessages{aiMsg(&content.RefusalBlock{Text: "I cannot help with that."})},
+	}, false)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	var refusal *anthropicapi.UnsupportedRefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error = %v (%T), want *UnsupportedRefusalError", err, err)
+	}
+	if !strings.Contains(err.Error(), "refusal") {
+		t.Errorf("error = %q, want it to name the refusal limitation", err)
 	}
 }

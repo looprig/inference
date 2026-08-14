@@ -1,0 +1,30 @@
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "I will look that up."
+        },
+        {
+          "toolUse": {
+            "toolUseId": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+            "name": "top_song",
+            "input": {
+              "sign": "WZPZ"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "stopReason": "tool_use",
+  "usage": {
+    "inputTokens": 375,
+    "outputTokens": 36,
+    "totalTokens": 411
+  },
+  "metrics": {
+    "latencyMs": 1176
+  }
+}

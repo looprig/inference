@@ -218,8 +218,8 @@ func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 	if len(decoded.Request.Tools) != 1 || decoded.Request.Tools[0].Name != "get_weather" {
 		t.Errorf("Tools = %#v", decoded.Request.Tools)
 	}
-	if decoded.Request.ToolChoice != inference.ToolChoiceRequired {
-		t.Errorf("ToolChoice = %v, want ToolChoiceRequired", decoded.Request.ToolChoice)
+	if decoded.Request.ToolChoice != inference.ToolRequired() {
+		t.Errorf("ToolChoice = %v, want ToolRequired()", decoded.Request.ToolChoice)
 	}
 }
 
@@ -294,11 +294,41 @@ func TestServerDecode_RejectsToolChoiceNone(t *testing.T) {
 	}
 }
 
-func TestServerDecode_RejectsToolChoiceObjectForm(t *testing.T) {
+// TestServerDecode_NamedToolChoice covers ToolChoiceFunction, which the
+// neutral vocabulary represents as a named choice carrying the tool name.
+func TestServerDecode_NamedToolChoice(t *testing.T) {
 	t.Parallel()
 	c, req := decodeReq(t, `{"model":"gpt-test","tool_choice":{"type":"function","name":"f"},"input":[]}`)
-	if _, err := c.DecodeRequest(req); err == nil {
-		t.Fatal("DecodeRequest() error = nil, want rejection of named tool_choice object")
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	if decoded.Request.ToolChoice != inference.ToolNamed("f") {
+		t.Errorf("ToolChoice = %v, want ToolNamed(f)", decoded.Request.ToolChoice)
+	}
+}
+
+// TestServerDecode_RejectsUnrepresentableToolChoiceObjects keeps the object
+// members outside the neutral vocabulary failing closed. ToolChoiceParam has
+// nine members; only ToolChoiceFunction maps, and a hosted-tool or custom-tool
+// choice must not degrade into a function choice.
+func TestServerDecode_RejectsUnrepresentableToolChoiceObjects(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"hosted tool":             `{"type":"web_search_preview"}`,
+		"custom tool":             `{"type":"custom","name":"f"}`,
+		"allowed tools":           `{"type":"allowed_tools","mode":"required","tools":[]}`,
+		"mcp tool":                `{"type":"mcp","server_label":"s","name":"f"}`,
+		"function without a name": `{"type":"function"}`,
+	}
+	for name, toolChoice := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, `{"model":"gpt-test","tool_choice":`+toolChoice+`,"input":[]}`)
+			if _, err := c.DecodeRequest(req); err == nil {
+				t.Fatalf("DecodeRequest() error = nil, want rejection of %s", toolChoice)
+			}
+		})
 	}
 }
 
@@ -345,5 +375,60 @@ func TestServerDecode_StreamFlag(t *testing.T) {
 	}
 	if !decoded.Streaming {
 		t.Error("Streaming = false, want true")
+	}
+}
+
+// TestServerDecode_EasyInputMessageStringContent covers the EasyInputMessage
+// form on ingress: required members are only ["role","content"], `type` is
+// optional, and `content` may be a bare string. This is the shape this codec's
+// own encoder emits for replayed assistant history, and the shape a real
+// Responses client is free to send for any role — rejecting it as an
+// "unsupported_item_type" (empty type) or a non-array content would break both.
+func TestServerDecode_EasyInputMessageStringContent(t *testing.T) {
+	t.Parallel()
+	c, req := decodeReq(t, `{
+		"model": "gpt-test",
+		"input": [
+			{"role":"user","content":"what is 2+2?"},
+			{"role":"assistant","content":"4"}
+		]
+	}`)
+	decoded, err := c.DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	msgs := decoded.Request.Messages
+	if len(msgs) != 2 {
+		t.Fatalf("Messages len = %d, want 2 (%#v)", len(msgs), msgs)
+	}
+	um, ok := msgs[0].(*content.UserMessage)
+	if !ok {
+		t.Fatalf("Messages[0] = %T, want *content.UserMessage", msgs[0])
+	}
+	if tb, ok := um.Blocks[0].(*content.TextBlock); !ok || tb.Text != "what is 2+2?" {
+		t.Errorf("Messages[0].Blocks[0] = %#v", um.Blocks[0])
+	}
+	am, ok := msgs[1].(*content.AIMessage)
+	if !ok {
+		t.Fatalf("Messages[1] = %T, want *content.AIMessage", msgs[1])
+	}
+	if tb, ok := am.Blocks[0].(*content.TextBlock); !ok || tb.Text != "4" {
+		t.Errorf("Messages[1].Blocks[0] = %#v", am.Blocks[0])
+	}
+}
+
+// TestServerDecode_ItemStatusAccepted covers the `status` member the API
+// populates on returned items. The strict decode would otherwise reject a
+// client replaying items exactly as it received them.
+func TestServerDecode_ItemStatusAccepted(t *testing.T) {
+	t.Parallel()
+	c, req := decodeReq(t, `{
+		"model": "gpt-test",
+		"input": [
+			{"type":"message","role":"user","status":"completed","content":[{"type":"input_text","text":"hi"}]}
+		]
+	}`)
+	if _, err := c.DecodeRequest(req); err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
 	}
 }

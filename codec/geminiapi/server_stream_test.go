@@ -97,6 +97,50 @@ func TestServerStream_ThinkingChunk(t *testing.T) {
 	}
 }
 
+func TestServerStream_DecodedThoughtSignatureRoundTripsOnFunctionCall(t *testing.T) {
+	t.Parallel()
+	chunks, err := (geminiapi.Codec{}).DecodeEvent([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"thoughtSignature":"opaque-sig","functionCall":{"id":"call_1","name":"tool","args":{}}}]}}]}`))
+	if err != nil {
+		t.Fatalf("DecodeEvent: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("decoded chunks = %#v, want one positional ToolUseChunk", chunks)
+	}
+	tool, ok := chunks[0].(*content.ToolUseChunk)
+	if !ok || string(tool.ProviderState) != `"opaque-sig"` || tool.ProviderStateFormat != "gemini" {
+		t.Fatalf("decoded tool chunk = %#v", chunks[0])
+	}
+	rec := httptest.NewRecorder()
+	enc, _ := (geminiapi.Codec{}).OpenStream(rec)
+	for _, chunk := range chunks {
+		if err := enc.WriteChunk(chunk); err != nil {
+			t.Fatalf("WriteChunk: %v", err)
+		}
+	}
+	_ = enc.Finish(stream.StreamResult{})
+	frames := dataFrames(t, rec.Body.Bytes())
+	if len(frames) < 2 {
+		t.Fatalf("frames = %v", frames)
+	}
+	var first map[string]any
+	_ = json.Unmarshal([]byte(frames[0]), &first)
+	part := first["candidates"].([]any)[0].(map[string]any)["content"].(map[string]any)["parts"].([]any)[0].(map[string]any)
+	if part["thoughtSignature"] != "opaque-sig" || part["functionCall"] == nil {
+		t.Fatalf("function-call part lost thoughtSignature: %#v", part)
+	}
+}
+
+func TestServerStream_ForeignProviderStateIsNotSerialized(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	enc, _ := (geminiapi.Codec{}).OpenStream(rec)
+	_ = enc.WriteChunk(&content.ThinkingChunk{ProviderState: json.RawMessage(`"foreign"`), ProviderStateFormat: "openai-responses"})
+	_ = enc.Finish(stream.StreamResult{})
+	if strings.Contains(rec.Body.String(), "foreign") || strings.Contains(rec.Body.String(), "thoughtSignature") {
+		t.Fatalf("foreign state crossed formats: %s", rec.Body.String())
+	}
+}
+
 func TestServerStream_ToolUseChunkWritesCompleteArgsPerChunk(t *testing.T) {
 	t.Parallel()
 	c := geminiapi.Codec{}

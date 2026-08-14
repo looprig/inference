@@ -2,6 +2,7 @@ package bedrockconverse
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 
@@ -34,6 +35,14 @@ func (Codec) DecodeStream(resp *http.Response) (*stream.StreamReader[content.Chu
 	return stream.FramesToChunksWithResult(frames, collector.mapFrame, collector.result), nil
 }
 
+// streamResultCollector tracks the per-message state ConverseStream requires:
+// which content blocks are open, which have closed, and the terminal metadata.
+//
+// INDEX SEMANTICS. `contentBlockIndex` is AWS's position in the message's
+// SINGLE `content` array — one space shared by text, reasoningContent and
+// toolUse blocks — so it is carried verbatim onto every chunk that has one.
+// A gap in the reasoning accumulator's indexes is a text or tool-use block, not
+// a lost reasoning block.
 type streamResultCollector struct {
 	started     bool
 	stopped     bool
@@ -176,13 +185,30 @@ func (c *streamResultCollector) contentBlockDelta(payload []byte) ([]content.Chu
 		if reasoningVariants != 1 {
 			return nil, &StreamDecodeError{Reason: "reasoning content delta must contain exactly one recognized variant"}
 		}
+		// Every reasoning delta carries the event's own contentBlockIndex, the
+		// same index the tool-use deltas below use. A Converse message may hold
+		// SEVERAL reasoningContent blocks, each sealed by its own signature, and
+		// the next request must replay them block-for-block; dropping the index
+		// concatenated their text and rebound the last signature to all of it.
 		if len(reasoning.RedactedContent) > 0 {
-			return nil, &StreamDecodeError{Reason: "redacted reasoning content has no shared representation"}
+			encoded, _ := json.Marshal(base64.StdEncoding.EncodeToString(reasoning.RedactedContent))
+			return []content.Chunk{&content.ThinkingChunk{
+				Index:               index,
+				ProviderState:       encoded,
+				ProviderStateFormat: providerStateFormatBedrockRedacted,
+			}}, nil
 		}
 		if reasoning.Text != nil {
-			return []content.Chunk{&content.ThinkingChunk{Thinking: *reasoning.Text}}, nil
+			return []content.Chunk{&content.ThinkingChunk{Index: index, Thinking: *reasoning.Text}}, nil
 		}
-		return []content.Chunk{&content.ThinkingChunk{Signature: *reasoning.Signature}}, nil
+		// Labelled exactly as the non-streaming decoder labels it: streaming
+		// must reconstruct the same continuation state, and provenance is part
+		// of it.
+		return []content.Chunk{&content.ThinkingChunk{
+			Index:           index,
+			Signature:       *reasoning.Signature,
+			SignatureFormat: signatureFormatFor(*reasoning.Signature),
+		}}, nil
 	}
 	if event.Delta.ToolUse != nil {
 		if event.Delta.ToolUse.Input == "" {

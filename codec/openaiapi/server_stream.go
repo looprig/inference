@@ -93,6 +93,15 @@ func (e *serverStreamEncoder) WriteChunk(chunk content.Chunk) error {
 			delta.ReasoningContent = c.Thinking
 			meaningful = true
 		}
+	case *content.RefusalChunk:
+		// ChatCompletionStreamResponseDelta declares its own `refusal`
+		// member, so a proxied refusal keeps its channel instead of being
+		// re-served as assistant text (or killing the stream as an
+		// unsupported chunk).
+		if c.Text != "" {
+			delta.Refusal = c.Text
+			meaningful = true
+		}
 	case *content.ToolUseChunk:
 		td := encodeSSEToolCallDelta{Index: c.Index}
 		if !e.seenToolIndex[c.Index] {
@@ -257,6 +266,8 @@ func unsupportedChunkTypeName(c content.Chunk) string {
 		return "TextChunk"
 	case *content.ThinkingChunk:
 		return "ThinkingChunk"
+	case *content.RefusalChunk:
+		return "RefusalChunk"
 	case *content.ToolUseChunk:
 		return "ToolUseChunk"
 	default:
@@ -284,6 +295,7 @@ type encodeSSEDelta struct {
 	Role             string                   `json:"role,omitempty"`
 	Content          string                   `json:"content,omitempty"`
 	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	Refusal          string                   `json:"refusal,omitempty"`
 	ToolCalls        []encodeSSEToolCallDelta `json:"tool_calls,omitempty"`
 }
 

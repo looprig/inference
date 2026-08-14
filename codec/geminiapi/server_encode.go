@@ -95,7 +95,9 @@ func buildGenerateContentResponse(resp *inference.Response) (encodeGenerateConte
 // is populated straight from ProviderState when present (e.g. carried
 // through from a real Gemini target via the now-fixed client-decode
 // direction, decode.go's buildBlocks) and omitted (via the wire field's
-// omitempty) otherwise.
+// omitempty) otherwise. A tool call's id passes through wireToolCallID so the
+// synthetic identity the decode direction invents for an id-less call is not
+// handed back to a native client as a model-issued one.
 func buildResponseParts(blocks []content.Block) ([]geminiPart, error) {
 	parts := make([]geminiPart, 0, len(blocks))
 	for _, b := range blocks {
@@ -113,7 +115,15 @@ func buildResponseParts(blocks []content.Block) ([]geminiPart, error) {
 		case *content.TextBlock:
 			parts = append(parts, geminiPart{Text: b.Text})
 		case *content.ToolUseBlock:
-			parts = append(parts, geminiPart{FunctionCall: &functionCall{ID: b.ID, Name: b.Name, Args: argsJSON(b.Input)}})
+			var sig string
+			if b.ReplayableAs(providerStateFormatGemini) {
+				s, err := providerStateToThoughtSignature(b.ProviderState)
+				if err != nil {
+					return nil, err
+				}
+				sig = s
+			}
+			parts = append(parts, geminiPart{ThoughtSignature: sig, FunctionCall: &functionCall{ID: wireToolCallID(b.ID), Name: b.Name, Args: argsJSON(b.Input)}})
 		default:
 			return nil, &UnsupportedBlockError{Block: fmt.Sprintf("%T", b)}
 		}

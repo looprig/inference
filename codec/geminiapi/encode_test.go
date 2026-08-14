@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -430,13 +431,22 @@ func TestEncodeRequest_ImageInlineData(t *testing.T) {
 
 // --- TestEncodeRequest_ImageURLFileData ---
 
-// A URL-sourced image (no inline bytes) degrades to a fileData part.
+// A URL-sourced image (no inline bytes) degrades to a fileData part — but only
+// for a URI fileUri actually accepts.
+//
+// This test used to assert that "https://example.com/x.jpg" was written into
+// fileUri verbatim, which was asserting the defect: Gemini does not fetch an
+// arbitrary web URL, so that request went out, the image never reached the
+// model, and the caller was told nothing. The URI class is enforced in
+// media.go (fileURIReason) and its rejections are covered in
+// encode_validation_test.go; what is pinned here is the accepted path.
 func TestEncodeRequest_ImageURLFileData(t *testing.T) {
 	t.Parallel()
 
+	const uploaded = "https://generativelanguage.googleapis.com/v1beta/files/abc123"
 	req := inference.Request{
 		Model:    model.Model{Name: "m", Caps: model.Capabilities{AcceptsImages: true}},
-		Messages: content.AgenticMessages{userMsg(imageURLBlock("https://example.com/x.jpg"))},
+		Messages: content.AgenticMessages{userMsg(imageURLBlock(uploaded))},
 	}
 	got, err := geminiapi.EncodeRequest(req)
 	if err != nil {
@@ -452,8 +462,8 @@ func TestEncodeRequest_ImageURLFileData(t *testing.T) {
 	if err := json.Unmarshal(fdRaw, &fd); err != nil {
 		t.Fatalf("unmarshal fileData: %v", err)
 	}
-	if uri := strField(t, fd, "fileUri"); uri != "https://example.com/x.jpg" {
-		t.Errorf("fileData.fileUri = %q, want the image URL", uri)
+	if uri := strField(t, fd, "fileUri"); uri != uploaded {
+		t.Errorf("fileData.fileUri = %q, want the Files API URI %q", uri, uploaded)
 	}
 }
 
@@ -714,13 +724,19 @@ func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 
 // --- TestEncodeRequest_UnsupportedBlock ---
 
-// A user or model block the Gemini dialect does not model (audio, document) must
-// fail secure with a *geminiapi.UnsupportedBlockError rather than being silently
+// A block the Gemini dialect does not model in the position it appears must fail
+// secure with a *geminiapi.UnsupportedBlockError rather than being silently
 // dropped — the model must never receive less than the caller sent. This mirrors
 // the sibling anthropicapi codec. A ThinkingBlock on an assistant turn remains an
 // intentional (documented) skip, not an error, UNLESS it carries a thoughtSignature
 // (ProviderState) — covered by TestEncodeRequest_ThinkingWithoutSignatureIsDropped
 // and TestEncodeRequest_ThinkingWithSignatureRoundTrips.
+//
+// Audio and document blocks on a USER turn are no longer here: they are modeled
+// now, through Part's inlineData/text members, and are covered by
+// TestEncodeRequest_DocumentAndAudioParts (encode_media_test.go). A media block
+// on a MODEL turn stays unsupported — a Gemini model turn replays what the model
+// itself produced, which this dialect's decode direction never yields as media.
 func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 	t.Parallel()
 
@@ -729,16 +745,20 @@ func TestEncodeRequest_UnsupportedBlock(t *testing.T) {
 		msgs content.AgenticMessages
 	}{
 		{
-			name: "audio block in a user turn is unsupported",
-			msgs: content.AgenticMessages{userMsg(&content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}})},
+			name: "thinking block in a user turn is unsupported",
+			msgs: content.AgenticMessages{userMsg(&content.ThinkingBlock{Thinking: "not a user's to send"})},
 		},
 		{
-			name: "document block in a user turn is unsupported",
-			msgs: content.AgenticMessages{userMsg(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Data: []byte{1}})},
+			name: "nested tool result block in a user turn is unsupported",
+			msgs: content.AgenticMessages{userMsg(&content.ToolResultBlock{ToolUseID: "call_1"})},
 		},
 		{
 			name: "audio block in an assistant turn is unsupported",
 			msgs: content.AgenticMessages{aiMsg(&content.AudioBlock{MediaType: content.MediaTypeAudioMPEG, Data: []byte{1}})},
+		},
+		{
+			name: "document block in an assistant turn is unsupported",
+			msgs: content.AgenticMessages{aiMsg(&content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Data: []byte{1}})},
 		},
 	}
 
@@ -908,9 +928,14 @@ func TestEncodeRequest_StructuredOutput(t *testing.T) {
 	if got := wire.GenerationConfig.ResponseMIMEType; got != "application/json" {
 		t.Errorf("ResponseMIMEType = %q, want application/json", got)
 	}
-	wantProjected := json.RawMessage(`{"type":"object","description":"root","properties":{"answer":{"type":"string","enum":["yes","no"]},"nested":{"type":"object","properties":{"values":{"type":"array","items":{"type":"integer"}}},"required":["values"]}},"required":["answer","nested"]}`)
-	if string(wire.GenerationConfig.ResponseJSONSchema) != string(wantProjected) {
-		t.Errorf("ResponseJSONSchema = %s, want exact projection %s", wire.GenerationConfig.ResponseJSONSchema, wantProjected)
+	// generationConfig.responseSchema (the Gemini Schema dialect) is deprecated
+	// in the discovery document, so structured output always uses the untyped
+	// responseJsonSchema — which means the caller's schema goes out verbatim,
+	// additionalProperties:false and all. Dropping that keyword was a silent
+	// loss of the only closedness signal a strict output schema carries.
+	wantWire := append(json.RawMessage(nil), wantOriginal...)
+	if string(wire.GenerationConfig.ResponseJSONSchema) != string(wantWire) {
+		t.Errorf("ResponseJSONSchema = %s, want the caller's schema verbatim %s", wire.GenerationConfig.ResponseJSONSchema, wantWire)
 	}
 	if string(output.Schema) != string(wantOriginal) {
 		t.Fatalf("BuildGenerateContentRequest() mutated caller schema to %s", output.Schema)
@@ -932,11 +957,16 @@ func TestEncodeRequest_StructuredOutput(t *testing.T) {
 	if got := strField(t, config, "responseMimeType"); got != "application/json" {
 		t.Errorf("responseMimeType = %q, want application/json", got)
 	}
-	if string(config["responseJsonSchema"]) != string(wantProjected) {
-		t.Errorf("responseJsonSchema = %s, want %s", config["responseJsonSchema"], wantProjected)
+	if string(config["responseJsonSchema"]) != string(wantWire) {
+		t.Errorf("responseJsonSchema = %s, want %s", config["responseJsonSchema"], wantWire)
 	}
 }
 
+// TestEncodeRequest_StructuredOutputWithToolsPreservesOrdinarySchema pins that
+// an ordinary tool's schema reaches the wire unweakened when structured output
+// is also in play. The schema carries additionalProperties, which Gemini's
+// Schema dialect cannot spell, so it must travel verbatim in the declaration's
+// parametersJsonSchema rather than being projected lossily into parameters.
 func TestEncodeRequest_StructuredOutputWithToolsPreservesOrdinarySchema(t *testing.T) {
 	t.Parallel()
 
@@ -958,25 +988,46 @@ func TestEncodeRequest_StructuredOutputWithToolsPreservesOrdinarySchema(t *testi
 		t.Fatalf("EncodeRequest() error = %v", err)
 	}
 	raw := mustDecode(t, encoded)
-	var tools []struct {
-		FunctionDeclarations []struct {
-			Name       string          `json:"name"`
-			Parameters json.RawMessage `json:"parameters"`
-		} `json:"functionDeclarations"`
+	declarations := decodeFunctionDeclarations(t, raw["tools"])
+	if len(declarations) != 1 {
+		t.Fatalf("declarations = %+v, want one", declarations)
 	}
-	if err := json.Unmarshal(raw["tools"], &tools); err != nil {
-		t.Fatalf("unmarshal tools: %v", err)
+	declaration := declarations[0]
+	if declaration.Name != "search" {
+		t.Errorf("ordinary tool = %q, want search", declaration.Name)
 	}
-	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 1 {
-		t.Fatalf("tools = %+v, want one declaration", tools)
+	if len(declaration.Parameters) != 0 {
+		t.Errorf("parameters = %s, want the schema in parametersJsonSchema instead", declaration.Parameters)
 	}
-	declaration := tools[0].FunctionDeclarations[0]
-	if declaration.Name != "search" || string(declaration.Parameters) != string(ordinarySchema) {
-		t.Errorf("ordinary tool = %q %s, want unchanged %q %s", declaration.Name, declaration.Parameters, "search", ordinarySchema)
+	if string(declaration.ParametersJSONSchema) != string(ordinarySchema) {
+		t.Errorf("parametersJsonSchema = %s, want unchanged %s", declaration.ParametersJSONSchema, ordinarySchema)
 	}
 }
 
-func TestEncodeRequest_TerminalToolProjectionAndRequiredChoice(t *testing.T) {
+// wireFunctionDeclaration is the encoded declaration shape these tests inspect.
+// Gemini's two parameter fields are mutually exclusive, so every case asserts
+// on both: the one that must carry the schema and the one that must stay empty.
+type wireFunctionDeclaration struct {
+	Name                 string          `json:"name"`
+	Parameters           json.RawMessage `json:"parameters"`
+	ParametersJSONSchema json.RawMessage `json:"parametersJsonSchema"`
+}
+
+func decodeFunctionDeclarations(t *testing.T, rawTools json.RawMessage) []wireFunctionDeclaration {
+	t.Helper()
+	var tools []struct {
+		FunctionDeclarations []wireFunctionDeclaration `json:"functionDeclarations"`
+	}
+	if err := json.Unmarshal(rawTools, &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v, want a single tool entry", tools)
+	}
+	return tools[0].FunctionDeclarations
+}
+
+func TestEncodeRequest_TerminalToolSchemaAndRequiredChoice(t *testing.T) {
 	t.Parallel()
 
 	terminalSchema := json.RawMessage(`{"type":"object","properties":{"result":{"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}}},"required":["items"],"additionalProperties":false}},"required":["result"],"additionalProperties":false}`)
@@ -987,7 +1038,7 @@ func TestEncodeRequest_TerminalToolProjectionAndRequiredChoice(t *testing.T) {
 			{Name: "search", Schema: ordinarySchema},
 			{Name: inference.StructuredOutputToolName, Description: "final", Schema: terminalSchema},
 		},
-		ToolChoice: inference.ToolChoiceRequired,
+		ToolChoice: inference.ToolRequired(),
 	}
 
 	encoded, err := geminiapi.EncodeRequest(req)
@@ -995,24 +1046,19 @@ func TestEncodeRequest_TerminalToolProjectionAndRequiredChoice(t *testing.T) {
 		t.Fatalf("EncodeRequest() error = %v", err)
 	}
 	raw := mustDecode(t, encoded)
-	var tools []struct {
-		FunctionDeclarations []struct {
-			Name       string          `json:"name"`
-			Parameters json.RawMessage `json:"parameters"`
-		} `json:"functionDeclarations"`
+	declarations := decodeFunctionDeclarations(t, raw["tools"])
+	if len(declarations) != 2 {
+		t.Fatalf("declarations = %+v, want two", declarations)
 	}
-	if err := json.Unmarshal(raw["tools"], &tools); err != nil {
-		t.Fatalf("unmarshal tools: %v", err)
-	}
-	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 2 {
-		t.Fatalf("tools = %+v, want two declarations", tools)
-	}
-	if got := tools[0].FunctionDeclarations[0].Parameters; string(got) != string(ordinarySchema) {
-		t.Errorf("ordinary schema = %s, want unchanged %s", got, ordinarySchema)
-	}
-	wantTerminal := `{"type":"object","properties":{"result":{"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}}},"required":["items"]}},"required":["result"]}`
-	if got := tools[0].FunctionDeclarations[1].Parameters; string(got) != wantTerminal {
-		t.Errorf("terminal schema = %s, want %s", got, wantTerminal)
+	// Both schemas carry additionalProperties — the terminal one is required to
+	// by ValidateOutputSchema — so both travel verbatim in parametersJsonSchema.
+	for i, want := range []json.RawMessage{ordinarySchema, terminalSchema} {
+		if got := declarations[i].Parameters; len(got) != 0 {
+			t.Errorf("declaration[%d].parameters = %s, want empty", i, got)
+		}
+		if got := declarations[i].ParametersJSONSchema; string(got) != string(want) {
+			t.Errorf("declaration[%d].parametersJsonSchema = %s, want unchanged %s", i, got, want)
+		}
 	}
 	var toolConfig struct {
 		FunctionCallingConfig struct {
@@ -1028,6 +1074,162 @@ func TestEncodeRequest_TerminalToolProjectionAndRequiredChoice(t *testing.T) {
 	if string(req.Tools[1].Schema) != string(terminalSchema) {
 		t.Error("terminal projection mutated caller schema")
 	}
+}
+
+// TestEncodeRequest_ToolSchemaDialectSelection pins the rule that decides which
+// of FunctionDeclaration's two mutually exclusive parameter fields a tool's
+// schema lands in.
+//
+// `parameters` is Gemini's own Schema: an OpenAPI 3.0 subset with an UPPERCASE
+// type enum and no member for additionalProperties, $ref, $defs, oneOf, const
+// or prefixItems, and whose enum is an array of strings. A schema that fits it
+// is projected there, because it is the field every model and API version has
+// always accepted and the only one Gemini's request schema can type-check.
+// Anything else moves WHOLE and unaltered to `parametersJsonSchema` — the
+// projector never half-translates, because a silently dropped required/enum is
+// worse than a rejected request.
+func TestEncodeRequest_ToolSchemaDialectSelection(t *testing.T) {
+	t.Parallel()
+
+	deep := deeplyNestedSchema(80)
+
+	cases := []struct {
+		name string
+		// schema is the caller's tool schema.
+		schema json.RawMessage
+		// wantParameters is the expected `parameters` value; empty means the
+		// schema must travel verbatim in parametersJsonSchema instead.
+		wantParameters string
+	}{
+		{
+			name:           "object with typed properties and required",
+			schema:         json.RawMessage(`{"type":"object","properties":{"city":{"type":"string","description":"City name"}},"required":["city"]}`),
+			wantParameters: `{"properties":{"city":{"description":"City name","type":"STRING"}},"required":["city"],"type":"OBJECT"}`,
+		},
+		{
+			name:           "arrays and scalars are projected recursively",
+			schema:         json.RawMessage(`{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}},"count":{"type":"integer"},"ratio":{"type":"number"},"on":{"type":"boolean"}}}`),
+			wantParameters: `{"properties":{"count":{"type":"INTEGER"},"on":{"type":"BOOLEAN"},"ratio":{"type":"NUMBER"},"tags":{"items":{"type":"STRING"},"type":"ARRAY"}},"type":"OBJECT"}`,
+		},
+		{
+			name:           "string enum, format, pattern and bounds are dialect members",
+			schema:         json.RawMessage(`{"type":"object","properties":{"unit":{"type":"string","enum":["c","f"],"format":"enum","pattern":"^[cf]$"},"n":{"type":"integer","minimum":1,"maximum":9}}}`),
+			wantParameters: `{"properties":{"n":{"maximum":9,"minimum":1,"type":"INTEGER"},"unit":{"enum":["c","f"],"format":"enum","pattern":"^[cf]$","type":"STRING"}},"type":"OBJECT"}`,
+		},
+		{
+			name:           "anyOf, title, nullable and propertyOrdering are dialect members",
+			schema:         json.RawMessage(`{"type":"object","title":"T","propertyOrdering":["v"],"properties":{"v":{"nullable":true,"anyOf":[{"type":"string"},{"type":"integer"}]}}}`),
+			wantParameters: `{"properties":{"v":{"anyOf":[{"type":"STRING"},{"type":"INTEGER"}],"nullable":true}},"propertyOrdering":["v"],"title":"T","type":"OBJECT"}`,
+		},
+		{
+			name:   "additionalProperties has no Schema member",
+			schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"additionalProperties":false}`),
+		},
+		{
+			name:   "$ref and $defs have no Schema member",
+			schema: json.RawMessage(`{"type":"object","properties":{"node":{"$ref":"#/$defs/node"}},"$defs":{"node":{"type":"string"}}}`),
+		},
+		{
+			name:   "oneOf has no Schema member",
+			schema: json.RawMessage(`{"type":"object","properties":{"v":{"oneOf":[{"type":"string"},{"type":"integer"}]}}}`),
+		},
+		{
+			name:   "const has no Schema member",
+			schema: json.RawMessage(`{"type":"object","properties":{"kind":{"const":"weather"}}}`),
+		},
+		{
+			name:   "prefixItems has no Schema member",
+			schema: json.RawMessage(`{"type":"object","properties":{"pair":{"type":"array","prefixItems":[{"type":"string"},{"type":"integer"}]}}}`),
+		},
+		{
+			name:   "a non-string enum cannot be a Schema enum",
+			schema: json.RawMessage(`{"type":"object","properties":{"days":{"type":"integer","enum":[1,3,7]}}}`),
+		},
+		{
+			name:   "a union type has no single Type member",
+			schema: json.RawMessage(`{"type":"object","properties":{"v":{"type":["string","null"]}}}`),
+		},
+		{
+			// Gemini spells these int64 keywords as strings on the wire; the
+			// projector refuses rather than reformatting a caller's number.
+			name:   "int64-valued size keywords are spelled differently",
+			schema: json.RawMessage(`{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":1}}}`),
+		},
+		{
+			name:   "a null-valued keyword is not a Schema string",
+			schema: json.RawMessage(`{"type":"object","description":null}`),
+		},
+		{
+			name:   "a schema nested past the projector's depth bound",
+			schema: deep,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			encoded, err := geminiapi.EncodeRequest(inference.Request{
+				Model: model.Model{Name: "gemini-tools", Caps: model.Capabilities{Tools: true}},
+				Tools: []inference.Tool{{Name: "t", Schema: tc.schema}},
+			})
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			declarations := decodeFunctionDeclarations(t, mustDecode(t, encoded)["tools"])
+			if len(declarations) != 1 {
+				t.Fatalf("declarations = %+v, want one", declarations)
+			}
+			declaration := declarations[0]
+
+			if tc.wantParameters == "" {
+				if len(declaration.Parameters) != 0 {
+					t.Errorf("parameters = %s, want the schema in parametersJsonSchema instead", declaration.Parameters)
+				}
+				if got := string(declaration.ParametersJSONSchema); got != string(tc.schema) {
+					t.Errorf("parametersJsonSchema = %s, want the caller's schema verbatim %s", got, tc.schema)
+				}
+				return
+			}
+			if len(declaration.ParametersJSONSchema) != 0 {
+				t.Errorf("parametersJsonSchema = %s, want it unset; the two fields are mutually exclusive",
+					declaration.ParametersJSONSchema)
+			}
+			if got := string(declaration.Parameters); got != tc.wantParameters {
+				t.Errorf("parameters = %s, want %s", got, tc.wantParameters)
+			}
+		})
+	}
+}
+
+// TestEncodeRequest_ToolWithoutSchemaDeclaresNeitherField pins that a tool with
+// no arguments still declares neither parameter field, rather than an empty one.
+func TestEncodeRequest_ToolWithoutSchemaDeclaresNeitherField(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := geminiapi.EncodeRequest(inference.Request{
+		Model: model.Model{Name: "gemini-tools", Caps: model.Capabilities{Tools: true}},
+		Tools: []inference.Tool{{Name: "ping", Description: "no arguments"}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	declarations := decodeFunctionDeclarations(t, mustDecode(t, encoded)["tools"])
+	if len(declarations) != 1 {
+		t.Fatalf("declarations = %+v, want one", declarations)
+	}
+	if len(declarations[0].Parameters) != 0 || len(declarations[0].ParametersJSONSchema) != 0 {
+		t.Errorf("declaration = %+v, want neither parameter field set", declarations[0])
+	}
+}
+
+// deeplyNestedSchema builds an object schema nested depth levels deep.
+func deeplyNestedSchema(depth int) json.RawMessage {
+	schema := `{"type":"string"}`
+	for range depth {
+		schema = `{"type":"object","properties":{"n":` + schema + `}}`
+	}
+	return json.RawMessage(schema)
 }
 
 func TestBuildGenerateContentRequest_StructuredFeatureValidation(t *testing.T) {
@@ -1106,6 +1308,56 @@ func TestBuildGenerateContentRequest_StructuredFeatureValidation(t *testing.T) {
 	}
 }
 
+// TestEncodeRequest_ToolChoiceNamedTool pins the named tool-choice variant.
+// Gemini has no dedicated "one named tool" mode: FunctionCallingConfig
+// expresses it as mode ANY plus an allowedFunctionNames list, which the
+// discovery document documents as limiting the predicted call to any one of
+// the allowed names. A one-element list is therefore the faithful encoding of
+// the neutral single-name choice.
+func TestEncodeRequest_ToolChoiceNamedTool(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := geminiapi.EncodeRequest(inference.Request{
+		Model:    model.Model{Name: "gemini-tools", Caps: model.Capabilities{Tools: true}},
+		Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
+		Tools: []inference.Tool{
+			{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: inference.ToolNamed("lookup"),
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	const want = `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["lookup"]}}`
+	if got := string(raw["toolConfig"]); got != want {
+		t.Errorf("toolConfig = %s, want %s", got, want)
+	}
+}
+
+// TestEncodeRequest_ToolChoiceRequiredOmitsAllowedNames keeps the plain
+// required choice unrestricted: ANY with no allowedFunctionNames lets the
+// model pick any declared function, which is what ToolChoiceRequired means.
+func TestEncodeRequest_ToolChoiceRequiredOmitsAllowedNames(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := geminiapi.EncodeRequest(inference.Request{
+		Model:      model.Model{Name: "gemini-tools", Caps: model.Capabilities{Tools: true}},
+		Messages:   content.AgenticMessages{userMsg(textBlock("hi"))},
+		Tools:      []inference.Tool{{Name: "search", Schema: json.RawMessage(`{"type":"object"}`)}},
+		ToolChoice: inference.ToolRequired(),
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	raw := mustDecode(t, encoded)
+	const want = `{"functionCallingConfig":{"mode":"ANY"}}`
+	if got := string(raw["toolConfig"]); got != want {
+		t.Errorf("toolConfig = %s, want %s", got, want)
+	}
+}
+
 func TestEncodeRequest_NilOutputPreservesWireShape(t *testing.T) {
 	t.Parallel()
 
@@ -1119,5 +1371,43 @@ func TestEncodeRequest_NilOutputPreservesWireShape(t *testing.T) {
 	}
 	if _, ok := raw["toolConfig"]; ok {
 		t.Error("toolConfig present for automatic choice")
+	}
+}
+
+func TestEncodeRequest_ToolUseForeignProviderStateIsNotReplayed(t *testing.T) {
+	t.Parallel()
+	tool := content.NewToolUseBlock("call_1", "tool", json.RawMessage(`{}`), json.RawMessage(`"foreign"`), "openai-responses")
+	raw, err := geminiapi.EncodeRequest(inference.Request{Model: model.Model{Name: "m"}, Messages: content.AgenticMessages{aiMsg(tool)}})
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	if strings.Contains(string(raw), "thoughtSignature") || strings.Contains(string(raw), "foreign") {
+		t.Fatalf("foreign state crossed formats: %s", raw)
+	}
+}
+
+// TestEncodeRequest_RefusalBlockFailsClosed pins the fail-closed encoding of a
+// content.RefusalBlock. Gemini expresses a decline through the candidate's
+// finishReason (SAFETY, PROHIBITED_CONTENT, …) and safetyRatings, never as a
+// Part: the discovery document's Part union is
+// text|inlineData|fileData|functionCall|functionResponse|executableCode|
+// codeExecutionResult, with no refusal member. Encoding one as `text` would
+// replay the model's own decline back to it as something it said.
+func TestEncodeRequest_RefusalBlockFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	_, err := geminiapi.EncodeRequest(inference.Request{
+		Model:    model.Model{Name: "m"},
+		Messages: content.AgenticMessages{aiMsg(&content.RefusalBlock{Text: "I cannot help with that."})},
+	})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	var unsupported *geminiapi.UnsupportedBlockError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %v (%T), want *UnsupportedBlockError", err, err)
+	}
+	if !strings.Contains(unsupported.Reason, "refusal") {
+		t.Errorf("Reason = %q, want it to name the refusal limitation", unsupported.Reason)
 	}
 }

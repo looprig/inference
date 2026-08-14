@@ -1,6 +1,7 @@
 package geminiapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -71,12 +72,14 @@ func TestCodec_EncodeRequest(t *testing.T) {
 
 // TestCodec_DecodeStream drives the StreamingCodec path through a fake *http.Response,
 // proving Gemini streamGenerateContent SSE chunks decode to chunks and the stream ends
-// on natural EOF (no sentinel).
+// on natural EOF (there is no [DONE]-style sentinel — the terminal signal is the final
+// candidate's finishReason, without which the body would be a truncated answer).
 func TestCodec_DecodeStream(t *testing.T) {
 	t.Parallel()
 	body := strings.Join([]string{
 		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}],\"role\":\"model\"}}]}\n\n",
 		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}],\"role\":\"model\"}}]}\n\n",
+		"data: {\"candidates\":[{\"content\":{\"parts\":[],\"role\":\"model\"},\"finishReason\":\"STOP\"}]}\n\n",
 	}, "")
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
 	stream, err := geminiapi.Codec{}.DecodeStream(resp)
@@ -161,10 +164,19 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			want:    []content.Chunk{&content.ThinkingChunk{Thinking: "let me think"}},
 		},
 		{
+			name:    "thought signature yields provider-tagged state",
+			payload: `{"candidates":[{"content":{"parts":[{"text":"let me think","thought":true,"thoughtSignature":"opaque-sig"}],"role":"model"}}]}`,
+			want: []content.Chunk{&content.ThinkingChunk{
+				Thinking:            "let me think",
+				ProviderState:       json.RawMessage(`"opaque-sig"`),
+				ProviderStateFormat: "gemini",
+			}},
+		},
+		{
 			name:    "complete functionCall yields one tool-use chunk with full args",
 			payload: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"location":"Boston, MA"}}}],"role":"model"}}]}`,
 			want: []content.Chunk{
-				&content.ToolUseChunk{Index: 0, Name: "get_weather", InputJSON: `{"location":"Boston, MA"}`},
+				&content.ToolUseChunk{Index: 0, ID: "gemini-positional-call-0", Name: "get_weather", InputJSON: `{"location":"Boston, MA"}`},
 			},
 		},
 		{
@@ -178,8 +190,8 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			name:    "parallel functionCalls in one chunk get distinct positional indices",
 			payload: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"a","args":{}}},{"functionCall":{"name":"b","args":{}}}],"role":"model"}}]}`,
 			want: []content.Chunk{
-				&content.ToolUseChunk{Index: 0, Name: "a", InputJSON: `{}`},
-				&content.ToolUseChunk{Index: 1, Name: "b", InputJSON: `{}`},
+				&content.ToolUseChunk{Index: 0, ID: "gemini-positional-call-0", Name: "a", InputJSON: `{}`},
+				&content.ToolUseChunk{Index: 1, ID: "gemini-positional-call-1", Name: "b", InputJSON: `{}`},
 			},
 		},
 		{
@@ -187,14 +199,14 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			payload: `{"candidates":[{"content":{"parts":[{"text":"ok "},{"functionCall":{"name":"a","args":{}}}],"role":"model"}}]}`,
 			want: []content.Chunk{
 				&content.TextChunk{Text: "ok "},
-				&content.ToolUseChunk{Index: 0, Name: "a", InputJSON: `{}`},
+				&content.ToolUseChunk{Index: 0, ID: "gemini-positional-call-0", Name: "a", InputJSON: `{}`},
 			},
 		},
 		{
 			name:    "functionCall with no args normalizes to empty object",
 			payload: `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"noop"}}],"role":"model"}}]}`,
 			want: []content.Chunk{
-				&content.ToolUseChunk{Index: 0, Name: "noop", InputJSON: `{}`},
+				&content.ToolUseChunk{Index: 0, ID: "gemini-positional-call-0", Name: "noop", InputJSON: `{}`},
 			},
 		},
 		{
@@ -212,11 +224,8 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			payload: `{"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2}}`,
 			want:    nil,
 		},
-		{
-			name:    "malformed JSON is a skip, not an error",
-			payload: `not-json`,
-			want:    nil,
-		},
+		// Malformed JSON is NOT in this table: it is an error, not a skip.
+		// See TestDecodeEvent_MalformedJSONIsAnError (streamintegrity_test.go).
 		{
 			name:    "empty parts is a skip",
 			payload: `{"candidates":[{"content":{"role":"model"}}]}`,

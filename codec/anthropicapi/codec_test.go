@@ -1,6 +1,7 @@
 package anthropicapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -164,6 +165,14 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			want:    nil,
 		},
 		{
+			name:    "content_block_start redacted thinking preserves opaque state",
+			payload: `{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque+/="}}`,
+			want: []content.Chunk{&content.ThinkingChunk{
+				ProviderState:       json.RawMessage(`"opaque+/="`),
+				ProviderStateFormat: "anthropic-redacted-thinking",
+			}},
+		},
+		{
 			name:    "content_block_start tool_use yields a seed ToolUseChunk",
 			payload: `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}`,
 			want:    []content.Chunk{&content.ToolUseChunk{Index: 1, ID: "toolu_1", Name: "get_weather"}},
@@ -184,9 +193,9 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			want:    []content.Chunk{&content.ToolUseChunk{Index: 1, InputJSON: `{"city":`}},
 		},
 		{
-			name:    "signature_delta is a skip",
+			name:    "signature_delta yields a signature chunk",
 			payload: `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}`,
-			want:    nil,
+			want:    []content.Chunk{&content.ThinkingChunk{Signature: "abc", SignatureFormat: signatureFormatAnthropic}},
 		},
 		{
 			name:    "empty text_delta is a skip",
@@ -219,11 +228,6 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name:    "malformed json is a skip, not an error",
-			payload: `not-json`,
-			want:    nil,
-		},
-		{
 			name:    "content_block_delta with no delta is a skip",
 			payload: `{"type":"content_block_delta","index":0}`,
 			want:    nil,
@@ -240,6 +244,54 @@ func TestCodec_DecodeEvent(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("DecodeEvent = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCodec_DecodeEvent_MalformedJSONIsAnError pins the counterpart rule to the
+// tolerant skips above: an event whose JSON does not parse is a decode FAILURE,
+// not a skip. A truncated frame is indistinguishable from a dropped one, so
+// swallowing it lets a partial response be reported as an authoritative clean
+// success. Unknown-but-valid event types stay tolerant (see the table above);
+// only unparseable bytes error, matching the openaiapi and openairesponses
+// dialects.
+func TestCodec_DecodeEvent_MalformedJSONIsAnError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "truncated content_block_delta",
+			// A real text delta frame cut off mid-transmission.
+			payload: `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel`,
+		},
+		{
+			name:    "not json at all",
+			payload: `not-json`,
+		},
+		{
+			name:    "json scalar where an event object is required",
+			payload: `"content_block_delta"`,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			chunks, err := anthropicapi.Codec{}.DecodeEvent([]byte(tc.payload))
+			if err == nil {
+				t.Fatalf("DecodeEvent(%q) = %+v, nil; want a decode error", tc.payload, chunks)
+			}
+			var decodeErr *anthropicapi.StreamEventDecodeError
+			if !errors.As(err, &decodeErr) {
+				t.Fatalf("DecodeEvent error = %T %v, want *StreamEventDecodeError", err, err)
+			}
+			if chunks != nil {
+				t.Errorf("DecodeEvent chunks = %+v, want nil alongside the error", chunks)
 			}
 		})
 	}

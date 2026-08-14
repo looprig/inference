@@ -24,7 +24,6 @@ const (
 	pathMessages     = "/v1/messages"
 	pathCountTokens  = "/v1/messages/count_tokens" // #nosec G101 -- a URL path, not a credential
 	toolChoiceAuto   = "auto"
-	toolChoiceTool   = "tool"
 	toolChoiceNone   = "none"
 	thinkingBudgeted = "enabled" // real Anthropic manual-budget wire value; unsupported here
 )
@@ -208,7 +207,7 @@ func decodeMessagesBody(raw []byte) (req inference.Request, requestedModel strin
 		tools = append(tools, inference.Tool{Name: t.Name, Description: t.Description, Schema: t.InputSchema})
 	}
 
-	toolChoiceValue, err := decodeToolChoice(wire.ToolChoice)
+	toolChoice, err := decodeToolChoice(wire.ToolChoice)
 	if err != nil {
 		return inference.Request{}, "", false, err
 	}
@@ -251,27 +250,33 @@ func decodeMessagesBody(raw []byte) (req inference.Request, requestedModel strin
 		Messages:   messages,
 		Tools:      tools,
 		Output:     output,
-		ToolChoice: toolChoiceValue,
+		ToolChoice: toolChoice,
 		Override:   &sampling,
 	}
 	return req, wire.Model, wire.Stream, nil
 }
 
-// decodeToolChoice maps the wire tool_choice to the two-state neutral
-// inference.ToolChoice. A "tool" (force one named tool) or "none" (disable
-// tools) choice is real Anthropic behavior the neutral vocabulary cannot
-// represent, so both fail closed rather than silently degrading to auto/required.
+// decodeToolChoice maps the wire tool_choice to the neutral
+// inference.ToolChoice. A "none" (disable tools) choice is real Anthropic
+// behavior the neutral vocabulary cannot represent, so it fails closed rather
+// than silently degrading to auto/required; so does a "tool" choice with no
+// name, which a named neutral choice cannot spell either.
 func decodeToolChoice(tc *toolChoice) (inference.ToolChoice, error) {
 	if tc == nil {
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	}
 	switch tc.Type {
 	case toolChoiceAuto:
-		return inference.ToolChoiceAuto, nil
+		return inference.ToolAuto(), nil
 	case toolChoiceAny:
-		return inference.ToolChoiceRequired, nil
+		return inference.ToolRequired(), nil
+	case toolChoiceTool:
+		if tc.Name == "" {
+			return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: tc.Type}
+		}
+		return inference.ToolNamed(tc.Name), nil
 	default:
-		return inference.ToolChoiceAuto, &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: tc.Type}
+		return inference.ToolAuto(), &ServerDecodeError{Reason: "unsupported_tool_choice", Detail: tc.Type}
 	}
 }
 
@@ -371,13 +376,13 @@ func decodeToolResultBlock(b anthropicBlock) (*content.ToolResultMessage, error)
 }
 
 // decodeRequestBlocks maps a slice of wire content blocks to neutral blocks.
-func decodeRequestBlocks(blocks []anthropicBlock, allowImage bool) ([]content.Block, error) {
+func decodeRequestBlocks(blocks []anthropicBlock, allowMedia bool) ([]content.Block, error) {
 	if len(blocks) == 0 {
 		return nil, nil
 	}
 	out := make([]content.Block, 0, len(blocks))
 	for _, b := range blocks {
-		db, err := decodeRequestBlock(b, allowImage)
+		db, err := decodeRequestBlock(b, allowMedia)
 		if err != nil {
 			return nil, err
 		}
@@ -387,44 +392,128 @@ func decodeRequestBlocks(blocks []anthropicBlock, allowImage bool) ([]content.Bl
 }
 
 // decodeRequestBlock maps one wire content block to a neutral content.Block.
-// text/image/thinking/tool_use are supported; anything else (tool_result in the
-// wrong position, or an out-of-scope provider-hosted block such as citations,
-// audio, or document) fails closed with a typed error rather than being
-// silently dropped, since this is untrusted client input, not a tolerant
-// response decode.
+// text/image/document/thinking/redacted_thinking/tool_use are supported;
+// anything else (tool_result in the wrong position, or an out-of-scope
+// provider-hosted block such as citations) fails closed with a typed error
+// rather than being silently dropped, since this is untrusted client input,
+// not a tolerant response decode.
+//
+// allowMedia is false for an assistant message, where an image or document is
+// not a shape a client can legitimately replay: both are inputs to the model.
 //
 // Signature is copied byte-for-byte from the wire onto the decoded
 // ThinkingBlock: a same-dialect replay of a prior assistant thinking-plus-
-// tool-use turn must preserve Anthropic's required signature exactly.
-func decodeRequestBlock(b anthropicBlock, allowImage bool) (content.Block, error) {
+// tool-use turn must preserve Anthropic's required signature exactly. It is
+// stamped with this dialect's label as it arrives — a client replaying to this
+// gateway is replaying an Anthropic-minted signature — so the outbound
+// Anthropic encoder will accept it and no other dialect's encoder will.
+func decodeRequestBlock(b anthropicBlock, allowMedia bool) (content.Block, error) {
+	if err := checkResponseOnlyMembers(b); err != nil {
+		return nil, err
+	}
 	switch b.Type {
 	case blockTypeText:
+		if err := checkCitations(b.Citations); err != nil {
+			return nil, err
+		}
 		return &content.TextBlock{Text: b.Text}, nil
 	case blockTypeImage:
-		if !allowImage {
+		if !allowMedia {
 			return nil, &ServerDecodeError{Reason: "unsupported_block_placement", Detail: "image block not allowed in an assistant message"}
 		}
 		return decodeImageSource(b.Source)
+	case blockTypeDocument:
+		if !allowMedia {
+			return nil, &ServerDecodeError{Reason: "unsupported_block_placement", Detail: "document block not allowed in an assistant message"}
+		}
+		return decodeDocumentSource(b.Source, b.Title)
 	case blockTypeThinking:
-		return &content.ThinkingBlock{Thinking: b.Thinking, Signature: b.Signature}, nil
+		return content.NewSignedThinkingBlock(
+			b.Thinking, b.Signature, signatureFormatFor(b.Signature), nil, ""), nil
+	case blockTypeRedactedThinking:
+		// The gateway itself serves this block (encodeResponseBlock and the
+		// streaming writeRedactedThinking both emit it), so refusing it here
+		// would reject a client replaying our own output. `data` is
+		// provider-opaque and travels verbatim in ProviderState, tagged with
+		// this dialect's format so it can never be replayed to another one.
+		return content.NewThinkingBlock("", "", opaqueRedactedState(b.Data), providerStateFormatAnthropicRedacted), nil
 	case blockTypeToolUse:
+		if err := checkCaller(b.Caller); err != nil {
+			return nil, err
+		}
 		return &content.ToolUseBlock{ID: b.ID, Name: b.Name, Input: b.Input}, nil
 	default:
 		return nil, &ServerDecodeError{Reason: "unsupported_block_type", Detail: b.Type}
 	}
 }
 
-func decodeImageSource(src *imageSource) (*content.ImageBlock, error) {
+// checkResponseOnlyMembers refuses `citations` on anything but a text block and
+// `caller` on anything but a tool_use block. anthropicBlock is one shared DTO
+// for the whole tagged union, so accepting the two members at all necessarily
+// accepts them everywhere; the request schema does not, declaring citations
+// only on RequestTextBlock and caller only on RequestToolUseBlock, with
+// additionalProperties = false on every variant. Without this check the
+// widening would have quietly traded a strict decode for a lax one.
+func checkResponseOnlyMembers(b anthropicBlock) error {
+	if len(b.Citations) > 0 && b.Type != blockTypeText {
+		return &ServerDecodeError{Reason: "unsupported_citations_placement", Detail: b.Type}
+	}
+	if len(b.Caller) > 0 && b.Type != blockTypeToolUse {
+		return &ServerDecodeError{Reason: "unsupported_caller_placement", Detail: b.Type}
+	}
+	return nil
+}
+
+// checkCitations accepts the two forms a text block's `citations` can take that
+// content.TextBlock loses nothing by discarding: absent/null ("no citations")
+// and an empty array. A POPULATED citations array is refused rather than
+// dropped — the neutral vocabulary has no citation representation, so decoding
+// it would report success while discarding the document spans the assistant
+// attributed its text to, exactly the silent-degradation failure this codec
+// exists to prevent.
+func checkCitations(raw json.RawMessage) error {
+	switch string(bytes.TrimSpace(raw)) {
+	case "", "null", "[]":
+		return nil
+	default:
+		return &ServerDecodeError{Reason: "unsupported_citations", Detail: string(raw)}
+	}
+}
+
+// checkCaller accepts an absent, null or `direct` caller and refuses the two
+// server-tool members. A ServerToolCaller marks a tool_use that Anthropic's own
+// hosted code-execution tool issued; content.ToolUseBlock records no issuer, so
+// accepting one would turn a server-side call into an indistinguishable
+// client-side call — and the gateway would then hand it to the client to
+// execute. It fails closed by name instead.
+func checkCaller(raw json.RawMessage) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	var caller struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(trimmed, &caller); err != nil {
+		return &ServerDecodeError{Reason: "invalid_tool_caller", Detail: err.Error()}
+	}
+	if caller.Type != callerTypeDirect {
+		return &ServerDecodeError{Reason: "unsupported_tool_caller", Detail: caller.Type}
+	}
+	return nil
+}
+
+func decodeImageSource(src *blockSource) (*content.ImageBlock, error) {
 	if src == nil {
 		return nil, &ServerDecodeError{Reason: "missing_image_source"}
 	}
 	switch src.Type {
-	case imageSourceURL:
+	case sourceTypeURL:
 		return &content.ImageBlock{
 			MediaType: content.MediaType(src.MediaType),
 			Source:    content.ImageSource{URL: src.URL},
 		}, nil
-	case imageSourceBase64:
+	case sourceTypeBase64:
 		data, err := base64.StdEncoding.DecodeString(src.Data)
 		if err != nil {
 			return nil, &ServerDecodeError{Reason: "invalid_image_data", Detail: err.Error()}
@@ -435,6 +524,41 @@ func decodeImageSource(src *imageSource) (*content.ImageBlock, error) {
 		}, nil
 	default:
 		return nil, &ServerDecodeError{Reason: "unsupported_image_source_type", Detail: src.Type}
+	}
+}
+
+// decodeDocumentSource maps a wire document `source` to a neutral
+// DocumentBlock, inverting encodeDocumentBlock. title carries the document's
+// name back, which is the same field the encoder writes it to.
+//
+// Only the two members the neutral vocabulary can hold are accepted.
+// URLPDFSource and ContentBlockSource are perfectly legal Anthropic sources —
+// they are simply unrepresentable here, because content.DocumentBlock has
+// neither a URL field nor a nested block list — so they are refused BY NAME.
+// Decoding either one into an empty DocumentBlock would report success while
+// discarding the entire document, which is the failure mode this codec exists
+// to prevent.
+func decodeDocumentSource(src *blockSource, title string) (*content.DocumentBlock, error) {
+	if src == nil {
+		return nil, &ServerDecodeError{Reason: "missing_document_source"}
+	}
+	switch src.Type {
+	case sourceTypeBase64:
+		if src.MediaType != documentMediaTypePDF {
+			return nil, &ServerDecodeError{Reason: "unsupported_document_media_type", Detail: src.MediaType}
+		}
+		data, err := base64.StdEncoding.DecodeString(src.Data)
+		if err != nil {
+			return nil, &ServerDecodeError{Reason: "invalid_document_data", Detail: err.Error()}
+		}
+		return &content.DocumentBlock{MediaType: content.MediaTypeDocumentPDF, Name: title, Data: data}, nil
+	case sourceTypeText:
+		if src.MediaType != documentMediaTypeText {
+			return nil, &ServerDecodeError{Reason: "unsupported_document_media_type", Detail: src.MediaType}
+		}
+		return &content.DocumentBlock{MediaType: content.MediaTypeDocumentText, Name: title, Text: src.Data}, nil
+	default:
+		return nil, &ServerDecodeError{Reason: "unsupported_document_source_type", Detail: src.Type}
 	}
 }
 

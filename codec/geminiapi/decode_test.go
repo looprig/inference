@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/geminiapi"
 	failure "github.com/looprig/inference/failure"
+	model "github.com/looprig/inference/model"
 	stream "github.com/looprig/inference/stream"
 	usage "github.com/looprig/inference/usage"
 )
@@ -60,14 +64,26 @@ func TestDecodeResponseUsageNormalization(t *testing.T) {
 		{name: "max int sum is representable", usageField: fmt.Sprintf(`,"usageMetadata":{"candidatesTokenCount":%d,"thoughtsTokenCount":%d}`, maxInt, maxInt), want: &content.Usage{OutputTokens: content.TokenCount(maxInt) + content.TokenCount(maxInt), ReasoningTokens: content.TokenCount(maxInt)}},
 		{name: "total absent", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
 		{name: "explicit zero total exact", usageField: `,"usageMetadata":{"totalTokenCount":0}`, want: &content.Usage{}},
-		{name: "explicit zero total mismatch", usageField: `,"usageMetadata":{"promptTokenCount":1,"totalTokenCount":0}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonTotalMismatch},
+		// A reported total that disagrees with the modelled components is an
+		// accounting difference, not a corrupt response: totalTokenCount feeds no
+		// field of the neutral Usage, so failing on it could only ever discard a
+		// completed generation. Its own per-field validation below still applies.
+		{name: "total below the modelled components is tolerated", usageField: `,"usageMetadata":{"promptTokenCount":1,"totalTokenCount":0}`, want: &content.Usage{InputTokens: 1}},
+		{name: "total above the modelled components is tolerated", usageField: `,"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":999}`, want: &content.Usage{InputTokens: 1, OutputTokens: 1}},
 		{name: "negative total", usageField: `,"usageMetadata":{"totalTokenCount":-1}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonNegative},
 		{name: "null total", usageField: `,"usageMetadata":{"totalTokenCount":null}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonNull},
 		{name: "fractional total", usageField: `,"usageMetadata":{"totalTokenCount":1.5}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonFractional},
 		{name: "out of range total", usageField: `,"usageMetadata":{"totalTokenCount":9223372036854775808}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonOutOfRange},
 		{name: "exact nonzero total", usageField: `,"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":4,"totalTokenCount":9}`, want: &content.Usage{InputTokens: 2, OutputTokens: 7, ReasoningTokens: 4}},
-		{name: "component total overflows", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"candidatesTokenCount":9223372036854775807,"thoughtsTokenCount":2,"totalTokenCount":0}`, wantField: usage.UsageNormalizationFieldTotalTokens, wantReason: usage.UsageNormalizationReasonOverflow},
+		{name: "components far beyond the reported total are tolerated", usageField: fmt.Sprintf(`,"usageMetadata":{"promptTokenCount":%d,"candidatesTokenCount":%d,"thoughtsTokenCount":2,"totalTokenCount":0}`, maxInt, maxInt), want: &content.Usage{InputTokens: content.TokenCount(maxInt), OutputTokens: content.TokenCount(maxInt) + 2, ReasoningTokens: 2}},
 		{name: "maximum total boundary", usageField: `,"usageMetadata":{"promptTokenCount":9223372036854775807,"totalTokenCount":9223372036854775807}`, want: &content.Usage{InputTokens: 9223372036854775807}},
+		// toolUsePromptTokenCount is billable input reported apart from
+		// promptTokenCount, so it is added to InputTokens rather than dropped.
+		{name: "tool-use prompt tokens join the input", usageField: `,"usageMetadata":{"promptTokenCount":50,"toolUsePromptTokenCount":30,"candidatesTokenCount":20}`, want: &content.Usage{InputTokens: 80, OutputTokens: 20}},
+		{name: "tool-use prompt tokens net of cached content", usageField: `,"usageMetadata":{"promptTokenCount":50,"cachedContentTokenCount":10,"toolUsePromptTokenCount":30}`, want: &content.Usage{InputTokens: 70, CacheReadTokens: 10}},
+		{name: "negative tool-use prompt tokens", usageField: `,"usageMetadata":{"toolUsePromptTokenCount":-1}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNegative},
+		{name: "null tool-use prompt tokens", usageField: `,"usageMetadata":{"toolUsePromptTokenCount":null}`, wantField: usage.UsageNormalizationFieldInputTokens, wantReason: usage.UsageNormalizationReasonNull},
+		{name: "tool-use prompt sum at the representable boundary", usageField: fmt.Sprintf(`,"usageMetadata":{"promptTokenCount":%d,"toolUsePromptTokenCount":%d}`, maxInt, maxInt), want: &content.Usage{InputTokens: content.TokenCount(maxInt) + content.TokenCount(maxInt)}},
 	}
 
 	for _, tt := range tests {
@@ -156,8 +172,11 @@ func TestDecodeResponse(t *testing.T) {
 				"usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 8},
 				"modelVersion": "gemini-2.5-pro"
 			}`),
-			wantModel:        "gemini-2.5-pro",
-			wantBlockTypes:   []content.BlockType{content.TypeToolUse},
+			wantModel:      "gemini-2.5-pro",
+			wantBlockTypes: []content.BlockType{content.TypeToolUse},
+			// FunctionCall.id is Optional on the wire, so an absent id becomes
+			// the codec's internal per-turn ordinal (never re-emitted to Gemini).
+			wantToolUseID:    "gemini-positional-call-0",
 			wantToolUseName:  "get_weather",
 			wantToolUseInput: `{"location": "Boston, MA"}`,
 			wantInputTokens:  20,
@@ -399,6 +418,34 @@ func TestDecodeResponse_ThoughtSignaturePopulatesProviderState(t *testing.T) {
 	}
 }
 
+func TestDecodeResponse_FunctionCallThoughtSignatureRoundTripsPositionally(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"thoughtSignature":"call-sig","functionCall":{"id":"call_1","name":"tool","args":{}}}]},"finishReason":"STOP"}]}`)
+	resp, err := geminiapi.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	tool, ok := resp.Message.Blocks[0].(*content.ToolUseBlock)
+	if !ok || string(tool.ProviderState) != `"call-sig"` || tool.ProviderStateFormat != "gemini" {
+		t.Fatalf("tool block = %#v", resp.Message.Blocks[0])
+	}
+	req := inference.Request{Model: model.Model{Name: "gemini-test"}, Messages: content.AgenticMessages{
+		&content.AIMessage{Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{tool}}},
+	}}
+	raw, err := geminiapi.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatalf("request json: %v", err)
+	}
+	part := request["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)
+	if part["thoughtSignature"] != "call-sig" || part["functionCall"] == nil {
+		t.Fatalf("signature moved off functionCall part: %#v", part)
+	}
+}
+
 // TestDecodeResponse_ThoughtWithoutSignatureLeavesProviderStateNil proves a
 // thought part with no thoughtSignature still decodes to a ThinkingBlock, but
 // with ProviderState left nil rather than an empty-but-non-nil value.
@@ -416,5 +463,200 @@ func TestDecodeResponse_ThoughtWithoutSignatureLeavesProviderStateNil(t *testing
 	}
 	if tb.ProviderState != nil {
 		t.Errorf("ProviderState = %q, want nil", tb.ProviderState)
+	}
+}
+
+// TestDecodeResponse_PromptBlocked covers the shape a safety-blocked PROMPT
+// takes: no candidates at all, the reason in promptFeedback.blockReason with its
+// safetyRatings alongside, and prompt tokens in usageMetadata that were billed
+// even though nothing was generated. The discovery document is explicit that a
+// response returns no candidates "only if there was something wrong with the
+// prompt (check prompt_feedback)", so reporting it as a bare, statusless
+// APIError throws away the one diagnostic the response carried.
+func TestDecodeResponse_PromptBlocked(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"promptFeedback": {
+			"blockReason": "PROHIBITED_CONTENT",
+			"safetyRatings": [
+				{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "probability": "HIGH", "blocked": true},
+				{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "NEGLIGIBLE"}
+			]
+		},
+		"usageMetadata": {"promptTokenCount": 17, "totalTokenCount": 17},
+		"modelVersion": "gemini-2.5-flash"
+	}`)
+
+	_, err := geminiapi.DecodeResponse(body)
+	var blocked *geminiapi.PromptBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("DecodeResponse() error = %v (%T), want *geminiapi.PromptBlockedError", err, err)
+	}
+	if blocked.BlockReason != "PROHIBITED_CONTENT" {
+		t.Errorf("BlockReason = %q, want PROHIBITED_CONTENT", blocked.BlockReason)
+	}
+	if len(blocked.SafetyRatings) != 2 {
+		t.Fatalf("SafetyRatings = %d, want 2", len(blocked.SafetyRatings))
+	}
+	if got := blocked.SafetyRatings[0]; got.Category != "HARM_CATEGORY_SEXUALLY_EXPLICIT" || got.Probability != "HIGH" || !got.Blocked {
+		t.Errorf("SafetyRatings[0] = %+v, want the blocking rating", got)
+	}
+	if blocked.SafetyRatings[1].Blocked {
+		t.Errorf("SafetyRatings[1] = %+v, want blocked=false", blocked.SafetyRatings[1])
+	}
+	// The prompt was charged, so the usage must survive the failure.
+	if blocked.Usage == nil {
+		t.Fatal("Usage = nil, want the billed prompt tokens")
+	}
+	if got := blocked.Usage.InputTokens; got != 17 {
+		t.Errorf("Usage.InputTokens = %d, want 17", got)
+	}
+	if !strings.Contains(blocked.Error(), "PROHIBITED_CONTENT") {
+		t.Errorf("Error() = %q, want the block reason named", blocked.Error())
+	}
+
+	// Callers that already classify on *failure.APIError keep working, and now
+	// see a policy code instead of an empty one.
+	var apiErr *failure.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error does not unwrap to *failure.APIError: %v", err)
+	}
+	if apiErr.Code != "content_policy_violation" {
+		t.Errorf("APIError.Code = %q, want content_policy_violation", apiErr.Code)
+	}
+}
+
+// A blockReason outside the enum the discovery document publishes is not copied
+// into the error: provider strings are not retained in this module's failures
+// (see failure.APIError's closed code allowlist). The response is still reported
+// as a block, since the field's presence is what says the prompt was refused.
+func TestDecodeResponse_PromptBlockedUnknownReason(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"promptFeedback": {"blockReason": "SOMETHING_GOOGLE_ADDED_LATER"}}`)
+	_, err := geminiapi.DecodeResponse(body)
+	var blocked *geminiapi.PromptBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("DecodeResponse() error = %v (%T), want *geminiapi.PromptBlockedError", err, err)
+	}
+	if blocked.BlockReason != "" {
+		t.Errorf("BlockReason = %q, want it withheld as unrecognized", blocked.BlockReason)
+	}
+}
+
+// A candidate-less response with nothing to explain it stays the generic,
+// statusless APIError it has always been — there is no reason to report.
+func TestDecodeResponse_NoCandidatesWithoutFeedback(t *testing.T) {
+	t.Parallel()
+
+	_, err := geminiapi.DecodeResponse([]byte(`{"candidates": []}`))
+	var blocked *geminiapi.PromptBlockedError
+	if errors.As(err, &blocked) {
+		t.Fatalf("error = %v, want no block reason invented", err)
+	}
+	var apiErr *failure.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v (%T), want *failure.APIError", err, err)
+	}
+}
+
+// TestDecodeResponse_GroundedToolUsePromptTokensKeepTheGeneration is the
+// grounded / code-execution regression. UsageMetadata in the Gemini discovery
+// document declares toolUsePromptTokenCount ("Output only. Number of tokens
+// present in tool-use prompt(s)") as a first-class member, and it is a component
+// of totalTokenCount. A codec that does not model it computes a short total and
+// then throws away a completed, fully-formed answer over the difference — an
+// accounting field discarding a generation.
+func TestDecodeResponse_GroundedToolUsePromptTokensKeepTheGeneration(t *testing.T) {
+	t.Parallel()
+
+	// 50 prompt + 30 tool-use prompt + 20 candidates + 5 thoughts = 105.
+	body := []byte(`{"candidates":[{"content":{"parts":[{"text":"grounded answer"}]},"finishReason":"STOP"}],` +
+		`"usageMetadata":{"promptTokenCount":50,"toolUsePromptTokenCount":30,"candidatesTokenCount":20,` +
+		`"thoughtsTokenCount":5,"totalTokenCount":105}}`)
+
+	response, err := geminiapi.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v, want the generation preserved", err)
+	}
+	if response.Message == nil || len(response.Message.Blocks) != 1 {
+		t.Fatalf("Message = %#v, want the answer block", response.Message)
+	}
+	if got := response.Message.Blocks[0].(*content.TextBlock).Text; got != "grounded answer" {
+		t.Errorf("text = %q, want %q", got, "grounded answer")
+	}
+	// Tool-use prompt tokens are billable input the caller paid for, and the
+	// neutral Usage has no separate bucket for them, so they belong in
+	// InputTokens rather than being silently dropped: 50 - 0 cached + 30.
+	want := &content.Usage{InputTokens: 80, OutputTokens: 25, ReasoningTokens: 5}
+	assertIndependentUsage(t, response, want)
+}
+
+// TestDecodeResponse_UnmodelledTotalComponentKeepsTheGeneration pins the
+// strictness decision itself. Google has repeatedly added members to
+// UsageMetadata (serviceTier, cacheTokensDetails, toolUsePromptTokensDetails);
+// the next token bucket it adds must degrade the accounting, never the answer.
+// A reported total larger than the components this codec models is therefore
+// tolerated.
+func TestDecodeResponse_UnmodelledTotalComponentKeepsTheGeneration(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],` +
+		`"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":999}}`)
+
+	response, err := geminiapi.DecodeResponse(body)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v, want the generation preserved", err)
+	}
+	if response.Message == nil || len(response.Message.Blocks) != 1 {
+		t.Fatalf("Message = %#v, want the answer block", response.Message)
+	}
+	assertIndependentUsage(t, response, &content.Usage{InputTokens: 10, OutputTokens: 5})
+}
+
+// TestDecodeStream_GroundedUsageDoesNotSwallowTheAnswer is the streaming half of
+// the same defect, and the worse one. Gemini repeats usageMetadata on EVERY SSE
+// frame, so a usage error raised while normalizing it aborts the stream from the
+// first frame — before a single character of the answer reaches the caller, and
+// reported as a stream failure rather than as the completed generation it was.
+// The test lives beside the non-streaming case because the normalization it
+// exercises is decode.go's, reached through the stream.
+func TestDecodeStream_GroundedUsageDoesNotSwallowTheAnswer(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"grounded \"}]}}]," +
+		"\"usageMetadata\":{\"promptTokenCount\":50,\"toolUsePromptTokenCount\":30,\"candidatesTokenCount\":10,\"totalTokenCount\":90}}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"answer\"}]},\"finishReason\":\"STOP\"}]," +
+		"\"usageMetadata\":{\"promptTokenCount\":50,\"toolUsePromptTokenCount\":30,\"candidatesTokenCount\":20,\"totalTokenCount\":100}}\n\n"
+
+	reader, err := (geminiapi.Codec{}).DecodeStream(&http.Response{Body: io.NopCloser(strings.NewReader(body))})
+	if err != nil {
+		t.Fatalf("DecodeStream() error = %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var text strings.Builder
+	for {
+		chunk, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v, want the streamed answer preserved", err)
+		}
+		if textChunk, ok := chunk.(*content.TextChunk); ok {
+			text.WriteString(textChunk.Text)
+		}
+	}
+	if text.String() != "grounded answer" {
+		t.Fatalf("streamed text = %q, want %q", text.String(), "grounded answer")
+	}
+	result, ok := reader.Result()
+	if !ok {
+		t.Fatal("Result() unavailable after a clean stream")
+	}
+	if result.Usage == nil || result.Usage.InputTokens != 80 || result.Usage.OutputTokens != 20 {
+		t.Fatalf("result usage = %+v, want input 80 / output 20", result.Usage)
 	}
 }
