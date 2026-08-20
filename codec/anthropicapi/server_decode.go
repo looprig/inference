@@ -290,6 +290,8 @@ func parseEffort(wire string) (model.Effort, error) {
 		return model.EffortMedium, nil
 	case "high":
 		return model.EffortHigh, nil
+	case "xhigh":
+		return model.EffortXHigh, nil
 	case "max":
 		return model.EffortMax, nil
 	default:

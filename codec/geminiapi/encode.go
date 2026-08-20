@@ -114,10 +114,14 @@ func BuildGenerateContentRequest(req inference.Request) (GenerateContentRequest,
 		return GenerateContentRequest{}, err
 	}
 
+	generatedConfig, err := buildGenerationConfig(sampling, req.Model.Caps)
+	if err != nil {
+		return GenerateContentRequest{}, err
+	}
 	out := GenerateContentRequest{
 		Contents:         contents,
 		Tools:            tools,
-		GenerationConfig: buildGenerationConfig(sampling, req.Model.Caps),
+		GenerationConfig: generatedConfig,
 	}
 	switch req.ToolChoice.Mode() {
 	case inference.ToolChoiceModeRequired:
@@ -820,29 +824,34 @@ func cloneRawJSON(raw json.RawMessage) json.RawMessage {
 // buildGenerationConfig maps effective sampling to Gemini's generationConfig,
 // returning nil when nothing is set so the whole key is omitted. Sampling
 // pointers/slices are referenced (read-only) directly, not cloned.
-func buildGenerationConfig(s model.Sampling, caps model.Capabilities) *generationConfig {
+func buildGenerationConfig(s model.Sampling, caps model.Capabilities) (*generationConfig, error) {
+	thinking, err := thinkingFor(s.Effort, caps)
+	if err != nil {
+		return nil, err
+	}
 	gc := &generationConfig{
 		Temperature:     s.Temperature,
 		TopP:            s.TopP,
 		MaxOutputTokens: s.MaxTokens,
 		StopSequences:   s.Stop,
-		ThinkingConfig:  thinkingFor(s.Effort, caps),
+		ThinkingConfig:  thinking,
 	}
 	if gc.Temperature == nil && gc.TopP == nil && gc.MaxOutputTokens == nil &&
 		len(gc.StopSequences) == 0 && gc.ThinkingConfig == nil {
-		return nil
+		return nil, nil
 	}
-	return gc
+	return gc, nil
 }
 
 // thinkingFor maps dialect-neutral Effort to a Gemini thinkingConfig. It is
 // fail-safe gated on Caps.Thinking: a thinkingConfig sent to a non-thinking model
 // is a 400, so a model that does not advertise thinking never receives one.
-// EffortNone (and any unknown value) yields nil — thinking untouched.
+// EffortNone yields nil — thinking untouched. Unsupported or unknown values
+// fail closed rather than silently changing caller intent.
 //
 // HAZARD, deliberately not fixed here: the budget is derived from Effort alone
 // and is independent of Sampling.MaxTokens, so EffortHigh with MaxTokens 1024
-// emits thinkingBudget 16384 against a 1024-token output cap. Gemini bills
+// emits thinkingBudget 24576 against a 1024-token output cap. Gemini bills
 // thinking tokens as output tokens and draws them from the same allowance, so
 // such a request can come back empty or truncated with finishReason
 // MAX_TOKENS — the whole allowance spent on reasoning.
@@ -858,32 +867,34 @@ func buildGenerationConfig(s model.Sampling, caps model.Capabilities) *generatio
 // invent a bound the provider never published and refuse requests that succeed
 // today. The behaviour is pinned, with the full argument, by
 // TestEncodeRequestKeepsTheEffortBudgetUnderASmallOutputCap.
-func thinkingFor(e model.Effort, caps model.Capabilities) *thinkingConfig {
+func thinkingFor(e model.Effort, caps model.Capabilities) (*thinkingConfig, error) {
 	if !caps.Thinking {
-		return nil
+		return nil, nil
+	}
+	if e == model.EffortNone {
+		return nil, nil
 	}
 	budget, ok := thinkingBudget(e)
 	if !ok {
-		return nil
+		return nil, &UnsupportedEffortError{Effort: string(e)}
 	}
-	return &thinkingConfig{ThinkingBudget: &budget, IncludeThoughts: true}
+	return &thinkingConfig{ThinkingBudget: &budget, IncludeThoughts: true}, nil
 }
 
-// thinkingBudget maps Effort to a thinkingBudget token value, ok=false meaning
-// "omit". EffortMax uses -1 (dynamic: the model decides, the strongest signal and
-// always valid); low/medium/high use fixed budgets within the valid range of
-// Gemini 2.5 Flash and Pro. These fixed values are a conservative default and may
-// warrant per-model tuning.
+// thinkingBudget maps the supported neutral efforts to conservative fixed token
+// budgets. ok=false means the effort has no provider-safe mapping; the caller
+// turns that into UnsupportedEffortError. Minimal and low intentionally share
+// Gemini's smallest portable budget.
 func thinkingBudget(e model.Effort) (int, bool) {
 	switch e {
+	case model.EffortMinimal:
+		return 1024, true
 	case model.EffortLow:
-		return 4096, true
+		return 1024, true
 	case model.EffortMedium:
 		return 8192, true
 	case model.EffortHigh:
-		return 16384, true
-	case model.EffortMax:
-		return -1, true // dynamic thinking
+		return 24576, true
 	default: // EffortNone or unknown → omit
 		return 0, false
 	}

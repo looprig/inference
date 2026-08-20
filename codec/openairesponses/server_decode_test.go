@@ -9,6 +9,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/openairesponses"
+	"github.com/looprig/inference/model"
 )
 
 func decodeReq(t *testing.T, body string) (*openairesponses.Codec, *http.Request) {
@@ -225,17 +226,25 @@ func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 
 func TestServerDecode_ReasoningEffort(t *testing.T) {
 	t.Parallel()
-	c, req := decodeReq(t, `{
-		"model": "gpt-test",
-		"reasoning": {"effort": "high", "summary": "auto"},
-		"input": []
-	}`)
-	decoded, err := c.DecodeRequest(req)
-	if err != nil {
-		t.Fatalf("DecodeRequest() error = %v", err)
-	}
-	if decoded.Request.Override == nil {
-		t.Fatal("Override is nil")
+	for _, effort := range []model.Effort{
+		model.EffortMinimal, model.EffortLow, model.EffortMedium, model.EffortHigh, model.EffortXHigh, model.EffortMax,
+	} {
+		effort := effort
+		t.Run(string(effort), func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, `{
+				"model": "gpt-test",
+				"reasoning": {"effort": "`+string(effort)+`", "summary": "auto"},
+				"input": []
+			}`)
+			decoded, err := c.DecodeRequest(req)
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if decoded.Request.Override == nil || decoded.Request.Override.Effort != effort {
+				t.Fatalf("Override = %#v, want effort %q", decoded.Request.Override, effort)
+			}
+		})
 	}
 }
 

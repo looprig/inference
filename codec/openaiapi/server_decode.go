@@ -373,18 +373,22 @@ func decodeToolChoiceObject(raw json.RawMessage) (inference.ToolChoice, error) {
 	return inference.ToolNamed(wire.Function.Name), nil
 }
 
-// parseEffort maps the wire reasoning_effort value to the neutral
-// model.Effort, inverting reasoningEffort (encode.go). Chat Completions has
-// no wire value corresponding to model.EffortMax (reasoningEffort clamps it
-// down to "high" on encode), so an unrecognized value fails closed.
+// parseEffort maps the wire reasoning_effort value to the neutral model.Effort,
+// inverting reasoningEffort (encode.go). An unrecognized value fails closed.
 func parseEffort(wire string) (model.Effort, error) {
 	switch wire {
+	case "minimal":
+		return model.EffortMinimal, nil
 	case "low":
 		return model.EffortLow, nil
 	case "medium":
 		return model.EffortMedium, nil
 	case "high":
 		return model.EffortHigh, nil
+	case "xhigh":
+		return model.EffortXHigh, nil
+	case "max":
+		return model.EffortMax, nil
 	default:
 		return model.EffortNone, &ServerDecodeError{Reason: "unsupported_effort", Detail: wire}
 	}

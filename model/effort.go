@@ -6,17 +6,19 @@ package model
 type Effort string
 
 const (
-	EffortNone   Effort = ""
-	EffortLow    Effort = "low"
-	EffortMedium Effort = "medium"
-	EffortHigh   Effort = "high"
-	EffortMax    Effort = "max"
+	EffortNone    Effort = ""
+	EffortMinimal Effort = "minimal"
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+	EffortXHigh   Effort = "xhigh"
+	EffortMax     Effort = "max"
 )
 
 // Valid reports whether e is a known effort level (the empty value is valid = unset).
 func (e Effort) Valid() bool {
 	switch e {
-	case EffortNone, EffortLow, EffortMedium, EffortHigh, EffortMax:
+	case EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return true
 	default:
 		return false

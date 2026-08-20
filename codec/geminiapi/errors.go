@@ -8,6 +8,16 @@ import (
 	usage "github.com/looprig/inference/usage"
 )
 
+// UnsupportedEffortError reports a neutral reasoning effort with no Gemini
+// thinking-budget mapping.
+type UnsupportedEffortError struct {
+	Effort string
+}
+
+func (e *UnsupportedEffortError) Error() string {
+	return "gemini: unsupported reasoning effort " + strconv.Quote(e.Effort)
+}
+
 // EncodeError is a failure while translating an inference.Request into the Gemini wire
 // body — an unknown conversation type or a JSON marshal failure. Typed per
 // CLAUDE.md so callers can errors.As it to distinguish an encode fault from a

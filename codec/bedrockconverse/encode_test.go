@@ -750,6 +750,18 @@ func TestEncodeRequest_SamplingAndStructuredOutput(t *testing.T) {
 	}
 }
 
+func TestEncodeRequest_RejectsReasoningEffort(t *testing.T) {
+	t.Parallel()
+	m := baseModel()
+	m.Caps.Thinking = true
+	m.Sampling.Effort = model.EffortHigh
+	_, err := bedrockconverse.EncodeRequest(inference.Request{Model: m})
+	var effortErr *bedrockconverse.UnsupportedEffortError
+	if !errors.As(err, &effortErr) {
+		t.Fatalf("EncodeRequest() error = %T (%v), want *UnsupportedEffortError", err, err)
+	}
+}
+
 func TestEncodeRequest_OmitsUnrequestedOptionalFields(t *testing.T) {
 	t.Parallel()
 

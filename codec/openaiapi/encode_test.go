@@ -1061,9 +1061,8 @@ func TestEncodeRequest_ValidJSON(t *testing.T) {
 // TestEncodeRequest_Sampling locks the reshaped-domain sampling migration:
 //   - effective sampling is Request.Override when non-nil, else Model.Sampling;
 //   - Temperature/TopP/MaxTokens/Stop from the effective Sampling reach the wire;
-//   - model.Effort maps to the reasoning_effort wire value, with EffortNone (and
-//     any unknown value, fail-safe) omitting the field and EffortMax clamping to
-//     "high" (OpenAI's o-series accepts only low|medium|high — there is no "max").
+//   - model.Effort maps exactly to the reasoning_effort wire value, with
+//     EffortNone (and any unknown value, fail-safe) omitting the field.
 func TestEncodeRequest_Sampling(t *testing.T) {
 	t.Parallel()
 
@@ -1097,6 +1096,11 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 			wantEffort: "",
 		},
 		{
+			name:       "effort minimal maps to minimal",
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortMinimal}},
+			wantEffort: "minimal",
+		},
+		{
 			name:       "effort low maps to low",
 			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortLow}},
 			wantEffort: "low",
@@ -1112,9 +1116,14 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 			wantEffort: "high",
 		},
 		{
-			name:       "effort max clamps to high",
+			name:       "effort xhigh maps to xhigh",
+			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortXHigh}},
+			wantEffort: "xhigh",
+		},
+		{
+			name:       "effort max maps to max",
 			model:      model.Model{Name: "m", Sampling: model.Sampling{Effort: model.EffortMax}},
-			wantEffort: "high",
+			wantEffort: "max",
 		},
 		{
 			// Unknown enum value hits the fail-safe default branch: omit rather
@@ -1128,7 +1137,7 @@ func TestEncodeRequest_Sampling(t *testing.T) {
 			model:      model.Model{Name: "m", Sampling: model.Sampling{Temperature: &temp, Effort: model.EffortLow}},
 			override:   &model.Sampling{Temperature: &overrideTemp, Effort: model.EffortMax},
 			wantTemp:   &overrideTemp,
-			wantEffort: "high",
+			wantEffort: "max",
 		},
 	}
 

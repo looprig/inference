@@ -662,14 +662,17 @@ func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 		effort     model.Effort
 		wantKey    bool
 		wantBudget int
+		wantError  bool
 	}{
 		{name: "no thinking capability: config omitted even with effort", caps: model.Capabilities{}, effort: model.EffortHigh, wantKey: false},
 		{name: "thinking-capable, effort none: config omitted", caps: thinkingCaps, effort: model.EffortNone, wantKey: false},
-		{name: "thinking-capable, effort low", caps: thinkingCaps, effort: model.EffortLow, wantKey: true, wantBudget: 4096},
+		{name: "thinking-capable, effort minimal", caps: thinkingCaps, effort: model.EffortMinimal, wantKey: true, wantBudget: 1024},
+		{name: "thinking-capable, effort low", caps: thinkingCaps, effort: model.EffortLow, wantKey: true, wantBudget: 1024},
 		{name: "thinking-capable, effort medium", caps: thinkingCaps, effort: model.EffortMedium, wantKey: true, wantBudget: 8192},
-		{name: "thinking-capable, effort high", caps: thinkingCaps, effort: model.EffortHigh, wantKey: true, wantBudget: 16384},
-		{name: "thinking-capable, effort max -> dynamic -1", caps: thinkingCaps, effort: model.EffortMax, wantKey: true, wantBudget: -1},
-		{name: "thinking-capable, unknown effort: config omitted", caps: thinkingCaps, effort: model.Effort("garbage"), wantKey: false},
+		{name: "thinking-capable, effort high", caps: thinkingCaps, effort: model.EffortHigh, wantKey: true, wantBudget: 24576},
+		{name: "thinking-capable, effort xhigh is unsupported", caps: thinkingCaps, effort: model.EffortXHigh, wantError: true},
+		{name: "thinking-capable, effort max is unsupported", caps: thinkingCaps, effort: model.EffortMax, wantError: true},
+		{name: "thinking-capable, unknown effort is unsupported", caps: thinkingCaps, effort: model.Effort("garbage"), wantError: true},
 	}
 
 	for _, tc := range cases {
@@ -682,6 +685,13 @@ func TestEncodeRequest_ThinkingConfig(t *testing.T) {
 				Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
 			}
 			got, err := geminiapi.EncodeRequest(req)
+			if tc.wantError {
+				var effortErr *geminiapi.UnsupportedEffortError
+				if !errors.As(err, &effortErr) {
+					t.Fatalf("EncodeRequest() error = %T (%v), want *UnsupportedEffortError", err, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("EncodeRequest error: %v", err)
 			}

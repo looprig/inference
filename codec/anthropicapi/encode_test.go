@@ -665,6 +665,7 @@ func TestEncodeRequest_EffortThinking(t *testing.T) {
 		wantEffort   string // "" when output_config must be absent
 	}{
 		{name: "thinking-capable + high effort emits adaptive + effort", thinkingCap: true, effort: model.EffortHigh, wantThinking: true, wantEffort: "high"},
+		{name: "thinking-capable + xhigh effort maps to xhigh", thinkingCap: true, effort: model.EffortXHigh, wantThinking: true, wantEffort: "xhigh"},
 		{name: "thinking-capable + max effort maps to max", thinkingCap: true, effort: model.EffortMax, wantThinking: true, wantEffort: "max"},
 		{name: "thinking-capable + low effort maps to low", thinkingCap: true, effort: model.EffortLow, wantThinking: true, wantEffort: "low"},
 		{name: "thinking-capable + no effort emits neither", thinkingCap: true, effort: model.EffortNone, wantThinking: false},
@@ -712,6 +713,20 @@ func TestEncodeRequest_EffortThinking(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEncodeRequest_RejectsMinimalEffort(t *testing.T) {
+	t.Parallel()
+	m := baseModel()
+	m.Caps.Thinking = true
+	m.Caps.ThinkingDialect = model.ThinkingDialectAdaptive
+	m.Sampling = model.Sampling{Effort: model.EffortMinimal}
+	_, err := anthropicapi.EncodeRequest(inference.Request{
+		Model: m, Messages: content.AgenticMessages{userMsg(textBlock("hi"))},
+	}, false)
+	if err == nil {
+		t.Fatal("EncodeRequest() error = nil, want rejection of unsupported minimal effort")
 	}
 }
 

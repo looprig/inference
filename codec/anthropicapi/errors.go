@@ -5,6 +5,16 @@ import (
 	"strconv"
 )
 
+// UnsupportedEffortError reports a neutral reasoning effort for which the
+// Anthropic Messages wire contract has no symbolic effort member.
+type UnsupportedEffortError struct {
+	Effort string
+}
+
+func (e *UnsupportedEffortError) Error() string {
+	return "anthropicapi: unsupported reasoning effort " + strconv.Quote(e.Effort)
+}
+
 // UnsupportedBlockError is returned by the encoder when a content block has a
 // concrete type the Anthropic Messages API dialect does not model (e.g. audio or
 // document blocks). Block holds the Go type name for diagnosis. Callers may

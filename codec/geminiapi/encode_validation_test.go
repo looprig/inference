@@ -456,7 +456,7 @@ func TestTheGenerateContentGateHoldsNoneOfThis(t *testing.T) {
 // non-decision: thinkingBudget is derived from Effort alone and is NOT clamped
 // to, or validated against, maxOutputTokens.
 //
-// EffortHigh + MaxTokens 1024 therefore emits thinkingBudget 16384 against a
+// EffortHigh + MaxTokens 1024 therefore emits thinkingBudget 24576 against a
 // 1024-token output cap, which looks wrong and is nevertheless the least
 // surprising thing to send. The reasons, in order of weight:
 //
@@ -473,7 +473,7 @@ func TestTheGenerateContentGateHoldsNoneOfThis(t *testing.T) {
 //  2. Clamping is actively unsafe, which is the decisive point. The budget
 //     floor is per-model and non-zero — 128 on 2.5 Pro, 512 on 2.5 Flash-Lite —
 //     so clamping to a small cap turns a request the API accepts into one it
-//     rejects: MaxTokens 100 would clamp 16384 down to 100, below Pro's
+//     rejects: MaxTokens 100 would clamp 24576 down to 100, below Pro's
 //     published minimum. Clamping also silently rewrites the caller's declared
 //     effort, which is exactly the "never silently drop caller intent" failure.
 //
@@ -517,8 +517,8 @@ func TestEncodeRequestKeepsTheEffortBudgetUnderASmallOutputCap(t *testing.T) {
 		t.Fatalf("unmarshal encoded request: %v", err)
 	}
 	got := raw.GenerationConfig.ThinkingConfig.ThinkingBudget
-	if got == nil || *got != 16384 {
-		t.Fatalf("thinkingBudget = %v, want 16384 (unclamped); clamping to maxOutputTokens would drop below "+
+	if got == nil || *got != 24576 {
+		t.Fatalf("thinkingBudget = %v, want 24576 (unclamped); clamping to maxOutputTokens would drop below "+
 			"the per-model budget floor and rewrite the caller's declared effort", got)
 	}
 	if raw.GenerationConfig.MaxOutputTokens == nil || *raw.GenerationConfig.MaxOutputTokens != 1024 {
@@ -532,7 +532,7 @@ func TestEncodeRequestKeepsTheEffortBudgetUnderASmallOutputCap(t *testing.T) {
 
 // TestTheGenerateContentGateAcceptsABudgetAboveTheOutputCap measures rather
 // than assumes the other half: the derived request schema expresses no
-// cross-field constraint, so a body pairing a 16384-token budget with a
+// cross-field constraint, so a body pairing a 24576-token budget with a
 // 1024-token cap validates. There is nothing here for the gate to catch even in
 // principle, which is why the decision above had to be made from the prose
 // documentation instead.
@@ -540,7 +540,7 @@ func TestTheGenerateContentGateAcceptsABudgetAboveTheOutputCap(t *testing.T) {
 	t.Parallel()
 
 	body := `{"contents":[],"generationConfig":{"maxOutputTokens":1024,` +
-		`"thinkingConfig":{"thinkingBudget":16384,"includeThoughts":true}}}`
+		`"thinkingConfig":{"thinkingBudget":24576,"includeThoughts":true}}}`
 	if err := conformance.Validate("gemini", kindGenerateContentRequest, []byte(body)); err != nil {
 		t.Errorf("gate rejected a budget above the output cap: %v\n"+
 			"a cross-field rule has appeared in the schema; revisit thinkingFor's hazard note", err)

@@ -184,10 +184,10 @@ func EncodeRequest(req inference.Request, stream bool) ([]byte, error) {
 }
 
 // reasoningEffort maps the dialect-neutral model.Effort to the OpenAI Chat
-// Completions reasoning_effort wire value. OpenAI's o-series accepts only
-// "low" | "medium" | "high" (there is no "max"), so model.EffortMax clamps to
-// "high" — the strongest value the wire accepts. EffortNone (and any unknown
-// value, fail-safe) yields "", which the omitempty tag drops from the body.
+// Completions reasoning_effort wire value. The current request schema admits
+// the complete neutral ladder, so every known non-none value is preserved
+// exactly. EffortNone (and any unknown value, fail-safe) yields "", which the
+// omitempty tag drops from the body.
 // schemaOrDefault substitutes an empty object schema for a tool that declares
 // no parameters, because FunctionObject.parameters is spec-typed `object`:
 // emitting the nil json.RawMessage verbatim would put a bare `null` on the
@@ -201,12 +201,18 @@ func schemaOrDefault(schema json.RawMessage) json.RawMessage {
 
 func reasoningEffort(e model.Effort) string {
 	switch e {
+	case model.EffortMinimal:
+		return "minimal"
 	case model.EffortLow:
 		return "low"
 	case model.EffortMedium:
 		return "medium"
-	case model.EffortHigh, model.EffortMax:
+	case model.EffortHigh:
 		return "high"
+	case model.EffortXHigh:
+		return "xhigh"
+	case model.EffortMax:
+		return "max"
 	default: // EffortNone or unknown → omit
 		return ""
 	}

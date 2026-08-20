@@ -158,7 +158,10 @@ func buildMessagesRequest(req inference.Request, stream bool) (messagesRequest, 
 	// and shaped by its declared ThinkingDialect. EffortNone (or a model that
 	// can't think) emits neither member.
 	thinkingEnabled := false
-	if req.Model.Caps.Thinking && effortValue(sampling.Effort) != "" {
+	if req.Model.Caps.Thinking && sampling.Effort != model.EffortNone {
+		if !sampling.Effort.Valid() || (req.Model.Caps.ThinkingDialect == model.ThinkingDialectAdaptive && sampling.Effort == model.EffortMinimal) {
+			return messagesRequest{}, &UnsupportedEffortError{Effort: string(sampling.Effort)}
+		}
 		thinking, effort, err := thinkingFor(req.Model, sampling.Effort, r.MaxTokens)
 		if err != nil {
 			return messagesRequest{}, err
@@ -570,6 +573,8 @@ func effortValue(e model.Effort) string {
 		return "medium"
 	case model.EffortHigh:
 		return "high"
+	case model.EffortXHigh:
+		return "xhigh"
 	case model.EffortMax:
 		return "max"
 	default: // EffortNone or unknown → omit
@@ -628,12 +633,16 @@ func thinkingBudgetTokens(e model.Effort, maxTokens int) (int, bool) {
 	// that spends its entire allowance on reasoning returns no answer.
 	var numerator int
 	switch e {
+	case model.EffortMinimal:
+		numerator = 10
 	case model.EffortLow:
 		numerator = 25
 	case model.EffortMedium:
 		numerator = 50
 	case model.EffortHigh:
 		numerator = 75
+	case model.EffortXHigh:
+		numerator = 85
 	case model.EffortMax:
 		numerator = 90
 	default: // EffortNone or unknown; callers gate on effortValue first

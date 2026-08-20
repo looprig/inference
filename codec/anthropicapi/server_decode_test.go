@@ -335,6 +335,7 @@ func TestDecodeRequest_VisibleThinking(t *testing.T) {
 		{wire: "low", want: model.EffortLow},
 		{wire: "medium", want: model.EffortMedium},
 		{wire: "high", want: model.EffortHigh},
+		{wire: "xhigh", want: model.EffortXHigh},
 		{wire: "max", want: model.EffortMax},
 	}
 	for _, tc := range cases {

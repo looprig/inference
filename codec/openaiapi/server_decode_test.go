@@ -10,6 +10,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
 	"github.com/looprig/inference/codec/openaiapi"
+	"github.com/looprig/inference/model"
 )
 
 // newDecodeRequest builds an httptest request for POST /v1/chat/completions
@@ -276,13 +277,21 @@ func TestServerDecode_RejectsUnrepresentableToolChoiceObjects(t *testing.T) {
 
 func TestServerDecode_ReasoningEffort(t *testing.T) {
 	t.Parallel()
-	c, req := decodeReq(t, `{"model":"m","reasoning_effort":"high","messages":[]}`)
-	decoded, err := c.DecodeRequest(req)
-	if err != nil {
-		t.Fatalf("DecodeRequest() error = %v", err)
-	}
-	if decoded.Request.Override == nil || decoded.Request.Override.Effort != "high" {
-		t.Errorf("Override = %#v", decoded.Request.Override)
+	for _, effort := range []model.Effort{
+		model.EffortMinimal, model.EffortLow, model.EffortMedium, model.EffortHigh, model.EffortXHigh, model.EffortMax,
+	} {
+		effort := effort
+		t.Run(string(effort), func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, `{"model":"m","reasoning_effort":"`+string(effort)+`","messages":[]}`)
+			decoded, err := c.DecodeRequest(req)
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if decoded.Request.Override == nil || decoded.Request.Override.Effort != effort {
+				t.Errorf("Override = %#v, want effort %q", decoded.Request.Override, effort)
+			}
+		})
 	}
 }
 

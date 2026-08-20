@@ -233,12 +233,18 @@ func decodeToolChoiceObject(raw json.RawMessage) (inference.ToolChoice, error) {
 // model.Effort, inverting effortValue (encode.go).
 func parseEffort(wire string) (model.Effort, error) {
 	switch wire {
+	case "minimal":
+		return model.EffortMinimal, nil
 	case "low":
 		return model.EffortLow, nil
 	case "medium":
 		return model.EffortMedium, nil
 	case "high":
 		return model.EffortHigh, nil
+	case "xhigh":
+		return model.EffortXHigh, nil
+	case "max":
+		return model.EffortMax, nil
 	default:
 		return model.EffortNone, &ServerDecodeError{Reason: "unsupported_effort", Detail: wire}
 	}

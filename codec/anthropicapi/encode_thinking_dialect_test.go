@@ -70,9 +70,19 @@ func TestEncodeRequestThinkingDialectSelectsTheModelsWireShape(t *testing.T) {
 			wantType: "enabled", wantBudget: 6000,
 		},
 		{
+			name: "budget dialect maps minimal below low", modelName: "claude-haiku-4-5",
+			dialect: model.ThinkingDialectBudget, effort: model.EffortMinimal, maxTokens: 20000,
+			wantType: "enabled", wantBudget: 2000,
+		},
+		{
 			name: "budget dialect scales the budget with effort", modelName: "claude-haiku-4-5",
 			dialect: model.ThinkingDialectBudget, effort: model.EffortLow, maxTokens: 8000,
 			wantType: "enabled", wantBudget: 2000,
+		},
+		{
+			name: "budget dialect maps xhigh between high and max", modelName: "claude-haiku-4-5",
+			dialect: model.ThinkingDialectBudget, effort: model.EffortXHigh, maxTokens: 8000,
+			wantType: "enabled", wantBudget: 6800,
 		},
 		{
 			name: "budget dialect floors the budget at the schema minimum", modelName: "claude-haiku-4-5",

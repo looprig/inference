@@ -462,18 +462,24 @@ func schemaOrDefault(schema json.RawMessage) json.RawMessage {
 }
 
 // effortValue maps the dialect-neutral model.Effort to Responses'
-// reasoning.effort wire value. Responses accepts only "low"|"medium"|"high"
-// (no "max"), so model.EffortMax clamps to "high" — mirroring openaiapi's
-// reasoningEffort for Chat Completions. EffortNone (and any unknown value,
-// fail-safe) yields "", which suppresses the whole `reasoning` field.
+// reasoning.effort wire value. The current request schema admits the complete
+// neutral ladder, so every known non-none value is preserved exactly.
+// EffortNone (and any unknown value, fail-safe) yields "", which suppresses
+// the whole `reasoning` field.
 func effortValue(e model.Effort) string {
 	switch e {
+	case model.EffortMinimal:
+		return "minimal"
 	case model.EffortLow:
 		return "low"
 	case model.EffortMedium:
 		return "medium"
-	case model.EffortHigh, model.EffortMax:
+	case model.EffortHigh:
 		return "high"
+	case model.EffortXHigh:
+		return "xhigh"
+	case model.EffortMax:
+		return "max"
 	default: // EffortNone or unknown -> omit
 		return ""
 	}

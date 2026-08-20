@@ -258,13 +258,11 @@ func effortFromThinkingBudget(budget *int) (model.Effort, error) {
 		return model.EffortNone, nil
 	}
 	switch *budget {
-	case -1:
-		return model.EffortMax, nil
-	case 4096:
+	case 1024:
 		return model.EffortLow, nil
 	case 8192:
 		return model.EffortMedium, nil
-	case 16384:
+	case 24576:
 		return model.EffortHigh, nil
 	default:
 		return model.EffortNone, &ServerDecodeError{Reason: "unsupported_thinking_budget", Detail: strconv.Itoa(*budget)}

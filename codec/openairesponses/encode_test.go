@@ -347,29 +347,36 @@ func TestEncodeRequest_ToolChoiceAutoOmitted(t *testing.T) {
 
 func TestEncodeRequest_ReasoningSummaryAndInclude(t *testing.T) {
 	t.Parallel()
-	low := model.EffortLow
-	req := inference.Request{
-		Model:    model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
-		Override: &model.Sampling{Effort: low},
-	}
-	body, err := openairesponses.EncodeRequest(req, false)
-	if err != nil {
-		t.Fatalf("EncodeRequest() error = %v", err)
-	}
-	m := decodeRequestBody(t, body)
-	reasoning, ok := m["reasoning"].(map[string]any)
-	if !ok {
-		t.Fatalf("reasoning missing or wrong type: %#v", m["reasoning"])
-	}
-	if reasoning["effort"] != "low" {
-		t.Errorf("effort = %v", reasoning["effort"])
-	}
-	if reasoning["summary"] != "auto" {
-		t.Errorf("summary = %v", reasoning["summary"])
-	}
-	include, ok := m["include"].([]any)
-	if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
-		t.Errorf("include = %#v, want [reasoning.encrypted_content]", m["include"])
+	for _, effort := range []model.Effort{
+		model.EffortMinimal, model.EffortLow, model.EffortMedium, model.EffortHigh, model.EffortXHigh, model.EffortMax,
+	} {
+		effort := effort
+		t.Run(string(effort), func(t *testing.T) {
+			t.Parallel()
+			req := inference.Request{
+				Model:    model.Model{Name: "gpt-test", Caps: model.Capabilities{Thinking: true}},
+				Override: &model.Sampling{Effort: effort},
+			}
+			body, err := openairesponses.EncodeRequest(req, false)
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			m := decodeRequestBody(t, body)
+			reasoning, ok := m["reasoning"].(map[string]any)
+			if !ok {
+				t.Fatalf("reasoning missing or wrong type: %#v", m["reasoning"])
+			}
+			if reasoning["effort"] != string(effort) {
+				t.Errorf("effort = %v, want %q", reasoning["effort"], effort)
+			}
+			if reasoning["summary"] != "auto" {
+				t.Errorf("summary = %v", reasoning["summary"])
+			}
+			include, ok := m["include"].([]any)
+			if !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+				t.Errorf("include = %#v, want [reasoning.encrypted_content]", m["include"])
+			}
+		})
 	}
 }
 

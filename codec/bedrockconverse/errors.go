@@ -5,6 +5,16 @@ import (
 	"strconv"
 )
 
+// UnsupportedEffortError reports a neutral reasoning effort that the generic
+// Converse request has no model-independent field to represent.
+type UnsupportedEffortError struct {
+	Effort string
+}
+
+func (e *UnsupportedEffortError) Error() string {
+	return "bedrockconverse: unsupported reasoning effort " + strconv.Quote(e.Effort)
+}
+
 // UnsupportedBlockError reports a content block that Bedrock Converse cannot
 // represent in the shared request vocabulary.
 type UnsupportedBlockError struct {

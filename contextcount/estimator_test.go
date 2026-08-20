@@ -254,13 +254,27 @@ func TestEstimatorCountsEffortByDialect(t *testing.T) {
 		{name: "Anthropic gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatAnthropic, model.EffortNone, false), after: requestWithEffort(model.APIFormatAnthropic, model.EffortLow, false), wantChanged: false},
 		{name: "Gemini effort with thinking", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, true), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, true), wantChanged: true},
 		{name: "Gemini gate off restores no-effort encoding", before: requestWithEffort(model.APIFormatGemini, model.EffortNone, false), after: requestWithEffort(model.APIFormatGemini, model.EffortLow, false), wantChanged: false},
-		{name: "BedrockConverse intentionally omits effort", before: requestWithEffort(model.APIFormatBedrockConverse, model.EffortNone, true), after: requestWithEffort(model.APIFormatBedrockConverse, model.EffortLow, true), wantChanged: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertRequestChange(t, tt.before, tt.after, tt.wantChanged)
 		})
+	}
+}
+
+func TestEstimatorRejectsUnsupportedEffortForBedrockConverse(t *testing.T) {
+	req := requestWithEffort(model.APIFormatBedrockConverse, model.EffortLow, true)
+	_, err := NewEstimator().CountContext(context.Background(), req)
+	if err == nil {
+		t.Fatal("CountContext() error = nil, want unsupported effort")
+	}
+	var unsupported *bedrockconverse.UnsupportedEffortError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("CountContext() error = %T %v, want *bedrockconverse.UnsupportedEffortError", err, err)
+	}
+	if unsupported.Effort != string(model.EffortLow) {
+		t.Errorf("unsupported effort = %q, want %q", unsupported.Effort, model.EffortLow)
 	}
 }
 
@@ -653,6 +667,10 @@ func requestWithEffort(format model.APIFormat, effort model.Effort, thinkingCap 
 func completeRequest(format model.APIFormat, usage *content.Usage) inference.Request {
 	req := dialectNeutralCompleteRequest(format, usage)
 	if format == model.APIFormatBedrockConverse {
+		// Converse has no model-independent reasoning-effort field. Keep this
+		// otherwise complete fixture representable; unsupported-effort behavior
+		// is covered separately above.
+		req.Model.Sampling.Effort = model.EffortNone
 		// Converse rejects a committed user turn after tool results, so the
 		// image turn precedes the tool exchange. The content is otherwise
 		// identical to the other dialects' complete request.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/looprig/core/content"
@@ -400,6 +401,45 @@ func TestServerDecode_ToolsAndRequiredToolChoice(t *testing.T) {
 	if decoded.Request.ToolChoice != inference.ToolRequired() {
 		t.Errorf("ToolChoice = %v, want ToolRequired()", decoded.Request.ToolChoice)
 	}
+}
+
+func TestServerDecode_ThinkingBudget(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		budget int
+		want   model.Effort
+	}{
+		{budget: 1024, want: model.EffortLow},
+		{budget: 8192, want: model.EffortMedium},
+		{budget: 24576, want: model.EffortHigh},
+	} {
+		tc := tc
+		t.Run(strconv.Itoa(tc.budget), func(t *testing.T) {
+			t.Parallel()
+			c, req := decodeReq(t, "m", `{
+				"contents": [],
+				"generationConfig": {"thinkingConfig":{"thinkingBudget":`+strconv.Itoa(tc.budget)+`}}
+			}`)
+			decoded, err := c.DecodeRequest(req)
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if decoded.Request.Override == nil || decoded.Request.Override.Effort != tc.want {
+				t.Fatalf("Override = %#v, want effort %q", decoded.Request.Override, tc.want)
+			}
+		})
+	}
+
+	t.Run("dynamic budget has no neutral Gemini effort", func(t *testing.T) {
+		t.Parallel()
+		c, req := decodeReq(t, "m", `{
+			"contents": [],
+			"generationConfig": {"thinkingConfig":{"thinkingBudget":-1}}
+		}`)
+		if _, err := c.DecodeRequest(req); err == nil {
+			t.Fatal("DecodeRequest() error = nil, want unsupported_thinking_budget")
+		}
+	})
 }
 
 // TestServerDecode_AllowedFunctionNames covers the mode-ANY-plus-allowlist

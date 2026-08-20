@@ -644,6 +644,9 @@ func validateTools(tools []inference.Tool) error {
 // nameable configuration error into an opaque provider rejection, so the codec
 // refuses here instead — the same fail-secure rule the block encoders follow.
 func samplingConfig(sampling model.Sampling) (*inferenceConfig, error) {
+	if sampling.Effort != model.EffortNone {
+		return nil, &UnsupportedEffortError{Effort: string(sampling.Effort)}
+	}
 	if err := checkUnitInterval("temperature", sampling.Temperature); err != nil {
 		return nil, err
 	}
