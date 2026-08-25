@@ -27,6 +27,6 @@ jobs:
       - name: Run gateway example
         run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go run ./examples/gateway
       - name: Run repository tests
-        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache make test
+        run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache make check
       - name: Run race-enabled standalone tests
         run: GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go test -race ./...

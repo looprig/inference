@@ -3,7 +3,7 @@ module github.com/looprig/inference
 go 1.26.6
 
 require (
-	github.com/looprig/core v0.6.0
+	github.com/looprig/core v0.6.1
 	github.com/looprig/credentials v0.2.0
 	github.com/looprig/secrets v0.2.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3

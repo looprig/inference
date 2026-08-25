@@ -112,7 +112,7 @@ func TestDocsArtifacts(t *testing.T) {
 			t.Errorf("manifest does not register %q", path)
 		}
 	}
-	if !strings.Contains(string(workflow), "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache make test") {
+	if !strings.Contains(string(workflow), "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache make check") {
 		t.Error("workflow does not run the native test command")
 	}
 	if !strings.Contains(string(workflow), "GOWORK=off GOCACHE=/tmp/looprig-inference-docs-gocache go test -race ./...") {
