@@ -3,11 +3,14 @@ package codec_test
 import (
 	"bytes"
 	"errors"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/inference"
+	"github.com/looprig/inference/codec"
 	"github.com/looprig/inference/codec/anthropicapi"
 	"github.com/looprig/inference/codec/bedrockconverse"
 	"github.com/looprig/inference/codec/geminiapi"
@@ -17,28 +20,36 @@ import (
 )
 
 // TestEveryCodecIgnoresButValidatesSessionID pins the two halves of the
-// Request.SessionID contract at the encoders:
+// Request.SessionID contract at the encoders, in both request modes:
 //
-//   - A valid SessionID changes no wire byte. The identity is carried, where a
-//     provider documents it, as a HEADER added by that provider's transport; no
-//     neutral codec may leak it into a request body, where an upstream that
-//     does not know it would reject the unknown member or log it.
+//   - A valid SessionID changes nothing a codec returns: not the body and not
+//     the header map. The identity is carried, where a provider documents it,
+//     as a header added by that PROVIDER's transport; no neutral codec may leak
+//     it onto the wire, where an upstream that does not know it would receive
+//     caller data it never asked for.
 //   - An unsendable SessionID is refused by every encoder with the typed
-//     *inference.InvalidSessionIDError, before any body is produced, including
-//     by the codecs whose providers never read it — so a request valid for one
-//     provider stays valid when a conversation switches to another.
+//     *inference.InvalidSessionIDError, including by the codecs whose providers
+//     never read it — so a request valid for one provider stays valid when a
+//     conversation switches to another.
 func TestEveryCodecIgnoresButValidatesSessionID(t *testing.T) {
 	t.Parallel()
 
 	codecs := []struct {
-		name   string
-		encode func(inference.Request) ([]byte, error)
+		name    string
+		encoder codec.RequestEncoder
 	}{
-		{name: "anthropic", encode: func(req inference.Request) ([]byte, error) { return anthropicapi.EncodeRequest(req, false) }},
-		{name: "openai", encode: func(req inference.Request) ([]byte, error) { return openaiapi.EncodeRequest(req, false) }},
-		{name: "openai-responses", encode: func(req inference.Request) ([]byte, error) { return openairesponses.EncodeRequest(req, false) }},
-		{name: "gemini", encode: geminiapi.EncodeRequest},
-		{name: "bedrock-converse", encode: bedrockconverse.EncodeRequest},
+		{name: "anthropic", encoder: anthropicapi.Codec{}},
+		{name: "openai", encoder: openaiapi.Codec{}},
+		{name: "openai-responses", encoder: openairesponses.Codec{}},
+		{name: "gemini", encoder: geminiapi.Codec{}},
+		{name: "bedrock-converse", encoder: bedrockconverse.Codec{}},
+	}
+	modes := []struct {
+		name string
+		mode codec.RequestMode
+	}{
+		{name: "invoke", mode: codec.RequestModeInvoke},
+		{name: "stream", mode: codec.RequestModeStream},
 	}
 
 	const sessionID = "session-marker-6f1e2d3c"
@@ -52,38 +63,63 @@ func TestEveryCodecIgnoresButValidatesSessionID(t *testing.T) {
 			},
 		}
 	}
+	encode := func(t *testing.T, encoder codec.RequestEncoder, req inference.Request, mode codec.RequestMode) (codec.EncodedRequest, []byte, error) {
+		t.Helper()
+		encoded, err := encoder.EncodeRequest(req, mode)
+		if err != nil || encoded.Body == nil {
+			return encoded, nil, err
+		}
+		body, readErr := io.ReadAll(encoded.Body)
+		if readErr != nil {
+			t.Fatalf("read encoded body: %v", readErr)
+		}
+		return encoded, body, nil
+	}
 
-	for _, codec := range codecs {
-		t.Run(codec.name, func(t *testing.T) {
-			t.Parallel()
+	for _, c := range codecs {
+		for _, m := range modes {
+			t.Run(c.name+"/"+m.name, func(t *testing.T) {
+				t.Parallel()
 
-			without, err := codec.encode(base())
-			if err != nil {
-				t.Fatalf("encode without SessionID: %v", err)
-			}
-			withID := base()
-			withID.SessionID = sessionID
-			with, err := codec.encode(withID)
-			if err != nil {
-				t.Fatalf("encode with SessionID: %v", err)
-			}
-			if !bytes.Equal(without, with) {
-				t.Errorf("SessionID changed the encoded body:\nwithout: %s\nwith:    %s", without, with)
-			}
-			if strings.Contains(string(with), sessionID) {
-				t.Errorf("encoded body carries the SessionID: %s", with)
-			}
+				without, withoutBody, err := encode(t, c.encoder, base(), m.mode)
+				if err != nil {
+					t.Fatalf("encode without SessionID: %v", err)
+				}
+				withID := base()
+				withID.SessionID = sessionID
+				with, withBody, err := encode(t, c.encoder, withID, m.mode)
+				if err != nil {
+					t.Fatalf("encode with SessionID: %v", err)
+				}
 
-			invalid := base()
-			invalid.SessionID = "id\r\nX-Injected: yes"
-			body, err := codec.encode(invalid)
-			var sessionErr *inference.InvalidSessionIDError
-			if !errors.As(err, &sessionErr) {
-				t.Fatalf("encode with unsendable SessionID: err = %T %v, want *inference.InvalidSessionIDError", err, err)
-			}
-			if body != nil {
-				t.Errorf("encode with unsendable SessionID returned a body: %s", body)
-			}
-		})
+				if !bytes.Equal(withoutBody, withBody) {
+					t.Errorf("SessionID changed the encoded body:\nwithout: %s\nwith:    %s", withoutBody, withBody)
+				}
+				if strings.Contains(string(withBody), sessionID) {
+					t.Errorf("encoded body carries the SessionID: %s", withBody)
+				}
+				if !reflect.DeepEqual(without.Header, with.Header) {
+					t.Errorf("SessionID changed the encoded header map:\nwithout: %v\nwith:    %v", without.Header, with.Header)
+				}
+				for name, values := range with.Header {
+					if strings.Contains(name, sessionID) {
+						t.Errorf("encoded header name %q carries the SessionID", name)
+					}
+					for _, value := range values {
+						if strings.Contains(value, sessionID) {
+							t.Errorf("encoded header %s = %q carries the SessionID", name, value)
+						}
+					}
+				}
+
+				invalid := base()
+				invalid.SessionID = "id\r\nX-Injected: yes"
+				_, _, err = encode(t, c.encoder, invalid, m.mode)
+				var sessionErr *inference.InvalidSessionIDError
+				if !errors.As(err, &sessionErr) {
+					t.Fatalf("encode with unsendable SessionID: err = %T %v, want *inference.InvalidSessionIDError", err, err)
+				}
+			})
+		}
 	}
 }

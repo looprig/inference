@@ -3,10 +3,17 @@ package inference
 import "fmt"
 
 // MaxSessionIDBytes is the largest permitted byte length of Request.SessionID.
-// It matches Core's sessionwire MaxIDBytes, so any Looprig session identity is
-// representable, while keeping the header a provider receives far below the
-// request-header limits HTTP servers enforce (an oversized header draws an
-// opaque 431 or a dropped connection rather than a diagnosable refusal).
+// It keeps the header a provider receives far below the request-header limits
+// HTTP servers enforce (an oversized header draws an opaque 431 or a dropped
+// connection rather than a diagnosable refusal).
+//
+// It equals Core's sessionwire MaxIDBytes, but that is a LENGTH bound only: it
+// does not make every Core id a valid SessionID. Core accepts any UTF-8 id,
+// including control characters and leading or trailing spaces, and such an id
+// would make the request fail here. A caller wiring a Core session id into
+// SessionID must pre-check it (with ValidateRequestFeatures on a request
+// carrying only the id) and omit it, or map it to a sendable form, rather than
+// fail the turn.
 const MaxSessionIDBytes = 256
 
 // SessionIDProblem names why a Request.SessionID was refused.
@@ -16,10 +23,11 @@ const (
 	// SessionIDUnsendableByte: a byte that cannot appear in an HTTP header
 	// field value — CR, LF, NUL, any other C0 control except HTAB, or DEL.
 	SessionIDUnsendableByte SessionIDProblem = "unsendable_byte"
-	// SessionIDSurroundingWhitespace: a leading or trailing SP or HTAB. HTTP
-	// recipients strip optional whitespace around a field value (RFC 9110
-	// §5.5), so the identity would arrive upstream as a DIFFERENT value — one
-	// that can collide with another conversation's.
+	// SessionIDSurroundingWhitespace: a leading or trailing SP or HTAB. Go's
+	// own HTTP/1.1 client trims it when writing the header (http.Header.Write),
+	// and HTTP recipients strip optional whitespace around a field value (RFC
+	// 9110 §5.5), so the identity would arrive upstream as a DIFFERENT value —
+	// one that can collide with another conversation's.
 	SessionIDSurroundingWhitespace SessionIDProblem = "surrounding_whitespace"
 	// SessionIDTooLong: longer than MaxSessionIDBytes bytes.
 	SessionIDTooLong SessionIDProblem = "too_long"
@@ -31,8 +39,9 @@ const (
 // verbatim, and an identity that is altered or refused in transit is worse than
 // one refused locally: net/http's Transport refuses a control byte with an
 // untyped error naming only the header, a transport that writes through
-// Request.Write rewrites CR and LF into spaces, and a recipient strips
-// surrounding whitespace. A silently-altered affinity key is undiagnosable from
+// Request.Write rewrites CR and LF into spaces, and surrounding whitespace is
+// trimmed by Go's HTTP/1.1 client when it writes the header and by the
+// recipient when it parses it. A silently-altered affinity key is undiagnosable from
 // the provider side, where it looks like a conversation that keeps changing
 // sessions.
 //

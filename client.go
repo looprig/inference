@@ -83,8 +83,8 @@ func ValidateRequestFeatures(req Request) error {
 	// The session identity is checked here, before any I/O, rather than left
 	// to the transport: net/http's Transport would refuse a control byte with
 	// an untyped error that names only the header, a transport writing through
-	// Request.Write would rewrite CR/LF into spaces, and a recipient strips
-	// surrounding whitespace. Each alternative either fails opaquely or sends
+	// Request.Write would rewrite CR/LF into spaces, and surrounding
+	// whitespace is trimmed by Go's HTTP/1.1 client and by the recipient. Each alternative either fails opaquely or sends
 	// the conversation upstream under a DIFFERENT identity. An empty SessionID
 	// means "absent" and is always valid.
 	if err := validateSessionID(req.SessionID); err != nil {
