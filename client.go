@@ -31,6 +31,32 @@ type Request struct {
 	Output            *OutputSchema
 	ToolChoice        ToolChoice
 	Override          *model.Sampling
+	// SessionID is the OPTIONAL stable identity of the conversation these
+	// messages belong to. Zero means "no conversation identity known", which is
+	// what every caller that predates this field sends, so no existing request
+	// changed.
+	//
+	// It exists because some providers offer per-conversation optimizations
+	// (prompt-cache affinity, routing, cost attribution) and can only apply them
+	// when every request of one conversation carries the same identifier. The
+	// message thread cannot serve that purpose: context compaction rewrites it
+	// mid-conversation, so a thread-derived identity silently rotates at exactly
+	// the moment the cached prefix is rebuilt.
+	//
+	// It is provider-neutral and consumed only by providers that document such a
+	// header; every other provider ignores it and its wire bytes are unchanged.
+	// It is validated for every provider all the same (ValidateRequestFeatures,
+	// which every codec runs before encoding), so a request that is valid for one
+	// provider stays valid when a conversation switches to another. A provider
+	// that forwards it sends it verbatim, so a value that could not arrive
+	// upstream byte-identical as an HTTP header field value — control bytes,
+	// surrounding whitespace, more than MaxSessionIDBytes bytes — is refused
+	// locally with *InvalidSessionIDError rather than altered or refused in
+	// transit.
+	//
+	// It is an identifier, not a secret, but it is caller data: this module
+	// never logs it and never echoes it in an error.
+	SessionID string
 }
 
 // InvalidTransientMessagesError reports a transient-message count that falls
@@ -52,6 +78,17 @@ func ValidateRequestFeatures(req Request) error {
 			Transient: req.TransientMessages,
 			Messages:  len(req.Messages),
 		}
+	}
+
+	// The session identity is checked here, before any I/O, rather than left
+	// to the transport: net/http's Transport would refuse a control byte with
+	// an untyped error that names only the header, a transport writing through
+	// Request.Write would rewrite CR/LF into spaces, and a recipient strips
+	// surrounding whitespace. Each alternative either fails opaquely or sends
+	// the conversation upstream under a DIFFERENT identity. An empty SessionID
+	// means "absent" and is always valid.
+	if err := validateSessionID(req.SessionID); err != nil {
+		return err
 	}
 
 	// The ToolChoice type makes the name inseparable from the named variant,
