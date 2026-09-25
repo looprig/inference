@@ -148,10 +148,10 @@ func WithInvokeTimeout(d time.Duration) Option {
 	}
 }
 
-// WithRoundTripper installs the exact caller-supplied RoundTripper on both the
-// invoke and stream HTTP clients. The caller retains ownership: this option
-// neither clones nor closes the RoundTripper, and the value must be safe for
-// concurrent use by both clients. It must also enforce the caller's desired
+// WithRoundTripper installs the exact caller-supplied RoundTripper on the
+// invoke, stream, and unlimited HTTP clients. The caller retains ownership:
+// this option neither clones nor closes the RoundTripper, and it must be safe for
+// concurrent use by all three clients. It must also enforce the caller's desired
 // TLS verification policy itself; supplying this option replaces the
 // library-created transport (and therefore its dialing, pooling, and TLS
 // defaults) rather than wrapping it.
@@ -169,8 +169,8 @@ func WithRoundTripper(rt http.RoundTripper) Option {
 }
 
 // WithTLSRootCAs installs a cloned, non-empty trust pool on the library-owned
-// invoke and stream transports. It does not replace dialing, proxy, TLS
-// minimum-version, pooling, timeout, or redirect policy. The caller must
+// invoke, stream, and unlimited transports. It does not replace dialing, proxy,
+// TLS minimum-version, pooling, timeout, or redirect policy. The caller must
 // populate the pool with the roots it intends to trust before construction. If
 // WithRoundTripper is also supplied, that caller-owned transport remains in
 // use and is responsible for its own TLS verification policy.
