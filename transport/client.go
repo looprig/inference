@@ -58,8 +58,11 @@ type Client struct {
 	// so it is safe to bound with a real whole-request Timeout. Stream must never
 	// carry a whole-request Timeout — that would abort a long-lived body
 	// mid-flight — so it keeps only the connect/TLS/response-header budget below.
-	hcInvoke *http.Client
-	hcStream *http.Client
+	// hcUnlimited serves calls marked WithoutExecutionTimeout: the same TLS roots,
+	// RoundTripper and connection-setup budget, with neither deadline.
+	hcInvoke    *http.Client
+	hcStream    *http.Client
+	hcUnlimited *http.Client
 }
 
 // Compile-time proof that Client honors the inference.Client contract.
@@ -174,6 +177,7 @@ func WithTLSRootCAs(roots *x509.CertPool) Option {
 		c.tlsRootCAs = cloned.Clone()
 		c.hcInvoke = newInvokeHTTPClient(c.invokeTimeout, c.tlsRootCAs)
 		c.hcStream = newStreamHTTPClient(c.tlsRootCAs)
+		c.hcUnlimited = newInvokeHTTPClient(0, c.tlsRootCAs)
 		c.applyRoundTripper()
 	}
 }
@@ -254,6 +258,7 @@ func newClient(ep Endpoint, router route.Router, cdc codec.Codec) *Client {
 		invokeTimeout: defaultInvokeTimeout,
 		hcInvoke:      newInvokeHTTPClient(defaultInvokeTimeout, nil),
 		hcStream:      newStreamHTTPClient(nil),
+		hcUnlimited:   newInvokeHTTPClient(0, nil),
 	}
 	// Optional streaming: a StreamingCodec is its own StreamDecoder.
 	if sd, ok := cdc.(codec.StreamDecoder); ok {
@@ -271,6 +276,7 @@ func (c *Client) applyRoundTripper() {
 	}
 	c.hcInvoke.Transport = c.roundTripper
 	c.hcStream.Transport = c.roundTripper
+	c.hcUnlimited.Transport = c.roundTripper
 }
 
 // baseTransport builds the http.Transport settings shared by both the Invoke and
@@ -371,7 +377,7 @@ func (c *Client) InvokeWithAuth(ctx context.Context, req inference.Request, auth
 	if err := authorizer.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	httpResp, err := c.hcInvoke.Do(httpReq)
+	httpResp, err := c.executionHTTPClient(ctx, c.hcInvoke).Do(httpReq)
 	if err != nil {
 		return nil, &failure.NetworkError{Err: err}
 	}
@@ -442,7 +448,7 @@ func (c *Client) StreamWithAuth(ctx context.Context, req inference.Request, auth
 	if err := authorizer.Authorize(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	httpResp, err := c.hcStream.Do(httpReq)
+	httpResp, err := c.executionHTTPClient(ctx, c.hcStream).Do(httpReq)
 	if err != nil {
 		return nil, &failure.NetworkError{Err: err}
 	}
