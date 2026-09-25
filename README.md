@@ -93,6 +93,31 @@ To use a hosted provider with its endpoint, auth policy and model catalogue
 already configured, take the provider package from `llm`. Runnable programs are
 in `examples/`: `invoke`, `stream`, `retry` and `gateway`.
 
+## Calls with no execution ceiling
+
+`transport.Client` bounds Invoke by a whole-request timeout (5 minutes by default,
+`WithInvokeTimeout`) and Stream by a 60-second wait for response headers. For a call
+that may legitimately run longer, such as a slow local model or a long reasoning turn,
+mark its context:
+
+```go
+ctx = transport.WithoutExecutionTimeout(ctx)
+resp, err := client.Invoke(ctx, req) // or client.Stream(ctx, req)
+```
+
+A marked call has neither ceiling. Everything else is unchanged:
+
+- TLS roots and a `WithRoundTripper` transport;
+- dial and TLS-handshake limits;
+- redirect refusal and authorization;
+- response-size limits.
+
+Unmarked calls are unaffected, and nothing is sent on the wire. **Cancellation becomes
+the caller's job**: the context's own cancel or deadline is the only end, and a
+half-open connection is detected only by TCP keepalive. `llm` providers built on
+`transport.Client` honour the marker as they are. `llm`'s `gemini` and `bedrock`
+providers use their own HTTP client and do not.
+
 ## Consumer obligation: `Request.SessionID`
 
 `Request.SessionID` is an optional, stable identifier for a conversation.

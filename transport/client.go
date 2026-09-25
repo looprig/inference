@@ -6,6 +6,12 @@
 // a chat path, a Content-Type, a streaming Accept header, or a stream framing such as
 // SSE — the Router supplies method+URL+route headers, the encoder supplies the body and
 // its headers, and the StreamDecoder owns wire framing.
+//
+// Execution ceilings: Invoke is bounded by a whole-request timeout (default 5
+// minutes, WithInvokeTimeout) and Stream by a 60-second response-header timeout.
+// A call whose context carries WithoutExecutionTimeout runs with neither; its
+// only end is the caller's own cancellation or deadline, and a half-open
+// connection is detected only by TCP keepalive.
 package transport
 
 import (
