@@ -62,6 +62,7 @@ go get github.com/looprig/inference@latest
 | `contextcount` | Deterministic complete-request context counting. |
 | `usage` | Normalized token usage. |
 | `failure` | Provider-neutral API, network and binding failures. |
+| `inferencetest` | Scripted in-memory `Client` and `Model()` for keyless runs and tests. |
 | `auth` | Legacy authorization facade over `credentials/httpauth`, kept for static API keys and `auth.None()`. |
 | `wire/sse`, `wire/ndjson`, `wire/eventstream`, `wire/jsonbody` | Byte-level framing helpers with no LLM semantics. |
 
@@ -92,6 +93,35 @@ resp, err := client.Invoke(ctx, inference.Request{
 To use a hosted provider with its endpoint, auth policy and model catalogue
 already configured, take the provider package from `llm`. Runnable programs are
 in `examples/`: `invoke`, `stream`, `retry` and `gateway`.
+
+## Running without a provider: `inferencetest`
+
+`inferencetest.New` returns a scripted `inference.Client` that needs no API key
+or network. Each call, through `Invoke` or `Stream`, consumes the next step of
+its script, and `inferencetest.Model()` is a descriptor that validates and
+declares tool and structured-output support:
+
+```go
+client := inferencetest.New(
+	inferencetest.Text("Let me check.").ToolCall("read_file", `{"path":"go.mod"}`),
+	inferencetest.Text("It is module example.com/demo."),
+)
+def, err := loop.Define(
+	loop.WithName("assistant"),
+	loop.WithInference(client, inferencetest.Model()),
+	// tools, access gate, ...
+)
+// After the turn: client.Requests() is what the model saw; client.Err()
+// reports an exhausted script or a failed Step.Expect check.
+```
+
+A step can carry reasoning (`Thinking`), text, tool calls with deterministic
+ids (`call_<call>_<n>`), a finish reason and usage. It can also fail before
+output (`Fail`), fail mid-stream (`StreamError`), stream at a visible pace
+(`ChunkDelay`), or check its request (`Expect`). `Echo().Repeat()` answers
+anything with the user's last message, which suits a keyless demo. `Stream`
+emits the chunk shapes a real codec produces, and folding it yields the message
+`Invoke` returns. Like a real client, each call validates the request first.
 
 ## Calls with no execution ceiling
 
