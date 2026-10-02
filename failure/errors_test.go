@@ -413,3 +413,32 @@ func TestModelMismatchError(t *testing.T) {
 		})
 	}
 }
+
+// The ChatGPT-plan (Sign in with ChatGPT) Responses route documents these
+// codes with distinct recovery actions, e.g. a 429 usage limit that must not
+// be retried like rate pressure:
+// https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery
+func TestAPIErrorFromResponseRetainsDocumentedSubscriptionCodes(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []string{
+		"subscription_sharing_user_not_eligible",
+		"subscription_sharing_usage_limit_exceeded",
+		"subscription_sharing_usage_unavailable",
+		"subscription_sharing_unsupported_capability",
+		"subscription_sharing_route_not_supported",
+		"subscription_sharing_invalid_user",
+		"subscription_sharing_user_unavailable",
+		"chatpass_v2_scope_not_authorized",
+		"chatpass_v2_invalid_authorization_context",
+	} {
+		body := []byte(`{"error":{"type":"invalid_request_error","code":"` + code + `","message":"echoed request text"}}`)
+		err := failure.APIErrorFromResponse(429, body, nil, 0)
+		if err.Code != code || err.ProviderCode != code {
+			t.Fatalf("APIError codes = %q/%q, want %q", err.Code, err.ProviderCode, code)
+		}
+		if strings.Contains(err.Error(), "echoed") {
+			t.Fatalf("APIError formatting retained provider message: %q", err.Error())
+		}
+	}
+}

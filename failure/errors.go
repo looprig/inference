@@ -155,6 +155,19 @@ var providerCodeAllowlist = map[string]struct{}{
 	"rate_limit_error": {}, "rate_limit_exceeded": {}, "resource_exhausted": {},
 	"server_error": {}, "temporarily_unavailable": {}, "unauthenticated": {},
 	"unauthorized": {}, "unavailable": {},
+	// OpenAI's ChatGPT-plan (Sign in with ChatGPT) Responses route. Each has
+	// a documented recovery that differs from its HTTP status class, notably a
+	// 429 usage limit that must pause rather than retry:
+	// https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery
+	"subscription_sharing_user_not_eligible":      {},
+	"subscription_sharing_usage_limit_exceeded":   {},
+	"subscription_sharing_usage_unavailable":      {},
+	"subscription_sharing_unsupported_capability": {},
+	"subscription_sharing_route_not_supported":    {},
+	"subscription_sharing_invalid_user":           {},
+	"subscription_sharing_user_unavailable":       {},
+	"chatpass_v2_scope_not_authorized":            {},
+	"chatpass_v2_invalid_authorization_context":   {},
 }
 
 func safeProviderCode(value string) string {
